@@ -4,6 +4,9 @@
 
 Manage your courses, grades, and class announcements directly through AI. This project expands the original student-facing server with **Faculty-grade features** and universal **Microsoft SSO support**.
 
+> [!WARNING]
+> **Important Disclaimer**: This is an experimental, personally-developed tool. Using AI to interact with educational platforms involves risks of non-deterministic actions (such as posting announcements or retrieving student grades) and external data processing. Please review the [Disclaimer and Intended Use Guide](DISCLAIMER.md) before deployment.
+
 ## Overview
 
 This is an [MCP (Model Context Protocol)](https://modelcontextprotocol.io) server that connects AI assistants (Claude, ChatGPT, Cursor) to Brightspace (D2L). While the original server was built for students, this fork implements **Client-Side Session Emulation** to enable high-permission faculty operations without requiring restricted API keys.
