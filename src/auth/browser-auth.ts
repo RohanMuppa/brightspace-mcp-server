@@ -507,21 +507,35 @@ export class BrowserAuth {
         if (this.ssoFlow.hasCredentials()) {
           log("INFO", `Login required (redirected to ${currentUrl}) - starting SSO flow`);
           loginSuccess = await this.ssoFlow.login(page);
+          
+          if (!loginSuccess) {
+            log("WARN", "Automated SSO flow failed or timed out. Falling back to manual login.");
+            log("INFO", "Please complete the login manually in the open browser window.");
+            loginSuccess = await this.ssoFlow.manualLogin(page);
+          }
         } else {
           log("INFO", `Login required (redirected to ${currentUrl}) - opening browser for manual login`);
           loginSuccess = await this.ssoFlow.manualLogin(page);
         }
 
         if (!loginSuccess) {
-          throw new BrowserAuthError("SSO login flow failed", "sso_login");
+          throw new BrowserAuthError("Manual login flow failed", "manual_login");
         }
 
-        await page.waitForLoadState("networkidle", { timeout: 30000 });
+        try {
+          await page.waitForLoadState("domcontentloaded", { timeout: 30000 });
+        } catch (e) {
+          log("DEBUG", "Page wait timed out, proceeding anyway");
+        }
         return false;
       }
 
       log("INFO", "Already authenticated - skipping SSO login");
-      await page.waitForLoadState("networkidle", { timeout: 30000 });
+      try {
+        await page.waitForLoadState("domcontentloaded", { timeout: 30000 });
+      } catch (e) {
+        log("DEBUG", "Page wait timed out, proceeding anyway");
+      }
       return true;
     } catch (error) {
       if (error instanceof BrowserAuthError) throw error;

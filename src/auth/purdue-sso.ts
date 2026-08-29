@@ -94,7 +94,7 @@ export class PurdueSSOFlow {
 
   private async handleCampusSelector(page: Page): Promise<void> {
     const currentUrl = page.url();
-    if (currentUrl.includes("/d2l/login")) {
+    if (currentUrl.includes("purdue.brightspace.com") && currentUrl.includes("/d2l/login")) {
       // Campus selector buttons are inside a shadow DOM — navigate directly
       // to Purdue's Shibboleth SAML endpoint instead of clicking them
       const baseUrl = new URL(currentUrl).origin;
@@ -109,8 +109,12 @@ export class PurdueSSOFlow {
 
   private async enterCredentials(page: Page): Promise<void> {
     try {
-      log("DEBUG", "Waiting for Shibboleth login form");
-      await page.waitForSelector(SELECTORS.usernameInput, { timeout: 30000 });
+      log("DEBUG", "Waiting for login form");
+      
+      // Wait for either Purdue's username or Albany's userName (or typical email fields)
+      // Use a shorter timeout so it falls back to manual login quickly if unrecognized
+      const usernameSelector = 'input#username, input#userName, input[type="email"]';
+      await page.waitForSelector(usernameSelector, { timeout: 10000 });
 
       if (!this.config.username) {
         throw new BrowserAuthError(
@@ -127,17 +131,32 @@ export class PurdueSSOFlow {
       }
 
       log("INFO", "Entering credentials");
-      await page.fill(SELECTORS.usernameInput, this.config.username);
-      await page.fill(SELECTORS.passwordInput, this.config.password);
-      await page.click(SELECTORS.submitButton);
+      // Try to figure out which input actually exists
+      const usernameField = await page.$(usernameSelector);
+      if (usernameField) {
+        await usernameField.fill(this.config.username);
+      }
+
+      const passwordSelector = 'input#password, input[type="password"]';
+      const passwordField = await page.$(passwordSelector);
+      if (passwordField) {
+        await passwordField.fill(this.config.password);
+      }
+
+      // Try to click the submit button. Could be Purdue's proceed, or Albany's Log In, or a generic button
+      const submitSelector = 'button[name="_eventId_proceed"], button.d2l-button, input[type="submit"]';
+      const submitButton = await page.$(submitSelector);
+      if (submitButton) {
+        await submitButton.click();
+      } else {
+        // Fallback: just hit Enter on the password field
+        await passwordField?.press('Enter');
+      }
+      
       await page.waitForLoadState("networkidle");
     } catch (error) {
-      if (error instanceof BrowserAuthError) throw error;
-      throw new BrowserAuthError(
-        "Failed to enter credentials",
-        "credentials",
-        error as Error
-      );
+      log("WARN", "Automated credentials entry failed, will fallback to manual login.", error);
+      throw error;
     }
   }
 
