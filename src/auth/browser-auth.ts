@@ -12,18 +12,16 @@ import * as os from "node:os";
 import type { AppConfig, TokenData } from "../types/index.js";
 import { BrowserAuthError } from "../utils/errors.js";
 import { log } from "../utils/logger.js";
-import { PurdueSSOFlow } from "./purdue-sso.js";
+import { createSSOFlow } from "./sso-flow.js";
+import type { SSOFlow } from "./sso-flow.js";
 
 export class BrowserAuth {
   private config: AppConfig;
-  private ssoFlow: PurdueSSOFlow;
+  private ssoFlow: SSOFlow;
 
   constructor(config: AppConfig) {
     this.config = config;
-    this.ssoFlow = new PurdueSSOFlow({
-      username: config.username,
-      password: config.password,
-    });
+    this.ssoFlow = createSSOFlow(config);
   }
 
   /**

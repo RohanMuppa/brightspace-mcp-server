@@ -13,6 +13,7 @@ export interface ConfigStoreData {
   baseUrl?: string;
   username?: string;
   password?: string;
+  campus?: string;
   sessionDir?: string;
   tokenTtl?: number;
   headless?: boolean;
