@@ -10,6 +10,14 @@ export interface TokenData {
   capturedAt: number; // Unix timestamp ms
   expiresAt: number; // Unix timestamp ms
   source: "browser" | "cache";
+  /**
+   * "d2lSessionVal=...; d2lSecureSessionVal=...", harvested at login.
+   * Present only when both cookies were found. With csrfToken it lets the
+   * token manager mint a fresh JWT instead of relaunching the browser.
+   */
+  cookieHeader?: string;
+  /** D2L XSRF token; the mint answers 403 without it. */
+  csrfToken?: string;
 }
 
 // Encrypted token stored on disk

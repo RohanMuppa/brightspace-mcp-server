@@ -239,9 +239,10 @@ export class BrowserAuth {
 
       const extracted = await this.tryExtractToken(page, context);
       if (extracted) {
+        const material = await this.harvestSessionMaterial(page, context);
         await this.saveStorageState(context);
         log("INFO", "Authentication complete");
-        return extracted;
+        return { ...extracted, ...material };
       }
 
       // Last resort for the cookie-restore path: clear cookies, force full
@@ -256,9 +257,10 @@ export class BrowserAuth {
 
         const freshExtracted = await this.tryExtractToken(freshPage, context);
         if (freshExtracted) {
+          const material = await this.harvestSessionMaterial(freshPage, context);
           await this.saveStorageState(context);
           log("INFO", "Authentication complete");
-          return freshExtracted;
+          return { ...freshExtracted, ...material };
         }
 
         const accessToken = await freshTokenPromise;
@@ -269,6 +271,7 @@ export class BrowserAuth {
           capturedAt: now,
           expiresAt: now + this.config.tokenTtl * 1000,
           source: "browser",
+          ...(await this.harvestSessionMaterial(freshPage, context)),
         };
         await this.saveStorageState(context);
         return tokenData;
@@ -286,6 +289,7 @@ export class BrowserAuth {
         capturedAt: now,
         expiresAt: now + this.config.tokenTtl * 1000,
         source: "browser",
+        ...(await this.harvestSessionMaterial(page, context)),
       };
 
       await this.saveStorageState(context);
@@ -586,6 +590,94 @@ export class BrowserAuth {
       return null;
     } catch (error) {
       log("DEBUG", "localStorage token extraction failed", error);
+      return null;
+    }
+  }
+
+  /**
+   * Harvest the material that lets the token manager mint a fresh JWT later
+   * without relaunching this browser: the two D2L session cookies plus the
+   * XSRF token. Best effort. A missing piece only costs the cheap refresh
+   * path, so it is logged at DEBUG and the fields are left undefined.
+   */
+  private async harvestSessionMaterial(
+    page: Page,
+    context: BrowserContext
+  ): Promise<{ cookieHeader?: string; csrfToken?: string }> {
+    const material: { cookieHeader?: string; csrfToken?: string } = {};
+
+    try {
+      const cookies = await context.cookies(this.config.baseUrl);
+      const parts: string[] = [];
+      for (const name of ["d2lSessionVal", "d2lSecureSessionVal"]) {
+        const found = cookies.find((c) => c.name === name);
+        if (found) parts.push(`${name}=${found.value}`);
+      }
+      if (parts.length === 2) {
+        material.cookieHeader = parts.join("; ");
+      } else {
+        log("DEBUG", `Session cookie harvest incomplete: found ${parts.length} of 2`);
+      }
+    } catch (error) {
+      log("DEBUG", "Session cookie harvest failed", error);
+    }
+
+    const xsrfToken = await this.extractXsrfOnly(page);
+    if (xsrfToken) {
+      material.csrfToken = xsrfToken;
+    } else {
+      log("DEBUG", "No XSRF token harvested, later token minting is unavailable");
+    }
+
+    log(
+      "DEBUG",
+      `Session material harvested: cookies=${material.cookieHeader !== undefined}, xsrf=${material.csrfToken !== undefined}`
+    );
+    return material;
+  }
+
+  /**
+   * Read the real XSRF token, and nothing else. Deliberately separate from
+   * extractXsrfToken: that one falls back to a loose localStorage scan which
+   * can return a JWT, and a JWT in the x-csrf-token header makes the mint 403.
+   */
+  private async extractXsrfOnly(page: Page): Promise<string | null> {
+    try {
+      // The D2L JS context only exists on a Brightspace page, and the
+      // extraction chain may have parked us on a raw API response.
+      if (!page.url().includes("/d2l/home")) {
+        await page.goto(`${this.config.baseUrl}/d2l/home`, {
+          waitUntil: "networkidle",
+          timeout: 15000,
+        });
+      }
+
+      return await page.evaluate(() => {
+        const d2l = (window as unknown as Record<string, unknown>).D2L as
+          | Record<string, unknown>
+          | undefined;
+
+        try {
+          const lp = d2l?.LP as Record<string, unknown> | undefined;
+          const web = lp?.Web as Record<string, unknown> | undefined;
+          const auth = web?.Authentication as
+            | Record<string, unknown>
+            | undefined;
+          const xsrf = auth?.Xsrf as Record<string, unknown> | undefined;
+          const getToken = xsrf?.GetXsrfToken as (() => string) | undefined;
+          if (getToken) {
+            const value = getToken();
+            if (value) return value;
+          }
+        } catch {
+          // Not available on this page
+        }
+
+        const metaToken = document.querySelector('meta[name="d2l-xsrf-token"]');
+        return metaToken ? metaToken.getAttribute("content") : null;
+      });
+    } catch (error) {
+      log("DEBUG", "XSRF-only extraction failed", error);
       return null;
     }
   }

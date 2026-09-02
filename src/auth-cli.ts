@@ -57,7 +57,11 @@ async function main(): Promise<void> {
     const token = await browserAuth.authenticate();
 
     // Create TokenManager and persist token
-    const tokenManager = new TokenManager(config.sessionDir);
+    const tokenManager = new TokenManager({
+      sessionDir: config.sessionDir,
+      baseUrl: config.baseUrl,
+      tokenTtl: config.tokenTtl,
+    });
     await tokenManager.setToken(token);
 
     // Verify session.json was actually written to disk

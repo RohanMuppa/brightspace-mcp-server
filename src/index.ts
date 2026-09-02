@@ -81,7 +81,11 @@ if (subcommand === 'setup') {
       log("INFO", "");
 
       // Create TokenManager for reading cached tokens
-      const tokenManager = new TokenManager(config.sessionDir);
+      const tokenManager = new TokenManager({
+        sessionDir: config.sessionDir,
+        baseUrl: config.baseUrl,
+        tokenTtl: config.tokenTtl,
+      });
 
       // Create AuthRunner for auto-reauthentication
       const authRunner = new AuthRunner();

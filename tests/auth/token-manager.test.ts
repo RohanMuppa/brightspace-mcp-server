@@ -1,10 +1,13 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { TokenManager } from "../../src/auth/token-manager.js";
 import { SessionStore } from "../../src/auth/session-store.js";
 import type { TokenData } from "../../src/types/index.js";
+import type { mintAccessToken } from "../../src/auth/token-mint.js";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as os from "node:os";
+
+type MintFn = typeof mintAccessToken;
 
 describe("TokenManager", () => {
   let testDir: string;
@@ -214,6 +217,151 @@ describe("TokenManager", () => {
       const needsRefresh = await tokenManager.needsRefresh();
 
       expect(needsRefresh).toBe(false);
+    });
+  });
+
+  describe("minting from the session cookie", () => {
+    const BASE_URL = "https://purdue.brightspace.com";
+    const TOKEN_TTL = 3600;
+
+    /** An expired token that still carries the material needed to mint. */
+    const expiredWithCookies = (): TokenData => ({
+      accessToken: "stale-jwt",
+      capturedAt: Date.now() - 7200000,
+      expiresAt: Date.now() - 3600000,
+      source: "browser",
+      cookieHeader: "d2lSessionVal=aaa; d2lSecureSessionVal=bbb",
+      csrfToken: "xsrf-123",
+    });
+
+    const makeManager = (mint: MintFn) =>
+      new TokenManager({
+        sessionDir: testDir,
+        baseUrl: BASE_URL,
+        tokenTtl: TOKEN_TTL,
+        mint,
+      });
+
+    it("mints a fresh token when the stored one expired", async () => {
+      const stale = expiredWithCookies();
+      const mint = vi.fn(async () => ({ ok: true, accessToken: "fresh-jwt" }) as const);
+      const manager = makeManager(mint);
+      await manager.setToken(stale);
+
+      const before = Date.now();
+      const retrieved = await manager.getToken();
+
+      expect(mint).toHaveBeenCalledTimes(1);
+      expect(mint.mock.calls[0][0]).toMatchObject({
+        baseUrl: BASE_URL,
+        cookieHeader: stale.cookieHeader,
+        csrfToken: stale.csrfToken,
+      });
+      expect(retrieved?.accessToken).toBe("fresh-jwt");
+      expect(retrieved?.expiresAt).toBeGreaterThanOrEqual(before + TOKEN_TTL * 1000);
+      expect(retrieved?.cookieHeader).toBe(stale.cookieHeader);
+      expect(retrieved?.csrfToken).toBe(stale.csrfToken);
+    });
+
+    it("persists the minted token to the session store", async () => {
+      const mint = vi.fn(async () => ({ ok: true, accessToken: "fresh-jwt" }) as const);
+      const manager = makeManager(mint);
+      await manager.setToken(expiredWithCookies());
+
+      await manager.getToken();
+
+      const persisted = await new SessionStore(testDir).load();
+      expect(persisted?.accessToken).toBe("fresh-jwt");
+      expect(persisted?.csrfToken).toBe("xsrf-123");
+    });
+
+    it("does not mint when the expired token carries no session material", async () => {
+      const mint = vi.fn(async () => ({ ok: true, accessToken: "fresh-jwt" }) as const);
+      const manager = makeManager(mint);
+      await manager.setToken({
+        accessToken: "stale-jwt",
+        capturedAt: Date.now() - 7200000,
+        expiresAt: Date.now() - 3600000,
+        source: "browser",
+      });
+
+      const retrieved = await manager.getToken();
+
+      expect(retrieved).toBeNull();
+      expect(mint).not.toHaveBeenCalled();
+    });
+
+    it("does not mint when no base URL is configured", async () => {
+      const mint = vi.fn(async () => ({ ok: true, accessToken: "fresh-jwt" }) as const);
+      const manager = new TokenManager({ sessionDir: testDir, mint });
+      await manager.setToken(expiredWithCookies());
+
+      const retrieved = await manager.getToken();
+
+      expect(retrieved).toBeNull();
+      expect(mint).not.toHaveBeenCalled();
+    });
+
+    it("clears the store when the session itself has expired", async () => {
+      const mint = vi.fn(
+        async () => ({ ok: false, reason: "sessionExpired" }) as const
+      );
+      const manager = makeManager(mint);
+      await manager.setToken(expiredWithCookies());
+
+      const retrieved = await manager.getToken();
+
+      expect(retrieved).toBeNull();
+      expect(await new SessionStore(testDir).load()).toBeNull();
+    });
+
+    it("keeps the stored token on a transport failure", async () => {
+      const mint = vi.fn(
+        async () =>
+          ({ ok: false, reason: "transport", detail: "HTTP 503" }) as const
+      );
+      const manager = makeManager(mint);
+      await manager.setToken(expiredWithCookies());
+
+      const retrieved = await manager.getToken();
+
+      expect(retrieved).toBeNull();
+      expect(await new SessionStore(testDir).load()).not.toBeNull();
+    });
+
+    it("mints once for two concurrent getToken calls", async () => {
+      let resolveMint: (value: { ok: true; accessToken: string }) => void = () => {};
+      const mint = vi.fn(
+        () =>
+          new Promise<{ ok: true; accessToken: string }>((resolve) => {
+            resolveMint = resolve;
+          })
+      );
+      const manager = makeManager(mint as unknown as MintFn);
+      await manager.setToken(expiredWithCookies());
+
+      const both = Promise.all([manager.getToken(), manager.getToken()]);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      resolveMint({ ok: true, accessToken: "fresh-jwt" });
+      const [first, second] = await both;
+
+      expect(mint).toHaveBeenCalledTimes(1);
+      expect(first?.accessToken).toBe("fresh-jwt");
+      expect(second?.accessToken).toBe("fresh-jwt");
+    });
+
+    it("still accepts the positional session directory constructor", async () => {
+      const positional = new TokenManager(testDir);
+      const validToken: TokenData = {
+        accessToken: "valid",
+        capturedAt: Date.now(),
+        expiresAt: Date.now() + 10 * 60 * 1000,
+        source: "browser",
+      };
+
+      await positional.setToken(validToken);
+
+      expect(await positional.getToken()).toEqual(validToken);
     });
   });
 });
