@@ -15,6 +15,27 @@ import { log } from "../utils/logger.js";
 import { createSSOFlow } from "./sso-flow.js";
 import type { SSOFlow } from "./sso-flow.js";
 
+/**
+ * The silent-SSO budget. When the D2L session is dead but the Microsoft Entra
+ * cookie in the persistent profile is still alive, the SSO chain completes on
+ * its own within a few seconds, provided the two no-secret surfaces in its way
+ * get clicked. A URL check cannot see any of that, so the wait is a poll on a
+ * positive session check instead.
+ */
+const SILENT_SSO_TIMEOUT_MS = 30000;
+const SILENT_SSO_POLL_MS = 1000;
+
+const SILENT_SSO = {
+  /** Entra asking who you are. No amount of silent waiting passes it. */
+  emailField: "input[type=email], input[name=loginfmt]",
+  /** The Brightspace campus selector's own link to the SAML endpoint. */
+  campusSaml: 'a[href*="/d2l/lp/auth/saml/initiate-login"]',
+  /** Markers unique to the "Stay signed in?" page. */
+  kmsiCheckbox: "#KmsiCheckboxField",
+  kmsiTitle: "Stay signed in?",
+  kmsiSubmit: "#idSIButton9",
+} as const;
+
 export class BrowserAuth {
   private config: AppConfig;
   private ssoFlow: SSOFlow;
@@ -239,9 +260,10 @@ export class BrowserAuth {
 
       const extracted = await this.tryExtractToken(page, context);
       if (extracted) {
+        const material = await this.harvestSessionMaterial(page, context);
         await this.saveStorageState(context);
         log("INFO", "Authentication complete");
-        return extracted;
+        return { ...extracted, ...material };
       }
 
       // Last resort for the cookie-restore path: clear cookies, force full
@@ -256,9 +278,10 @@ export class BrowserAuth {
 
         const freshExtracted = await this.tryExtractToken(freshPage, context);
         if (freshExtracted) {
+          const material = await this.harvestSessionMaterial(freshPage, context);
           await this.saveStorageState(context);
           log("INFO", "Authentication complete");
-          return freshExtracted;
+          return { ...freshExtracted, ...material };
         }
 
         const accessToken = await freshTokenPromise;
@@ -269,6 +292,7 @@ export class BrowserAuth {
           capturedAt: now,
           expiresAt: now + this.config.tokenTtl * 1000,
           source: "browser",
+          ...(await this.harvestSessionMaterial(freshPage, context)),
         };
         await this.saveStorageState(context);
         return tokenData;
@@ -286,6 +310,7 @@ export class BrowserAuth {
         capturedAt: now,
         expiresAt: now + this.config.tokenTtl * 1000,
         source: "browser",
+        ...(await this.harvestSessionMaterial(page, context)),
       };
 
       await this.saveStorageState(context);
@@ -477,64 +502,34 @@ export class BrowserAuth {
         timeout: 30000,
       });
 
-      let currentUrl = page.url();
-      log("DEBUG", `Current URL after navigation: ${currentUrl}`);
-
-      // Some institutions (e.g. USC) bounce through an extra SAML hop such as
-      // /d2l/lp/auth/login/samlLogin.d2l before landing on /d2l/home, even when the
-      // restored cookies are still valid. `domcontentloaded` can resolve mid-chain,
-      // so re-check once the redirects settle. Without this we misread a live session
-      // as logged-out and start an SSO flow that waits for a login form that never
-      // renders — which throws before the caller can persist session.json.
-      if (!currentUrl.includes("/d2l/home")) {
-        try {
-          await page.waitForURL(/\/d2l\/home/, { timeout: 15000 });
-          log("DEBUG", "Redirect chain settled on /d2l/home");
-        } catch {
-          // Never landed on /d2l/home — a real login is required.
-        }
-        currentUrl = page.url();
+      if (await this.awaitSilentSSO(page)) {
+        log("INFO", "Already authenticated - skipping SSO login");
+        await this.settle(page);
+        return true;
       }
 
-      // If we were redirected away from /d2l/home, login is required
-      const needsLogin = !currentUrl.includes("/d2l/home");
+      let loginSuccess: boolean;
 
-      if (needsLogin) {
-        let loginSuccess: boolean;
-
-        if (this.ssoFlow.hasCredentials()) {
-          log("INFO", `Login required (redirected to ${currentUrl}) - starting SSO flow`);
-          loginSuccess = await this.ssoFlow.login(page);
-          
-          if (!loginSuccess) {
-            log("WARN", "Automated SSO flow failed or timed out. Falling back to manual login.");
-            log("INFO", "Please complete the login manually in the open browser window.");
-            loginSuccess = await this.ssoFlow.manualLogin(page);
-          }
-        } else {
-          log("INFO", `Login required (redirected to ${currentUrl}) - opening browser for manual login`);
-          loginSuccess = await this.ssoFlow.manualLogin(page);
-        }
+      if (this.ssoFlow.hasCredentials()) {
+        log("INFO", `Login required (stopped at ${page.url()}) - starting SSO flow`);
+        loginSuccess = await this.ssoFlow.login(page);
 
         if (!loginSuccess) {
-          throw new BrowserAuthError("Manual login flow failed", "manual_login");
+          log("WARN", "Automated SSO flow failed or timed out. Falling back to manual login.");
+          log("INFO", "Please complete the login manually in the open browser window.");
+          loginSuccess = await this.ssoFlow.manualLogin(page);
         }
-
-        try {
-          await page.waitForLoadState("domcontentloaded", { timeout: 30000 });
-        } catch (e) {
-          log("DEBUG", "Page wait timed out, proceeding anyway");
-        }
-        return false;
+      } else {
+        log("INFO", `Login required (stopped at ${page.url()}) - opening browser for manual login`);
+        loginSuccess = await this.ssoFlow.manualLogin(page);
       }
 
-      log("INFO", "Already authenticated - skipping SSO login");
-      try {
-        await page.waitForLoadState("domcontentloaded", { timeout: 30000 });
-      } catch (e) {
-        log("DEBUG", "Page wait timed out, proceeding anyway");
+      if (!loginSuccess) {
+        throw new BrowserAuthError("Manual login flow failed", "manual_login");
       }
-      return true;
+
+      await this.settle(page);
+      return false;
     } catch (error) {
       if (error instanceof BrowserAuthError) throw error;
       throw new BrowserAuthError(
@@ -543,6 +538,109 @@ export class BrowserAuth {
         error as Error
       );
     }
+  }
+
+  /** Let the page finish loading, without letting a slow one fail the run. */
+  private async settle(page: Page): Promise<void> {
+    try {
+      await page.waitForLoadState("domcontentloaded", { timeout: 30000 });
+    } catch {
+      log("DEBUG", "Page wait timed out, proceeding anyway");
+    }
+  }
+
+  /**
+   * Give the SSO chain a bounded window to finish with no human input.
+   * Returns true only when the session proves itself live.
+   */
+  private async awaitSilentSSO(page: Page): Promise<boolean> {
+    const deadline = Date.now() + SILENT_SSO_TIMEOUT_MS;
+    do {
+      if (await this.hasLiveSession(page)) return true;
+
+      // Fail fast rather than spend the budget on a page that will never
+      // advance: a fresh profile otherwise stalls here for the full 30s.
+      if (await this.isOnScreen(page, SILENT_SSO.emailField)) {
+        log("INFO", "Silent SSO cannot pass an account-name prompt - a credential login is needed");
+        return false;
+      }
+
+      await this.clickSilentSurfaces(page);
+      await page.waitForTimeout(SILENT_SSO_POLL_MS);
+    } while (Date.now() < deadline);
+
+    log("DEBUG", `No session after ${SILENT_SSO_TIMEOUT_MS / 1000}s of silent SSO`);
+    return false;
+  }
+
+  /**
+   * A POSITIVE session check, never "the URL doesn't look like a login page".
+   * Institutions bounce through intermediate SAML hops with a perfectly live
+   * session, and the login stub sets cookies of its own, so both the session
+   * cookie and a reachable D2L JS context are required.
+   */
+  private async hasLiveSession(page: Page): Promise<boolean> {
+    try {
+      const cookies = await page.context().cookies(this.config.baseUrl);
+      if (!cookies.some((c) => c.name === "d2lSessionVal" && Boolean(c.value))) {
+        return false;
+      }
+      return await page.evaluate(() => {
+        const d2l = (window as unknown as Record<string, unknown>).D2L as
+          | Record<string, unknown>
+          | undefined;
+        return d2l !== undefined && Boolean(d2l.LP);
+      });
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Click through the two surfaces that stand between a live Entra cookie and
+   * an authenticated D2L page. Neither involves a secret.
+   */
+  private async clickSilentSurfaces(page: Page): Promise<void> {
+    const url = page.url();
+
+    if (url.includes("/d2l/login")) {
+      // Brightspace renders the campus buttons in a shadow DOM, which
+      // Playwright's selectors see through. A configured campus is matched by
+      // name; otherwise the selector's own SAML link is the only affordance
+      // safe to click blind, and a school that offers neither simply falls
+      // through to the SSO flow, which knows its own endpoint.
+      const campus = this.config.campus
+        ? page.getByText(this.config.campus).first()
+        : page.locator(SILENT_SSO.campusSaml).first();
+      if (await campus.isVisible().catch(() => false)) {
+        await campus.click().catch(() => {});
+        log("DEBUG", "Clicked the campus selector");
+      }
+      return;
+    }
+
+    if (!url.includes("login.microsoftonline.com")) return;
+
+    // The page must PROVE it is the "Stay signed in?" page before this click:
+    // #idSIButton9 is Microsoft's id for the primary button on EVERY sign-in
+    // page, "Next" on account name and "Sign in" on password, so clicking it
+    // unguarded submits an empty form once a second while the log claims it
+    // answered Yes. Two markers because tenant policy can hide the checkbox.
+    const onKmsiPage =
+      (await this.isOnScreen(page, SILENT_SSO.kmsiCheckbox)) ||
+      (await page.getByText(SILENT_SSO.kmsiTitle).first().isVisible().catch(() => false));
+    if (!onKmsiPage) return;
+
+    const yes = page.locator(SILENT_SSO.kmsiSubmit).first();
+    if (await yes.isVisible().catch(() => false)) {
+      await yes.click().catch(() => {});
+      log("DEBUG", 'Clicked Yes on "Stay signed in?"');
+    }
+  }
+
+  /** Visibility without the actionability wait, so a poll keeps its rhythm. */
+  private async isOnScreen(page: Page, selector: string): Promise<boolean> {
+    return page.locator(selector).first().isVisible().catch(() => false);
   }
 
   /**
@@ -586,6 +684,94 @@ export class BrowserAuth {
       return null;
     } catch (error) {
       log("DEBUG", "localStorage token extraction failed", error);
+      return null;
+    }
+  }
+
+  /**
+   * Harvest the material that lets the token manager mint a fresh JWT later
+   * without relaunching this browser: the two D2L session cookies plus the
+   * XSRF token. Best effort. A missing piece only costs the cheap refresh
+   * path, so it is logged at DEBUG and the fields are left undefined.
+   */
+  private async harvestSessionMaterial(
+    page: Page,
+    context: BrowserContext
+  ): Promise<{ cookieHeader?: string; csrfToken?: string }> {
+    const material: { cookieHeader?: string; csrfToken?: string } = {};
+
+    try {
+      const cookies = await context.cookies(this.config.baseUrl);
+      const parts: string[] = [];
+      for (const name of ["d2lSessionVal", "d2lSecureSessionVal"]) {
+        const found = cookies.find((c) => c.name === name);
+        if (found) parts.push(`${name}=${found.value}`);
+      }
+      if (parts.length === 2) {
+        material.cookieHeader = parts.join("; ");
+      } else {
+        log("DEBUG", `Session cookie harvest incomplete: found ${parts.length} of 2`);
+      }
+    } catch (error) {
+      log("DEBUG", "Session cookie harvest failed", error);
+    }
+
+    const xsrfToken = await this.extractXsrfOnly(page);
+    if (xsrfToken) {
+      material.csrfToken = xsrfToken;
+    } else {
+      log("DEBUG", "No XSRF token harvested, later token minting is unavailable");
+    }
+
+    log(
+      "DEBUG",
+      `Session material harvested: cookies=${material.cookieHeader !== undefined}, xsrf=${material.csrfToken !== undefined}`
+    );
+    return material;
+  }
+
+  /**
+   * Read the real XSRF token, and nothing else. Deliberately separate from
+   * extractXsrfToken: that one falls back to a loose localStorage scan which
+   * can return a JWT, and a JWT in the x-csrf-token header makes the mint 403.
+   */
+  private async extractXsrfOnly(page: Page): Promise<string | null> {
+    try {
+      // The D2L JS context only exists on a Brightspace page, and the
+      // extraction chain may have parked us on a raw API response.
+      if (!page.url().includes("/d2l/home")) {
+        await page.goto(`${this.config.baseUrl}/d2l/home`, {
+          waitUntil: "networkidle",
+          timeout: 15000,
+        });
+      }
+
+      return await page.evaluate(() => {
+        const d2l = (window as unknown as Record<string, unknown>).D2L as
+          | Record<string, unknown>
+          | undefined;
+
+        try {
+          const lp = d2l?.LP as Record<string, unknown> | undefined;
+          const web = lp?.Web as Record<string, unknown> | undefined;
+          const auth = web?.Authentication as
+            | Record<string, unknown>
+            | undefined;
+          const xsrf = auth?.Xsrf as Record<string, unknown> | undefined;
+          const getToken = xsrf?.GetXsrfToken as (() => string) | undefined;
+          if (getToken) {
+            const value = getToken();
+            if (value) return value;
+          }
+        } catch {
+          // Not available on this page
+        }
+
+        const metaToken = document.querySelector('meta[name="d2l-xsrf-token"]');
+        return metaToken ? metaToken.getAttribute("content") : null;
+      });
+    } catch (error) {
+      log("DEBUG", "XSRF-only extraction failed", error);
       return null;
     }
   }
