@@ -4,16 +4,47 @@
  * Licensed under MIT — see LICENSE file for details.
  */
 
-import { execFile } from "node:child_process";
+import { spawn } from "node:child_process";
+import type { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import * as path from "node:path";
 import { log } from "../utils/logger.js";
 
 /**
- * Timeout for the auth process. Generous because the user may need to
- * approve MFA on their phone or manually log in via the browser.
+ * Timeout for the auth process. It has to outlast the child's own MFA wait,
+ * which is five minutes: a person has to find their phone, unlock it, and read
+ * a number off the screen. A shorter parent budget would kill the child in the
+ * middle of a sign-in the user was still completing.
  */
-const AUTH_TIMEOUT_MS = 3 * 60 * 1000; // 3 minutes
+const AUTH_TIMEOUT_MS = 6 * 60 * 1000; // 6 minutes
+
+/**
+ * Forward a child stream to the server log, one line at a time.
+ *
+ * The child writes its progress to stderr, including Entra's number-match
+ * digits, which the user cannot complete a sign-in without. Discarding the
+ * stream, as this used to, made an auto-reauth impossible to finish.
+ */
+function forwardLines(
+  stream: Readable | null,
+  emit: (line: string) => void
+): void {
+  if (!stream) return;
+  let buffered = "";
+  stream.setEncoding("utf-8");
+  stream.on("data", (chunk: string) => {
+    buffered += chunk;
+    const lines = buffered.split("\n");
+    buffered = lines.pop() ?? "";
+    for (const line of lines) {
+      if (line.trim()) emit(line.trimEnd());
+    }
+  });
+  stream.on("end", () => {
+    if (buffered.trim()) emit(buffered.trimEnd());
+    buffered = "";
+  });
+}
 
 /**
  * Launches the brightspace-auth CLI as a child process to
@@ -51,24 +82,46 @@ export class AuthRunner {
       log("INFO", "Auto-launching brightspace-auth...");
 
       return await new Promise<boolean>((resolve) => {
-        execFile(
+        const child = spawn(
           process.execPath, // use the same Node binary
           [this.scriptPath],
           {
-            timeout: AUTH_TIMEOUT_MS,
             cwd: this.projectRoot,
             env: { ...process.env },
-          },
-          (error, _stdout, _stderr) => {
-            if (error) {
-              log("ERROR", "Auto-auth process failed", error.message);
-              resolve(false);
-            } else {
-              log("INFO", "Auto-auth completed successfully");
-              resolve(true);
-            }
+            stdio: ["ignore", "pipe", "pipe"],
           },
         );
+
+        let timedOut = false;
+        const timer = setTimeout(() => {
+          timedOut = true;
+          child.kill("SIGTERM");
+        }, AUTH_TIMEOUT_MS);
+
+        forwardLines(child.stderr, (line) => log("INFO", line));
+        // Piped and drained rather than ignored: a full stdout pipe would
+        // block the child mid-login.
+        forwardLines(child.stdout, (line) => log("DEBUG", line));
+
+        child.on("error", (error) => {
+          clearTimeout(timer);
+          log("ERROR", "Auto-auth process failed", error.message);
+          resolve(false);
+        });
+
+        child.on("close", (code) => {
+          clearTimeout(timer);
+          if (timedOut) {
+            log("ERROR", `Auto-auth timed out after ${AUTH_TIMEOUT_MS / 60000} minutes`);
+            resolve(false);
+          } else if (code === 0) {
+            log("INFO", "Auto-auth completed successfully");
+            resolve(true);
+          } else {
+            log("ERROR", `Auto-auth process failed with exit code ${code}`);
+            resolve(false);
+          }
+        });
       });
     } finally {
       this.running = false;

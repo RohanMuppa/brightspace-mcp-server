@@ -43,7 +43,8 @@ async function main(): Promise<void> {
     // Check for credentials and provide status
     if (config.username && config.password) {
       console.log(`Authenticating as: ${config.username}`);
-      console.log("Approve the sign-in request on your phone when prompted.");
+      console.log("Approve the sign-in request in Microsoft Authenticator when prompted.");
+      console.log("If it shows a number, it is printed below: enter that number in the app.");
     } else {
       console.log("No credentials. Opening browser for manual login.");
     }
@@ -98,7 +99,7 @@ async function main(): Promise<void> {
     console.error("\nError:", error instanceof Error ? error.message : String(error));
     console.error("\nTroubleshooting tips:");
     console.error("1. Ensure D2L_USERNAME and D2L_PASSWORD are set correctly in .env");
-    console.error("2. If MFA approval failed, make sure you approved the sign-in request on your phone");
+    console.error("2. If MFA approval failed, approve the sign-in request in Microsoft Authenticator, entering the number shown above if there was one");
     console.error("3. Check that you have a stable internet connection");
     console.error("4. Try running with D2L_HEADLESS=false to see the browser");
     console.error("\nFor more details, check the error message above.\n");
