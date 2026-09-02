@@ -13,6 +13,12 @@ import { ApiError, RateLimitError, NetworkError } from "./errors.js";
 import { log } from "../utils/logger.js";
 
 /**
+ * The marker in the HTML stub a dead session gets instead of a payload. D2L
+ * answers HTTP 200 on that path, so the status alone cannot detect it.
+ */
+const EXPIRED_SESSION_MARKER = "sessionExpired=1";
+
+/**
  * D2L API client with authentication, caching, rate limiting, and version discovery.
  *
  * Key features:
@@ -253,8 +259,33 @@ export class D2LApiClient {
         throw new ApiError(response.status, path, responseText);
       }
 
-      // Parse and cache response
-      const data: T = await response.json();
+      // Parse and cache response. The body is read as text first because a
+      // dead session does not answer 401: it answers HTTP 200 carrying an HTML
+      // stub that redirects to /d2l/login?sessionExpired=1. Cookie-authenticated
+      // requests take that path, so the marker, not the status, is the signal.
+      const responseBody = await response.text();
+
+      let data: T;
+      try {
+        data = JSON.parse(responseBody) as T;
+      } catch {
+        // Only now consider the stub: a real payload that merely mentions the
+        // marker still parses, so it can never be misread as a dead session.
+        if (responseBody.includes(EXPIRED_SESSION_MARKER)) {
+          log("DEBUG", "Response carried the session-expired stub, treating it as a 401");
+          await this.tokenManager.clearToken();
+          throw new ApiError(
+            401,
+            path,
+            "Session expired. Please re-authenticate via brightspace-auth.",
+          );
+        }
+        throw new ApiError(
+          response.status,
+          path,
+          `Expected JSON from ${path} but the body did not parse`,
+        );
+      }
 
       if (options?.ttl) {
         this.cache.set(path, data, options.ttl);

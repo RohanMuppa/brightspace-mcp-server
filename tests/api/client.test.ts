@@ -44,9 +44,18 @@ describe("D2LApiClient", () => {
     // Save original fetch
     originalFetch = global.fetch;
 
-    // Create mock fetch
+    // Create mock fetch. A real Response carries both json() and text(); the
+    // mocks below only define json(), so text() is filled in from it. Without
+    // this every mock would need editing to exercise a client that reads the
+    // body as text before parsing.
     mockFetch = vi.fn();
-    global.fetch = mockFetch;
+    global.fetch = (async (...args: unknown[]) => {
+      const response: any = await (mockFetch as any)(...args);
+      if (response && typeof response.text !== "function" && typeof response.json === "function") {
+        response.text = async () => JSON.stringify(await response.json());
+      }
+      return response;
+    }) as unknown as typeof global.fetch;
 
     // Create fresh token manager for each test
     mockTokenManager = createMockTokenManager();
