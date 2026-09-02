@@ -31,6 +31,10 @@ interface SchoolPreset {
   baseUrl: string;
   usernameLabel: string;
   mfaNote: string;
+  /** Asked only by shared instances that host several campuses. */
+  campusPrompt?: string;
+  /** Shown above the username prompt when the expected format is not obvious. */
+  usernameHint?: string;
 }
 
 const SCHOOL_PRESETS: Record<string, SchoolPreset> = {
@@ -39,6 +43,14 @@ const SCHOOL_PRESETS: Record<string, SchoolPreset> = {
     baseUrl: "https://purdue.brightspace.com",
     usernameLabel: "Purdue career account username",
     mfaNote: "Approve the Duo push on your phone.",
+  },
+  suny: {
+    name: "SUNY",
+    baseUrl: "https://mylearning.suny.edu",
+    usernameLabel: "SUNY campus username",
+    mfaNote: "Approve the sign-in request from your campus MFA app.",
+    campusPrompt: "Which SUNY campus are you at? (e.g. SUNY Poly)",
+    usernameHint: "Most campuses want the full sign-in address, e.g. abc123@sunypoly.edu",
   },
 };
 
@@ -317,10 +329,26 @@ async function main(): Promise<void> {
     console.log("");
   }
 
+  // ── Campus (shared multi-campus instances only) ──────────────────
+  let campus = "";
+  if (preset?.campusPrompt) {
+    console.log(dim("  Several campuses share this Brightspace site."));
+    campus = await ask(rl, `${preset.campusPrompt} `);
+    console.log(
+      campus
+        ? dim(`  → ${campus}`)
+        : dim("  No campus set — you'll pick it in the browser at sign-in."),
+    );
+    console.log("");
+  }
+
   // ── Step 2: Username ─────────────────────────────────────────────
   const usernamePrompt = preset
     ? `What is your ${preset.usernameLabel}? `
     : "What is your Brightspace username? ";
+  if (preset?.usernameHint) {
+    console.log(dim(`  ${preset.usernameHint}`));
+  }
   let username = "";
   while (!username) {
     username = await ask(rl, usernamePrompt);
@@ -356,7 +384,7 @@ async function main(): Promise<void> {
   if (preset) {
     console.log(dim(`  MFA: ${preset.mfaNote}`));
   } else {
-    console.log(dim("  MFA: You will be prompted to approve via Duo on your phone during auth."));
+    console.log(dim("  MFA: You will be prompted to approve the sign-in on your phone during auth."));
   }
   console.log("");
 
@@ -366,6 +394,9 @@ async function main(): Promise<void> {
     username,
     password,
   };
+  if (campus) {
+    config.campus = campus;
+  }
 
   saveConfigStore(config);
   console.log(green("  Config saved to: " + getConfigStorePath()));

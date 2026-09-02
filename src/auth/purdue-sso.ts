@@ -59,7 +59,7 @@ export class PurdueSSOFlow {
    */
   async login(page: Page): Promise<boolean> {
     try {
-      log("INFO", "Starting Purdue SSO login flow");
+      log("INFO", "Starting SSO login flow");
 
       // Step 1: Handle campus selector on purdue.brightspace.com/d2l/login
       await this.handleCampusSelector(page);

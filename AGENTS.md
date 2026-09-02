@@ -27,4 +27,4 @@ No Co-Authored-By lines. No phase/plan numbers.
 - Auth: Playwright-based browser login with Duo MFA support
 - Auto-reauth on token expiry via `AuthRunner`
 - CLI subcommands: `setup`, `auth`, default (MCP server)
-- School presets: `--purdue` flag (extensible via `SCHOOL_PRESETS` in `src/setup.ts`)
+- School presets: `--purdue` and `--suny` flags (extensible via `SCHOOL_PRESETS` in `src/setup.ts`; per-school login handlers are registered in `src/auth/sso-flow.ts`)

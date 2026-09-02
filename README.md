@@ -6,7 +6,7 @@ Talk to your Brightspace courses with AI. Ask about grades, due dates, announcem
 
 This is an [MCP (Model Context Protocol)](https://modelcontextprotocol.io) server that connects your AI to D2L Brightspace so it can pull your grades, assignments, syllabus, and course content on demand.
 
-Works with any school that uses D2L Brightspace, including Purdue, USC, and hundreds more.
+Works with any school that uses D2L Brightspace, including Purdue, SUNY, USC, and hundreds more.
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/RohanMuppa/brightspace-mcp-server/main/docs/how-it-works.svg" alt="Architecture diagram" width="100%">
@@ -28,7 +28,7 @@ Paste this into Claude Code, Cursor, Windsurf, Copilot, Codex, or any AI coding 
 ```
 Install brightspace-mcp-server for me by following
 https://github.com/RohanMuppa/brightspace-mcp-server/blob/main/LLMs.md
-(use --purdue if I'm at Purdue).
+(use --purdue if I'm at Purdue, or --suny if I'm at a SUNY campus).
 ```
 
 **Option 2: Run it yourself**
@@ -41,6 +41,13 @@ Purdue students can add `--purdue` to skip entering the school URL:
 
 ```bash
 npx brightspace-mcp-server setup --purdue
+```
+
+SUNY campuses share one Brightspace site, so `--suny` also asks which campus
+you're at and skips SUNY's campus picker when you sign in:
+
+```bash
+npx brightspace-mcp-server setup --suny
 ```
 
 The wizard walks you through login, MFA, and auto configures Claude Desktop and Cursor. Restart your AI client when it finishes.

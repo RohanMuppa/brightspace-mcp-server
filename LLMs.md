@@ -36,8 +36,15 @@ If the user is at Purdue, use the preset:
 npx brightspace-mcp-server setup --purdue
 ```
 
+If the user is at a SUNY campus, use the SUNY preset. It also asks which campus
+they attend, which lets sign-in skip SUNY's shared campus picker:
+
+```bash
+npx brightspace-mcp-server setup --suny
+```
+
 The wizard:
-- prompts for the school's Brightspace URL (skipped with `--purdue`)
+- prompts for the school's Brightspace URL (skipped with `--purdue` or `--suny`)
 - launches a Playwright Chromium browser for login and MFA (Duo push, etc.)
 - saves credentials to `~/.brightspace-mcp/config.json` (0600)
 - writes the encrypted session to `~/.d2l-session/session.json` (AES-256-GCM)
@@ -111,7 +118,9 @@ src/
   auth/
     auth-runner.ts          Orchestrates reauth on 401/expiry
     browser-auth.ts         Playwright-driven login flow
-    purdue-sso.ts           Purdue-specific SSO handler
+    sso-flow.ts             Picks the login flow for the configured host
+    purdue-sso.ts           Default SSO handler (Shibboleth, CAS, Entra forms)
+    suny-sso.ts             SUNY campus selection
     session-store.ts        AES-256-GCM session persistence
     token-manager.ts        Token refresh and validation
   utils/
@@ -134,6 +143,7 @@ src/
 |---------|--------------|
 | `npx brightspace-mcp-server setup` | Interactive setup wizard |
 | `npx brightspace-mcp-server setup --purdue` | Setup with Purdue preset |
+| `npx brightspace-mcp-server setup --suny` | Setup with SUNY preset (also asks for campus) |
 | `npx brightspace-mcp-server auth` | Manual reauth |
 | `npx -y brightspace-mcp-server@latest` | Run the MCP server (registered in AI client config) |
 | `npm run build` | Compile TypeScript to `build/` |
@@ -152,7 +162,7 @@ src/
 
 ## Adding a school
 
-Add a preset to `SCHOOL_PRESETS` in `src/setup.ts`. If the school uses a non-standard login flow (SAML, Shibboleth, custom SSO), add a handler in `src/auth/` alongside `purdue-sso.ts`.
+Add a preset to `SCHOOL_PRESETS` in `src/setup.ts`. If the school uses a non-standard login flow (SAML, Shibboleth, custom SSO), add a handler in `src/auth/` alongside `purdue-sso.ts` and register it in `createSSOFlow()` in `src/auth/sso-flow.ts`.
 
 ## Adding a tool
 

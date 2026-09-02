@@ -35,6 +35,8 @@ export interface AppConfig {
   headless: boolean;
   username?: string;
   password?: string;
+  /** Campus within a shared multi-campus Brightspace instance. */
+  campus?: string;
   courseFilter: CourseFilterConfig;
 }
 
