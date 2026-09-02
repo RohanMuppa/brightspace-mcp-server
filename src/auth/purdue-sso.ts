@@ -4,7 +4,7 @@
  * Licensed under MIT — see LICENSE file for details.
  */
 
-import type { Page } from "playwright";
+import type { ElementHandle, Page } from "playwright";
 import { BrowserAuthError } from "../utils/errors.js";
 import { log } from "../utils/logger.js";
 
@@ -13,7 +13,23 @@ const SELECTORS = {
   passwordInput: "input#password",
   submitButton: 'button[name="_eventId_proceed"]',
   staySignedInYes: "input[type=submit][value='Yes']",
+  // Purdue's proceed button, D2L's own, and the generic submit used by Entra
+  // (input#idSIButton9) and most other identity providers.
+  formSubmit: 'button[name="_eventId_proceed"], button.d2l-button, input[type="submit"]',
 } as const;
+
+// Entra labels the account-name button "Next" and only shows "Sign in" on the
+// view that follows. Both are input#idSIButton9, so the label tells them apart.
+const ACCOUNT_NAME_BUTTON = /^next$/i;
+
+/** Visible text of a button, or the value of a submit input. */
+async function controlLabel(
+  handle: ElementHandle<SVGElement | HTMLElement>
+): Promise<string> {
+  return handle.evaluate((el) =>
+    ((el as HTMLInputElement).value || el.textContent || "").trim()
+  );
+}
 
 interface PurdueSSOConfig {
   username?: string;
@@ -131,33 +147,79 @@ export class PurdueSSOFlow {
       }
 
       log("INFO", "Entering credentials");
-      // Try to figure out which input actually exists
-      const usernameField = await page.$(usernameSelector);
+      const usernameField = await this.findVisible(page, usernameSelector);
       if (usernameField) {
         await usernameField.fill(this.config.username);
       }
 
+      // Microsoft Entra puts a password box on its account-name page as well,
+      // but the button there only advances to the next view. Submit the account
+      // name first so the password lands on the page that actually signs in.
+      await this.submitAccountName(page);
+
       const passwordSelector = 'input#password, input[type="password"]';
-      const passwordField = await page.$(passwordSelector);
+      const passwordField = await this.findVisible(page, passwordSelector);
       if (passwordField) {
         await passwordField.fill(this.config.password);
       }
 
-      // Try to click the submit button. Could be Purdue's proceed, or Albany's Log In, or a generic button
-      const submitSelector = 'button[name="_eventId_proceed"], button.d2l-button, input[type="submit"]';
-      const submitButton = await page.$(submitSelector);
+      const submitButton = await this.findVisible(page, SELECTORS.formSubmit);
       if (submitButton) {
         await submitButton.click();
       } else {
         // Fallback: just hit Enter on the password field
         await passwordField?.press('Enter');
       }
-      
+
       await page.waitForLoadState("networkidle");
     } catch (error) {
       log("WARN", "Automated credentials entry failed, will fallback to manual login.", error);
       throw error;
     }
+  }
+
+  /**
+   * Resolve a control only when it is actually on screen.
+   *
+   * Entra is a single-page app: the account-name view stays in the DOM once
+   * the password view replaces it, so a plain page.$() returns the hidden
+   * first-page input or button that precedes the live one in document order.
+   * Filling or clicking those stalls on Playwright's actionability wait.
+   */
+  private async findVisible(
+    page: Page,
+    selector: string
+  ): Promise<ElementHandle<SVGElement | HTMLElement> | null> {
+    for (const handle of await page.$$(selector)) {
+      if (await handle.isVisible()) return handle;
+    }
+    return null;
+  }
+
+  /**
+   * Advance Microsoft Entra's account-name page.
+   *
+   * That page carries a password box of its own, and Playwright reports it as
+   * visible, so presence cannot tell it apart from a single-page form. The
+   * button label can: it reads "Next" there and "Sign in" on the view that
+   * follows. Filling the password against the account-name page leaves the
+   * browser parked with both fields populated and nothing submitted.
+   */
+  private async submitAccountName(page: Page): Promise<void> {
+    const submit = await this.findVisible(page, SELECTORS.formSubmit);
+    if (!submit) return;
+    if (!ACCOUNT_NAME_BUTTON.test(await controlLabel(submit))) return;
+
+    log("INFO", "Account-name page detected — submitting account name");
+    await submit.click();
+
+    // The sign-in view has arrived once the button stops saying "Next".
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      await page.waitForTimeout(500);
+      const current = await this.findVisible(page, SELECTORS.formSubmit);
+      if (current && !ACCOUNT_NAME_BUTTON.test(await controlLabel(current))) return;
+    }
+    log("WARN", "Sign-in page did not appear after submitting the account name");
   }
 
   private async handleMFA(page: Page): Promise<void> {
