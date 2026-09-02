@@ -11,6 +11,7 @@ import { toolResponse, sanitizeError } from "./tool-helpers.js";
 import { convertHtmlToMarkdown } from "../utils/html-converter.js";
 import { log } from "../utils/logger.js";
 import { applyCourseFilter } from "../utils/course-filter.js";
+import { assignmentUrl, gradebookUrl, quizUrl } from "../utils/deep-links.js";
 import type { AppConfig } from "../types/index.js";
 
 // D2L Dropbox API types
@@ -105,17 +106,38 @@ interface EnrollmentResponse {
   };
 }
 
+// D2L gradebook types
+interface GradeObject {
+  Id: number;
+  Name: string;
+  GradeObjectTypeId: number;
+  AssociatedTool: { ToolId: number; ToolItemId: number } | null;
+}
+
+/**
+ * The grade object types a student is actually scored on: 1 numeric,
+ * 2 passfail, 3 selectbox, 4 text. The rest (category, calculated, formula,
+ * final) are the gradebook's own arithmetic, not work anybody owes.
+ */
+const STUDENT_SCORED = new Set([1, 2, 3, 4]);
+
 /**
  * Fetch assignments (dropbox + quizzes) for a single course
+ *
+ * baseUrl is optional: without it the items carry a null url.
  */
 export async function fetchCourseAssignments(
   apiClient: D2LApiClient,
-  courseId: number
+  courseId: number,
+  baseUrl?: string
 ): Promise<any[]> {
   const assignments: any[] = [];
 
-  // Fetch dropbox folders and quizzes in parallel
-  const [dropboxResult, quizResult] = await Promise.allSettled([
+  // Fetch dropbox folders, quizzes, and the gradebook in parallel. The
+  // gradebook is fetched alongside them but read last: a heads-up row is a
+  // column that nothing the other two returned matched, so the comparison
+  // cannot be made until they have answered.
+  const [dropboxResult, quizResult, gradebookResult] = await Promise.allSettled([
     apiClient.get<{ Objects: DropboxFolder[] } | DropboxFolder[]>(
       apiClient.le(courseId, "/dropbox/folders/"),
       { ttl: DEFAULT_CACHE_TTLS.assignments }
@@ -124,6 +146,9 @@ export async function fetchCourseAssignments(
       apiClient.le(courseId, "/quizzes/"),
       { ttl: DEFAULT_CACHE_TTLS.assignments }
     ),
+    apiClient.get<GradeObject[]>(apiClient.le(courseId, "/grades/"), {
+      ttl: DEFAULT_CACHE_TTLS.assignments,
+    }),
   ]);
 
   // Process Dropbox folders
@@ -170,6 +195,7 @@ export async function fetchCourseAssignments(
         type: "assignment",
         id: folder.Id,
         name: folder.Name,
+        url: baseUrl ? assignmentUrl(baseUrl, courseId, folder.Id) : null,
         instructions: folder.CustomInstructions?.Html
           ? convertHtmlToMarkdown(folder.CustomInstructions.Html)
           : { markdown: "", html: "" },
@@ -265,6 +291,7 @@ export async function fetchCourseAssignments(
         type: "quiz",
         id: quiz.QuizId,
         name: quiz.Name,
+        url: baseUrl ? quizUrl(baseUrl, courseId, quiz.QuizId) : null,
         instructions: quiz.Description?.Html
           ? convertHtmlToMarkdown(quiz.Description.Html)
           : { markdown: "", html: "" },
@@ -290,7 +317,60 @@ export async function fetchCourseAssignments(
     log("DEBUG", `Failed to fetch quizzes for course ${courseId}`, quizResult.reason);
   }
 
+  // Process the gradebook last, once the fetched items are known.
+  if (gradebookResult.status === "fulfilled") {
+    assignments.push(
+      ...gradebookHeadsUp(gradebookResult.value, assignments, courseId, baseUrl)
+    );
+  } else {
+    log("DEBUG", `Failed to fetch the gradebook for course ${courseId}`, gradebookResult.reason);
+  }
+
   return assignments;
+}
+
+/**
+ * Gradebook columns describing work that no other route already offered.
+ *
+ * Two rules decide what qualifies. The column must be one a student is scored
+ * on, which excludes the bookkeeping types that describe the gradebook's own
+ * arithmetic. And it must match no already-fetched assignment or quiz: not
+ * "unlinked", which would be the wrong test, because a released midterm's
+ * column IS linked, to a quiz the student's own quizzes call cannot see, and
+ * that column is the entire reason this exists.
+ *
+ * A column with no id or no name is skipped rather than fatal: one malformed
+ * row should cost its own line, not the course's other heads-up rows.
+ */
+function gradebookHeadsUp(
+  raw: unknown,
+  fetched: any[],
+  courseId: number,
+  baseUrl?: string
+): any[] {
+  if (!Array.isArray(raw)) return [];
+
+  const covered = new Set(
+    fetched.map((item) => item.id).filter((id) => typeof id === "number")
+  );
+
+  const rows: any[] = [];
+  for (const column of raw as GradeObject[]) {
+    if (!STUDENT_SCORED.has(column?.GradeObjectTypeId as number)) continue;
+    if (covered.has(column.AssociatedTool?.ToolItemId as number)) continue;
+    if (typeof column.Id !== "number" || typeof column.Name !== "string") continue;
+
+    rows.push({
+      type: "gradeOnly",
+      id: column.Id,
+      name: column.Name,
+      // Always null: a grade column carries no due date of its own, and
+      // inventing one from the column name would be a guess.
+      dueDate: null,
+      url: baseUrl ? gradebookUrl(baseUrl, courseId) : null,
+    });
+  }
+  return rows;
 }
 
 /**
@@ -318,7 +398,7 @@ export function registerGetAssignments(
 
         // Single course case
         if (courseId) {
-          const assignments = await fetchCourseAssignments(apiClient, courseId);
+          const assignments = await fetchCourseAssignments(apiClient, courseId, config.baseUrl);
 
           log("INFO", `get_assignments: Retrieved ${assignments.length} assignments for course ${courseId}`);
           return toolResponse({ courseId, assignments });
@@ -349,7 +429,7 @@ export function registerGetAssignments(
         // Fetch assignments for each course (handle 403s gracefully)
         const assignmentPromises = filteredEnrollments.map(async (item) => {
           try {
-            const assignments = await fetchCourseAssignments(apiClient, item.OrgUnit.Id);
+            const assignments = await fetchCourseAssignments(apiClient, item.OrgUnit.Id, config.baseUrl);
 
             return {
               courseId: item.OrgUnit.Id,
