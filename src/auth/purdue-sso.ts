@@ -22,6 +22,20 @@ const SELECTORS = {
 // view that follows. Both are input#idSIButton9, so the label tells them apart.
 const ACCOUNT_NAME_BUTTON = /^next$/i;
 
+/**
+ * Entra's number-match digits. The tenant shows a two-digit number that has to
+ * be typed into Microsoft Authenticator, and nothing else on the machine
+ * reveals it, so a headless run stalls forever unless this is scraped and
+ * logged. Plain DOM text, no OCR.
+ */
+const NUMBER_MATCH_SELECTOR = "#idRichContext_DisplaySign";
+
+/** How often to look for the number while waiting on MFA. */
+const NUMBER_MATCH_POLL_MS = 2000;
+
+/** A person has to find their phone, unlock it, and read a prompt. */
+const MFA_TIMEOUT_MS = 5 * 60 * 1000;
+
 /** Visible text of a button, or the value of a submit input. */
 async function controlLabel(
   handle: ElementHandle<SVGElement | HTMLElement>
@@ -223,15 +237,24 @@ export class PurdueSSOFlow {
   }
 
   private async handleMFA(page: Page): Promise<void> {
+    // The number is only on screen while MFA is pending, so the scrape has to
+    // run alongside the wait rather than before or after it.
+    const pending = { done: false };
+    let release: () => void = () => {};
+    const released = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const watcher = this.watchNumberMatch(page, pending, released);
+
     try {
       log("WARN", "Waiting for Microsoft MFA approval on your device...");
-      log("INFO", "Timeout: 120 seconds");
-      log("INFO", "Browser is running in headed mode - please approve the MFA request on your phone");
+      log("INFO", "Timeout: 5 minutes");
+      log("INFO", "Approve the sign-in request in Microsoft Authenticator. If it shows a number, it is printed below.");
 
       // Wait for MFA approval by watching for the post-MFA redirect.
       // Using waitForURL instead of networkidle because networkidle fires
       // after 500ms of no network activity, which can happen while the MFA
-      // page UI finishes loading but before the user approves the Duo push.
+      // page UI finishes loading but before the user approves the request.
       await page.waitForURL(
         (url) => {
           const href = url.toString();
@@ -240,16 +263,57 @@ export class PurdueSSOFlow {
                  href.includes("/sso/") ||
                  href.includes("SAMLResponse");
         },
-        { timeout: 120000 }
+        { timeout: MFA_TIMEOUT_MS }
       );
-      log("INFO", `MFA completed — redirected to: ${page.url()}`);
+      log("INFO", `MFA completed - redirected to: ${page.url()}`);
     } catch (error) {
       throw new BrowserAuthError(
-        "MFA approval timed out after 120 seconds",
+        "MFA approval timed out after 5 minutes",
         "mfa_approval",
         error as Error
       );
+    } finally {
+      pending.done = true;
+      release();
+      await watcher;
     }
+  }
+
+  /**
+   * Log Entra's number-match digits until the MFA wait is over.
+   *
+   * Only a CHANGED value is logged: Entra re-mints the number whenever the
+   * user asks for a new request, and repeating the same digits every two
+   * seconds would bury everything else in the log.
+   */
+  private async watchNumberMatch(
+    page: Page,
+    pending: { done: boolean },
+    released: Promise<void>
+  ): Promise<void> {
+    let last: string | null = null;
+    while (!pending.done) {
+      const number = await this.readNumberMatch(page);
+      if (number && number !== last) {
+        last = number;
+        log("WARN", `Number match: ${number}. Enter it in Microsoft Authenticator.`);
+      }
+      // Racing the release keeps the wait from outliving the MFA it watches.
+      await Promise.race([
+        page.waitForTimeout(NUMBER_MATCH_POLL_MS).catch(() => {}),
+        released,
+      ]);
+    }
+  }
+
+  /** The digits on screen, or null when Entra is not showing any. */
+  private async readNumberMatch(page: Page): Promise<string | null> {
+    const sign = page.locator(NUMBER_MATCH_SELECTOR).first();
+    // isVisible answers immediately rather than waiting out a timeout, so the
+    // runs that never show a number keep the poll on its two-second rhythm.
+    if (!(await sign.isVisible().catch(() => false))) return null;
+    const text = await sign.textContent().catch(() => null);
+    return text?.trim() || null;
   }
 
   private async handleStaySignedIn(page: Page): Promise<void> {
