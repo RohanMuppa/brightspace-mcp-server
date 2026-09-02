@@ -11,6 +11,7 @@ import { toolResponse, sanitizeError } from "./tool-helpers.js";
 import { convertHtmlToMarkdown } from "../utils/html-converter.js";
 import { log } from "../utils/logger.js";
 import { applyCourseFilter } from "../utils/course-filter.js";
+import { assignmentUrl, quizUrl } from "../utils/deep-links.js";
 import type { AppConfig } from "../types/index.js";
 
 // D2L Dropbox API types
@@ -107,10 +108,13 @@ interface EnrollmentResponse {
 
 /**
  * Fetch assignments (dropbox + quizzes) for a single course
+ *
+ * baseUrl is optional: without it the items carry a null url.
  */
 export async function fetchCourseAssignments(
   apiClient: D2LApiClient,
-  courseId: number
+  courseId: number,
+  baseUrl?: string
 ): Promise<any[]> {
   const assignments: any[] = [];
 
@@ -170,6 +174,7 @@ export async function fetchCourseAssignments(
         type: "assignment",
         id: folder.Id,
         name: folder.Name,
+        url: baseUrl ? assignmentUrl(baseUrl, courseId, folder.Id) : null,
         instructions: folder.CustomInstructions?.Html
           ? convertHtmlToMarkdown(folder.CustomInstructions.Html)
           : { markdown: "", html: "" },
@@ -265,6 +270,7 @@ export async function fetchCourseAssignments(
         type: "quiz",
         id: quiz.QuizId,
         name: quiz.Name,
+        url: baseUrl ? quizUrl(baseUrl, courseId, quiz.QuizId) : null,
         instructions: quiz.Description?.Html
           ? convertHtmlToMarkdown(quiz.Description.Html)
           : { markdown: "", html: "" },
@@ -318,7 +324,7 @@ export function registerGetAssignments(
 
         // Single course case
         if (courseId) {
-          const assignments = await fetchCourseAssignments(apiClient, courseId);
+          const assignments = await fetchCourseAssignments(apiClient, courseId, config.baseUrl);
 
           log("INFO", `get_assignments: Retrieved ${assignments.length} assignments for course ${courseId}`);
           return toolResponse({ courseId, assignments });
@@ -349,7 +355,7 @@ export function registerGetAssignments(
         // Fetch assignments for each course (handle 403s gracefully)
         const assignmentPromises = filteredEnrollments.map(async (item) => {
           try {
-            const assignments = await fetchCourseAssignments(apiClient, item.OrgUnit.Id);
+            const assignments = await fetchCourseAssignments(apiClient, item.OrgUnit.Id, config.baseUrl);
 
             return {
               courseId: item.OrgUnit.Id,
