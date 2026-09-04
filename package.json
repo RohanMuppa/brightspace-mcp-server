@@ -1,6 +1,6 @@
 {
   "name": "brightspace-mcp-server",
-  "version": "1.5.1",
+  "version": "1.5.2",
   "mcpName": "io.github.rohanmuppa/brightspace",
   "description": "MCP server for Brightspace (D2L). Check grades, due dates, assignments, announcements, syllabus, rosters and more via Claude, ChatGPT, Cursor, Windsurf, or any MCP client.",
   "type": "module",
