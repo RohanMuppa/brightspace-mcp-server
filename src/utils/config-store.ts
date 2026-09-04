@@ -7,6 +7,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
+import { writeFileAtomicSync } from "./atomic-write.js";
 
 /** JSON schema for ~/.brightspace-mcp/config.json */
 export interface ConfigStoreData {
@@ -39,9 +40,11 @@ export function saveConfigStore(config: ConfigStoreData): void {
   if (!fs.existsSync(CONFIG_DIR)) {
     fs.mkdirSync(CONFIG_DIR, { recursive: true, ...(isWindows ? {} : { mode: 0o700 }) });
   }
-  fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2) + "\n", {
-    ...(isWindows ? {} : { mode: 0o600 }),
-  });
+  writeFileAtomicSync(
+    CONFIG_FILE,
+    JSON.stringify(config, null, 2) + "\n",
+    isWindows ? {} : { mode: 0o600 }
+  );
 }
 
 export function getConfigStorePath(): string {

@@ -12,6 +12,7 @@ import * as os from "node:os";
 import type { TokenData, EncryptedData, SessionFile } from "../types/index.js";
 import { SessionStoreError } from "../utils/errors.js";
 import { log } from "../utils/logger.js";
+import { writeFileAtomic } from "../utils/atomic-write.js";
 
 const DEFAULT_SESSION_DIR = path.join(os.homedir(), ".d2l-session");
 const SESSION_FILE_NAME = "session.json";
@@ -137,13 +138,12 @@ export class SessionStore {
         expiresAt: token.expiresAt,
       };
 
-      await fs.writeFile(
+      // Staged and renamed, so the auth CLI and a running server can never
+      // leave each other a half-written file.
+      await writeFileAtomic(
         this.sessionFilePath,
         JSON.stringify(sessionFile, null, 2),
-        {
-          encoding: "utf-8",
-          ...(isWindows ? {} : { mode: 0o600 }),
-        }
+        isWindows ? {} : { mode: 0o600 }
       );
 
       log("DEBUG", `Session saved to ${this.sessionFilePath}`);
