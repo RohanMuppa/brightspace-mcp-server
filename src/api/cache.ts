@@ -26,6 +26,12 @@ export class TTLCache<T = unknown> {
     const timerId = setTimeout(() => {
       this.cache.delete(key);
     }, ttlMs);
+    // An idle cache entry must not hold the process open: a one hour
+    // enrollments TTL would otherwise keep the event loop alive after the
+    // last request has been answered.
+    if (typeof (timerId as { unref?: () => void }).unref === "function") {
+      (timerId as { unref: () => void }).unref();
+    }
 
     // Store entry
     this.cache.set(key, { data: value, timerId });
