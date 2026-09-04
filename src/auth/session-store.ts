@@ -66,13 +66,17 @@ export class SessionStore {
    * Uses a per-installation random salt to prevent precomputation attacks.
    */
   private deriveKey(): Buffer {
+    // Deliberately NOT the hostname. On a campus network os.hostname() is a
+    // DHCP reverse-DNS name (pal-nat186-166-147.itap.purdue.edu), so it
+    // changes with the lease. Keying on it meant that moving between networks
+    // silently made the saved session undecryptable, and the user paid for it
+    // with a full MFA login. The per-install random salt already provides the
+    // uniqueness the hostname was there for, and it is stable.
     const username = os.userInfo().username;
-    const hostname = os.hostname();
-    const keyMaterial = username + hostname;
     const salt = this.getOrCreateSalt();
 
     // Use scrypt to derive a 32-byte key (256 bits for AES-256)
-    return crypto.scryptSync(keyMaterial, salt, 32);
+    return crypto.scryptSync(username, salt, 32);
   }
 
   /**
@@ -183,6 +187,16 @@ export class SessionStore {
       const err =
         error instanceof Error ? error : new Error(String(error));
       log("WARN", `Failed to load session: ${err.message}`);
+      // A session this install cannot read is never going to become readable:
+      // it was written by an older build whose key derivation differed, or the
+      // file is damaged. Removing it means the next run does one clean login
+      // instead of logging the same warning on every start forever.
+      try {
+        await fs.rm(this.sessionFilePath, { force: true });
+        log("DEBUG", "Removed the unreadable session file, a fresh login is needed");
+      } catch {
+        // Nothing more to do: the caller re-authenticates either way.
+      }
       // Return null instead of throwing - graceful degradation
       return null;
     }
