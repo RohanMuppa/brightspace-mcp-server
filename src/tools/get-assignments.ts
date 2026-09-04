@@ -58,10 +58,28 @@ interface DropboxFeedback {
 }
 
 // D2L Quiz API types
+/**
+ * Quiz rich text as the live tenant sends it: the display string is nested a
+ * level deeper, under Text.Html. Older responses put Html at the top level, so
+ * both are declared and richTextHtml reads whichever is present.
+ */
+interface QuizRichText {
+  Text?: { Text?: string | null; Html?: string | null } | string | null;
+  Html?: string | null;
+  IsDisplayed?: boolean;
+}
+
+interface QuizTimeLimit {
+  IsEnforced: boolean;
+  ShowClock: boolean;
+  TimeLimitValue: number; // minutes
+}
+
 interface QuizReadData {
   QuizId: number;
   Name: string;
-  Description: { Text: string; Html: string } | null;
+  Description: QuizRichText | null;
+  Instructions?: QuizRichText | null;
   StartDate: string | null;
   EndDate: string | null;
   DueDate: string | null;
@@ -70,11 +88,20 @@ interface QuizReadData {
     IsUnlimited: boolean;
     NumberOfAttemptsAllowed: number | null;
   } | null;
-  TimeLimit: {
-    IsEnforced: boolean;
-    ShowClock: boolean;
-    TimeLimitValue: number; // minutes
-  } | null;
+  // The live field name. TimeLimit is the older flat spelling, kept so a
+  // tenant that still sends it keeps working.
+  SubmissionTimeLimit?: QuizTimeLimit | null;
+  TimeLimit?: QuizTimeLimit | null;
+  SubmissionGracePeriod?: number | null;
+  Password?: string | null;
+}
+
+/** The display HTML of a quiz rich-text field, nested shape or flat. */
+function richTextHtml(field: QuizRichText | null | undefined): string | null {
+  if (!field) return null;
+  const nested =
+    typeof field.Text === "object" && field.Text !== null ? field.Text.Html : null;
+  return nested ?? field.Html ?? null;
 }
 
 interface QuizAttemptData {
@@ -249,42 +276,62 @@ export async function fetchCourseAssignments(
       ? quizResponse
       : (quizResponse as any)?.Objects ?? [];
 
+    // Students on this tenant get 403 from /quizzes/{id}/attempts/. Once the
+    // first quiz of a course proves that, the remaining quizzes are not asked:
+    // the answer would be the same 403, at one wasted request each.
+    let attemptsForbidden = false;
+
     for (const quiz of quizzes) {
       // Skip inactive quizzes
       if (!quiz.IsActive) continue;
 
-      // Fetch quiz attempts
-      let attempts: QuizAttemptData[] = [];
-      try {
-        const attemptsRaw = await apiClient.get<{ Objects: QuizAttemptData[] } | QuizAttemptData[]>(
-          apiClient.le(courseId, `/quizzes/${quiz.QuizId}/attempts/`),
-          { ttl: DEFAULT_CACHE_TTLS.assignments }
-        );
-        // D2L attempts endpoint may return paged { Objects: [...] } or flat array
-        attempts = Array.isArray(attemptsRaw) ? attemptsRaw : (attemptsRaw as any).Objects ?? [];
-      } catch (error: any) {
-        // 404 means no attempts yet - that's fine
-        if (error?.status !== 404 && error?.status !== 403) {
-          log("DEBUG", `Failed to fetch attempts for quiz ${quiz.QuizId}`, error);
+      // Fetch quiz attempts. null means "not measured", which is different
+      // from an empty list, and the output says which one it was.
+      let attempts: QuizAttemptData[] | null = null;
+      if (!attemptsForbidden) {
+        try {
+          const attemptsRaw = await apiClient.get<{ Objects: QuizAttemptData[] } | QuizAttemptData[]>(
+            apiClient.le(courseId, `/quizzes/${quiz.QuizId}/attempts/`),
+            { ttl: DEFAULT_CACHE_TTLS.assignments }
+          );
+          // D2L attempts endpoint may return paged { Objects: [...] } or flat array
+          attempts = Array.isArray(attemptsRaw) ? attemptsRaw : (attemptsRaw as any).Objects ?? [];
+        } catch (error: any) {
+          if (error?.status === 404) {
+            // 404 means no attempts yet, which is a measurement of zero
+            attempts = [];
+          } else if (error?.status === 403) {
+            attemptsForbidden = true;
+            log("DEBUG", `Attempts are forbidden for course ${courseId}: not asking again`);
+          } else {
+            log("DEBUG", `Failed to fetch attempts for quiz ${quiz.QuizId}`, error);
+          }
         }
       }
 
       // Calculate remaining attempts
-      const completedAttempts = attempts.filter((a) => a.IsCompleted);
-      let attemptsRemaining: number | string = "Unlimited";
+      const completedAttempts = attempts?.filter((a) => a.IsCompleted) ?? null;
+      let attemptsRemaining: number | string | null = null;
       let attemptWarning: string | null = null;
 
-      if (quiz.AttemptsAllowed && !quiz.AttemptsAllowed.IsUnlimited) {
-        const allowed = quiz.AttemptsAllowed.NumberOfAttemptsAllowed ?? 0;
-        attemptsRemaining = allowed - completedAttempts.length;
+      if (completedAttempts) {
+        attemptsRemaining = "Unlimited";
 
-        // Generate warning for low attempts
-        if (attemptsRemaining <= 0) {
-          attemptWarning = "WARNING: No attempts remaining";
-        } else if (attemptsRemaining === 1) {
-          attemptWarning = "WARNING: Only 1 attempt remaining";
+        if (quiz.AttemptsAllowed && !quiz.AttemptsAllowed.IsUnlimited) {
+          const allowed = quiz.AttemptsAllowed.NumberOfAttemptsAllowed ?? 0;
+          attemptsRemaining = allowed - completedAttempts.length;
+
+          // Generate warning for low attempts
+          if (attemptsRemaining <= 0) {
+            attemptWarning = "WARNING: No attempts remaining";
+          } else if (attemptsRemaining === 1) {
+            attemptWarning = "WARNING: Only 1 attempt remaining";
+          }
         }
       }
+
+      const timeLimit = quiz.SubmissionTimeLimit ?? quiz.TimeLimit;
+      const descriptionHtml = richTextHtml(quiz.Description);
 
       // Build quiz object
       const quizAssignment = {
@@ -292,22 +339,27 @@ export async function fetchCourseAssignments(
         id: quiz.QuizId,
         name: quiz.Name,
         url: baseUrl ? quizUrl(baseUrl, courseId, quiz.QuizId) : null,
-        instructions: quiz.Description?.Html
-          ? convertHtmlToMarkdown(quiz.Description.Html)
+        instructions: descriptionHtml
+          ? convertHtmlToMarkdown(descriptionHtml)
           : { markdown: "", html: "" },
         dueDate: quiz.DueDate,
         startDate: quiz.StartDate,
         endDate: quiz.EndDate,
-        timeLimit: quiz.TimeLimit?.IsEnforced ? quiz.TimeLimit.TimeLimitValue : null,
+        timeLimit: timeLimit?.IsEnforced ? timeLimit.TimeLimitValue : null,
         attemptsAllowed: quiz.AttemptsAllowed?.IsUnlimited
           ? "Unlimited"
           : quiz.AttemptsAllowed?.NumberOfAttemptsAllowed ?? null,
-        attemptsUsed: completedAttempts.length,
+        // False when the tenant refused the attempts endpoint, in which case
+        // every count below is null rather than a guess of zero.
+        attemptsAvailable: completedAttempts !== null,
+        attemptsUsed: completedAttempts?.length ?? null,
         attemptsRemaining,
         attemptWarning,
-        bestScore: completedAttempts.length > 0
+        bestScore: completedAttempts && completedAttempts.length > 0
           ? Math.max(...completedAttempts.map((a) => a.Score ?? 0))
           : null,
+        gracePeriodMinutes: quiz.SubmissionGracePeriod ?? null,
+        hasPassword: Boolean(quiz.Password),
       };
 
       assignments.push(quizAssignment);
