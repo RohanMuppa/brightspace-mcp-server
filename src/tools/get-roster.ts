@@ -6,6 +6,7 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { D2LApiClient, DEFAULT_CACHE_TTLS } from "../api/index.js";
+import { fetchAllObjects } from "../api/paginate.js";
 import {
   GetRosterSchema,
 } from "./schemas.js";
@@ -24,11 +25,6 @@ interface ClasslistUser {
   LastAccessed: string | null;
 }
 
-interface ClasslistResponse {
-  Objects: ClasslistUser[];
-  Next?: string | null;
-}
-
 // Purdue-specific role IDs. These are institution-specific values.
 // If using at another institution, you may need to adjust these.
 // Discover by fetching classlist for a known course and inspecting RoleId values.
@@ -36,9 +32,9 @@ const INSTRUCTOR_ROLE_ID = 109;
 const TA_ROLE_ID = 135;
 
 /**
- * Fetch a page of classlist users with optional filters
+ * Fetch every classlist user matching the optional filters, across all pages
  */
-async function fetchClasslistPage(
+async function fetchClasslistUsers(
   apiClient: D2LApiClient,
   courseId: number,
   options?: { roleId?: number; searchTerm?: string }
@@ -59,19 +55,9 @@ async function fetchClasslistPage(
     `/classlist/paged/${queryString ? "?" + queryString : ""}`
   );
 
-  const response = await apiClient.get<ClasslistResponse>(path, {
+  return fetchAllObjects<ClasslistUser>(apiClient, path, {
     ttl: DEFAULT_CACHE_TTLS.roster,
   });
-
-  if (response.Next) {
-    log(
-      "WARN",
-      "get_roster: Pagination detected but not implemented. Some users may be missing.",
-      { courseId, next: response.Next }
-    );
-  }
-
-  return response.Objects;
 }
 
 /**
@@ -101,11 +87,11 @@ export function registerGetRoster(
         if (!includeStudents) {
           // Fetch instructors and TAs in parallel
           const [instructorResult, taResult] = await Promise.allSettled([
-            fetchClasslistPage(apiClient, courseId, {
+            fetchClasslistUsers(apiClient, courseId, {
               roleId: INSTRUCTOR_ROLE_ID,
               searchTerm,
             }),
-            fetchClasslistPage(apiClient, courseId, {
+            fetchClasslistUsers(apiClient, courseId, {
               roleId: TA_ROLE_ID,
               searchTerm,
             }),
@@ -129,7 +115,7 @@ export function registerGetRoster(
           }
         } else {
           // Fetch all users
-          allUsers = await fetchClasslistPage(apiClient, courseId, {
+          allUsers = await fetchClasslistUsers(apiClient, courseId, {
             searchTerm,
           });
 

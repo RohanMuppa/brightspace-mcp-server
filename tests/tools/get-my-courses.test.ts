@@ -103,3 +103,44 @@ describe("get_my_courses activeOnly resolution", () => {
     expect(idsOf(result)).toEqual([15853]);
   });
 });
+
+/**
+ * Enrollments arrive one page at a time. Reading only the first page used to
+ * drop every course after it and log a warning in place of the data.
+ */
+describe("get_my_courses pagination", () => {
+  it("returns courses from every page of enrollments", async () => {
+    const requested: string[] = [];
+    const page = (id: number, bookmark?: string) => ({
+      Items: [
+        {
+          OrgUnit: { Id: id, Name: `Course ${id}`, Code: `c${id}` },
+          Access: { ClasslistRoleName: "Student", IsActive: true, LastAccessed: null },
+        },
+      ],
+      PagingInfo: { HasMoreItems: bookmark !== undefined, Bookmark: bookmark ?? "" },
+    });
+
+    const apiClient = {
+      lp: (p: string) => `/d2l/api/lp/1.0${p}`,
+      get: vi.fn(async (path: string) => {
+        requested.push(path);
+        return path.includes("bookmark=b1") ? page(2) : page(1, "b1");
+      }),
+    };
+
+    let handler: (args: unknown) => Promise<any>;
+    const server = {
+      registerTool: (_n: string, _m: unknown, fn: (args: unknown) => Promise<any>) => {
+        handler = fn;
+      },
+    };
+    registerGetMyCourses(server as any, apiClient as any, makeConfig(true));
+
+    const result = await handler!({});
+
+    expect(idsOf(result)).toEqual([1, 2]);
+    expect(requested).toHaveLength(2);
+    expect(requested[1]).toContain("bookmark=b1");
+  });
+});
