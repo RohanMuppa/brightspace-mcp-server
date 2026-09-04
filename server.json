@@ -6,15 +6,73 @@
     "url": "https://github.com/RohanMuppa/brightspace-mcp-server",
     "source": "github"
   },
-  "version": "1.2.7",
+  "version": "1.5.1",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "brightspace-mcp-server",
-      "version": "1.2.7",
+      "version": "1.5.1",
       "transport": {
         "type": "stdio"
-      }
+      },
+      "environmentVariables": [
+        {
+          "name": "D2L_BASE_URL",
+          "description": "Your school's Brightspace URL. Default: https://purdue.brightspace.com. Normally set by the setup wizard in ~/.brightspace-mcp/config.json instead.",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false
+        },
+        {
+          "name": "D2L_SESSION_DIR",
+          "description": "Directory for the encrypted session and the browser profile. Default: ~/.d2l-session",
+          "isRequired": false,
+          "format": "filepath",
+          "isSecret": false
+        },
+        {
+          "name": "D2L_HEADLESS",
+          "description": "Run the login browser without a window. Default: false. Only sensible when credentials are saved, since the MFA number match is printed to the log.",
+          "isRequired": false,
+          "format": "boolean",
+          "isSecret": false
+        },
+        {
+          "name": "D2L_TOKEN_TTL",
+          "description": "Seconds an access token is used before it is re-minted from the session cookie. Default: 3600",
+          "isRequired": false,
+          "format": "number",
+          "isSecret": false
+        },
+        {
+          "name": "D2L_INCLUDE_COURSES",
+          "description": "Comma separated course (org unit) ids to include. Default: all enrolled courses.",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false
+        },
+        {
+          "name": "D2L_EXCLUDE_COURSES",
+          "description": "Comma separated course (org unit) ids to exclude.",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false
+        },
+        {
+          "name": "D2L_ACTIVE_ONLY",
+          "description": "Only return courses whose enrollment is active. Default: true",
+          "isRequired": false,
+          "format": "boolean",
+          "isSecret": false
+        },
+        {
+          "name": "D2L_NO_UPDATE_CHECK",
+          "description": "Set to any value to disable the startup check against the npm registry for a newer version.",
+          "isRequired": false,
+          "format": "boolean",
+          "isSecret": false
+        }
+      ]
     }
   ]
 }

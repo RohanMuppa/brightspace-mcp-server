@@ -15,7 +15,8 @@ No Co-Authored-By lines. No phase/plan numbers.
 ## npm Publishing
 
 - Auto-publishes via GitHub Actions on push to main (when version in package.json changes)
-- NPM_TOKEN secret in GitHub repo settings (expires Apr 21, 2026)
+- Publishing authenticates with a granular npm access token that has 2FA bypass enabled, stored as the NPM_TOKEN repo secret. npm is restricting such tokens, so the durable fix is Trusted Publishing (OIDC), which needs a one-time registration on the npmjs.com package settings page and then no secret at all.
+- Release checklist: bump the version in package.json AND server.json in the same commit (tests/release/server-json.test.ts enforces it), run `npm test`, push main, confirm the Publish workflow is green, then confirm `npm view brightspace-mcp-server version` shows the new version.
 - README and description on npm are baked in at publish time, so always publish after README changes
 - The MCP client config uses `npx brightspace-mcp-server@latest` so users auto-update
 - Always bump the version in package.json BEFORE or IN THE SAME COMMIT as any code or docs change. Never push code changes to main without a version bump. If you forget, the GitHub Action will skip publishing and users will not get the update.

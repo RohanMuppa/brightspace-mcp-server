@@ -71,7 +71,7 @@ You still need to run `npx brightspace-mcp-server setup` first to save your cred
 
 ## Session Expired?
 
-You should rarely see this. Access tokens are re-minted from your saved session cookie in the background (no browser, about 200 ms), and a browser only opens when the Brightspace session itself has ended, typically after days. If that automatic re-login fails, run:
+You should rarely see this. Access tokens are re-minted from your saved session cookie in the background (no browser, about 200 ms), and a browser only opens when the Brightspace session itself has ended, typically after a day or two. If that automatic re-login fails, run:
 
 ```bash
 npx brightspace-mcp-server auth
@@ -98,7 +98,7 @@ npx brightspace-mcp-server auth
 - Your username and password stay on your machine in `~/.brightspace-mcp/config.json`, readable only by your user (mode 0600). They are typed into your school's real login page and nowhere else.
 - Session tokens and cookies live in `~/.d2l-session/`, encrypted with AES-256-GCM.
 - All traffic to Brightspace is HTTPS.
-- The only other network call is a version check against the npm registry on startup.
+- On startup the server asks the npm registry whether a newer version exists. When running through `npx`, it clears this package's own stale npx cache directories so the next start downloads the new version. It never installs anything itself. Set `D2L_NO_UPDATE_CHECK=1` to turn the check off.
 - Read only: this server never submits, posts, or changes anything in Brightspace.
 
 ## Contributing & Forking
