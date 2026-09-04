@@ -19,12 +19,12 @@ interface NewsItem {
   Title: string;
   Body: { Text: string; Html: string } | null;
   CreatedBy: { Identifier: string; DisplayName: string } | null;
-  CreatedDate: string;
+  CreatedDate: string | null;
   LastModifiedBy: { Identifier: string; DisplayName: string };
   LastModifiedDate: string;
-  StartDate: string;
+  StartDate: string | null;
   EndDate: string | null;
-  IsPublished: boolean;
+  IsPublished?: boolean;
   IsPinned: boolean;
   IsGlobal: boolean;
   Attachments: any[];
@@ -52,6 +52,51 @@ interface EnrollmentResponse {
 }
 
 /**
+ * A date the runtime can actually order, or null. Unreadable and absent are the
+ * same answer, so a caller can fall through to the next best.
+ */
+function readableDate(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  return Number.isNaN(new Date(raw).getTime()) ? null : raw;
+}
+
+/**
+ * The date a post was actually scheduled for. StartDate is when the instructor
+ * scheduled it, which is the honest date whenever there is one; CreatedDate is
+ * the fallback for a post nobody scheduled.
+ */
+export function effectiveDate(item: NewsItem): string | null {
+  return readableDate(item.StartDate) ?? readableDate(item.CreatedDate);
+}
+
+/**
+ * False only for a draft the instructor has not posted. The test is an explicit
+ * false, never a falsy read: an item that omits the field is a shape the tenant
+ * has never sent, and treating unknown as unpublished would empty the section
+ * the day D2L renames or drops the field.
+ */
+export function isPublishedNewsItem(item: NewsItem): boolean {
+  return item.IsPublished !== false;
+}
+
+/**
+ * Newest first by the scheduled date, undated last. An undated item sorts to
+ * the end rather than to 1970, where a null read as an epoch would put it:
+ * ahead of nothing, but behind everything real. Equal dates return 0 and keep
+ * the server's own order, which is what makes the slice deterministic when a
+ * course posts twice in one minute.
+ */
+export function newestFirst(
+  a: { date: string | null },
+  b: { date: string | null }
+): number {
+  if (a.date === b.date) return 0;
+  if (a.date === null) return 1;
+  if (b.date === null) return -1;
+  return new Date(b.date).getTime() - new Date(a.date).getTime();
+}
+
+/**
  * Map a raw D2L news item to a clean announcement object.
  */
 export function mapNewsItem(item: NewsItem) {
@@ -62,6 +107,7 @@ export function mapNewsItem(item: NewsItem) {
     createdBy: item.CreatedBy?.DisplayName ?? "Unknown",
     createdDate: item.CreatedDate,
     startDate: item.StartDate,
+    date: effectiveDate(item),
     isPinned: item.IsPinned,
   };
 }
@@ -96,14 +142,11 @@ export function registerGetAnnouncements(
             ttl: DEFAULT_CACHE_TTLS.announcements,
           });
 
-          // Map to clean objects
+          // Drop drafts, then map to clean objects
           const announcements = newsItems
+            .filter(isPublishedNewsItem)
             .map(mapNewsItem)
-            .sort(
-              (a, b) =>
-                new Date(b.createdDate).getTime() -
-                new Date(a.createdDate).getTime()
-            )
+            .sort(newestFirst)
             .slice(0, count);
 
           log(
@@ -144,11 +187,13 @@ export function registerGetAnnouncements(
                 ttl: DEFAULT_CACHE_TTLS.announcements,
               });
 
-              return newsItems.map((newsItem) => ({
-                ...mapNewsItem(newsItem),
-                courseId: item.OrgUnit.Id,
-                courseName: item.OrgUnit.Name,
-              }));
+              return newsItems
+                .filter(isPublishedNewsItem)
+                .map((newsItem) => ({
+                  ...mapNewsItem(newsItem),
+                  courseId: item.OrgUnit.Id,
+                  courseName: item.OrgUnit.Name,
+                }));
             } catch (error: any) {
               // 403 means no access (past course, etc) - log and skip
               if (error?.status === 403) {
@@ -170,13 +215,9 @@ export function registerGetAnnouncements(
           )
           .flatMap((r) => r.value);
 
-        // Sort by created date and slice to count
+        // Sort by the scheduled date and slice to count
         const announcements = allAnnouncements
-          .sort(
-            (a, b) =>
-              new Date(b.createdDate).getTime() -
-              new Date(a.createdDate).getTime()
-          )
+          .sort(newestFirst)
           .slice(0, count);
 
         log(
