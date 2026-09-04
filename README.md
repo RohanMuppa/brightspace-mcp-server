@@ -2,7 +2,7 @@
 
 > **By [Rohan Muppa](https://github.com/rohanmuppa), ECE @ Purdue**
 
-Talk to your Brightspace courses with AI. Ask about grades, due dates, announcements, and more. Works with Claude, ChatGPT, Cursor, and Windsurf.
+Talk to your Brightspace courses with AI. Ask about grades, due dates, quizzes, announcements, and more. Works with Claude Desktop, Claude Code, Cursor, ChatGPT Desktop, Windsurf, and any MCP client.
 
 This is an [MCP (Model Context Protocol)](https://modelcontextprotocol.io) server that connects your AI to D2L Brightspace so it can pull your grades, assignments, syllabus, and course content on demand.
 
@@ -19,7 +19,7 @@ Works with any school that uses D2L Brightspace, including Purdue, SUNY, USC, an
 
 ## Install
 
-**You need:** [Node.js 18+](https://nodejs.org/) (download the LTS version)
+**You need:** [Node.js 18+](https://nodejs.org/) (download the current LTS, 20 or newer)
 
 **Option 1: Let your AI do it**
 
@@ -50,7 +50,9 @@ you're at and skips SUNY's campus picker when you sign in:
 npx brightspace-mcp-server setup --suny
 ```
 
-The wizard walks you through login, MFA, and auto configures Claude Desktop and Cursor. Restart your AI client when it finishes.
+The wizard walks you through login and MFA, auto configures Claude Desktop and Cursor, and prints the config to paste into ChatGPT Desktop if it is installed. Restart your AI client when it finishes.
+
+Any other D2L school: run `setup` without a flag and paste your Brightspace URL (for example `https://yourschool.brightspace.com`).
 
 <details>
 <summary>Using a different client? Configure it manually.</summary>
@@ -69,18 +71,22 @@ You still need to run `npx brightspace-mcp-server setup` first to save your cred
 
 ## Session Expired?
 
-Sessions re-authenticate automatically. If auto-reauth fails (e.g., you missed the Duo push):
+You should rarely see this. Access tokens are re-minted from your saved session cookie in the background (no browser, about 200 ms), and a browser only opens when the Brightspace session itself has ended, typically after days. If that automatic re-login fails, run:
 
 ```bash
 npx brightspace-mcp-server auth
 ```
+
+**MFA at Purdue** is Microsoft Authenticator number matching: a two digit number appears in the browser and is also printed in the terminal. Enter it on your phone. Other schools may use Duo or their own app.
 
 ## What You Can Ask About
 
 | Topic | Examples |
 |-------|---------|
 | Grades | "Am I passing all my classes?" · "Compare my grades across all courses" |
-| Assignments | "What's due in the next 48 hours?" · "Summarize every assignment I haven't turned in yet" |
+| Assignments | "What's due in the next 48 hours?" · "Summarize every assignment I haven't turned in yet" · "Give me the link to submit HW 4" |
+| Quizzes | "How many attempts do I have left on Quiz 3?" · "Which quizzes close this week?" |
+| Exams | "Is there a midterm in the gradebook that isn't on my assignments list?" |
 | Announcements | "Did any professor post something important today?" · "What did my CS prof announce this week?" |
 | Course content | "Find the midterm review slides" · "Download every PDF from Module 5" |
 | Roster | "Who are the TAs for ECE 264?" · "Get me my instructor's email" |
@@ -89,10 +95,11 @@ npx brightspace-mcp-server auth
 
 ## Security
 
-- Credentials stay on your machine at `~/.brightspace-mcp/config.json` (restricted permissions)
-- Session tokens are encrypted (AES-256-GCM)
-- All traffic to Brightspace is HTTPS
-- Nothing is sent anywhere except your school's login page
+- Your username and password stay on your machine in `~/.brightspace-mcp/config.json`, readable only by your user (mode 0600). They are typed into your school's real login page and nowhere else.
+- Session tokens and cookies live in `~/.d2l-session/`, encrypted with AES-256-GCM.
+- All traffic to Brightspace is HTTPS.
+- The only other network call is a version check against the npm registry on startup.
+- Read only: this server never submits, posts, or changes anything in Brightspace.
 
 ## Contributing & Forking
 
@@ -102,7 +109,8 @@ Want to add your school, build a new tool, or fix something? Fork the repo, make
 git clone https://github.com/RohanMuppa/brightspace-mcp-server.git
 cd brightspace-mcp-server
 npm install
-npm run dev
+npm run dev       # tsc in watch mode
+npm test          # vitest, must be green before you open a PR
 ```
 
 **Add your school:** Add a preset to `SCHOOL_PRESETS` in `src/setup.ts`. If your school's login flow is different, add a handler in `src/auth/`.
@@ -117,7 +125,23 @@ Licensed under the MIT License.
 
 Automatic. Every time your AI client starts a session, it runs `npx brightspace-mcp-server@latest` which pulls the newest version from npm. No action needed.
 
-If you ever suspect you're on an old version, run `npm cache clean --force` to clear the cache.
+If you ever suspect you're on an old version (the auth banner prints the version), clear the npx cache and restart your client:
+
+```bash
+npx clear-npx-cache
+```
+
+## What's new in 1.5.0
+
+- Token refresh no longer opens a browser: the access token is re-minted from your session cookie in about 200 ms.
+- Silent re-login when your Microsoft session is still alive, and a fast fallback to the credential login when it is not.
+- The Microsoft Authenticator number match is printed in the terminal, so headless logins can be approved.
+- `get_upcoming_due_dates` reads due dates from assignments and quizzes directly. It no longer reports a quiz as due on the day it opens.
+- Every assignment, quiz, and due date carries a `url` that opens the item in Brightspace.
+- Gradebook columns with no matching assignment or quiz (a proctored midterm, for example) are surfaced as `gradeOnly` items.
+- Unpublished announcements are hidden, and announcements sort by the date they were scheduled to post.
+- A dead session is detected even when Brightspace answers with HTTP 200, so re-login triggers instead of a confusing network error.
+- SUNY preset (`--suny`) and a more robust Microsoft Entra login, contributed by the community.
 
 ---
 

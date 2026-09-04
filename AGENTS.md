@@ -24,7 +24,8 @@ No Co-Authored-By lines. No phase/plan numbers.
 
 - Config store: `~/.brightspace-mcp/config.json` (falls back to `.env`)
 - Session tokens: `~/.d2l-session/session.json` (AES-256-GCM encrypted)
-- Auth: Playwright-based browser login with Duo MFA support
+- Auth: Playwright-based browser login. Purdue uses Microsoft Entra with number-match MFA (the number is scraped and logged); other schools may use Duo or their own MFA app
+- Token refresh: `src/auth/token-mint.ts` re-mints the JWT from the stored session cookie plus XSRF token over HTTP, so the browser is only launched when the D2L session itself has expired
 - Auto-reauth on token expiry via `AuthRunner`
 - CLI subcommands: `setup`, `auth`, default (MCP server)
 - School presets: `--purdue` and `--suny` flags (extensible via `SCHOOL_PRESETS` in `src/setup.ts`; per-school login handlers are registered in `src/auth/sso-flow.ts`)

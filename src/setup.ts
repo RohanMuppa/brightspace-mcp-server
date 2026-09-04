@@ -42,7 +42,7 @@ const SCHOOL_PRESETS: Record<string, SchoolPreset> = {
     name: "Purdue University",
     baseUrl: "https://purdue.brightspace.com",
     usernameLabel: "Purdue career account username",
-    mfaNote: "Approve the Duo push on your phone.",
+    mfaNote: "Approve the sign-in in Microsoft Authenticator. If it asks for a number, it is shown in the browser and printed here.",
   },
   suny: {
     name: "SUNY",

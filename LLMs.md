@@ -45,7 +45,7 @@ npx brightspace-mcp-server setup --suny
 
 The wizard:
 - prompts for the school's Brightspace URL (skipped with `--purdue` or `--suny`)
-- launches a Playwright Chromium browser for login and MFA (Duo push, etc.)
+- launches a Playwright Chromium browser for login and MFA (Microsoft Authenticator number match at Purdue, Duo or a campus app elsewhere)
 - saves credentials to `~/.brightspace-mcp/config.json` (0600)
 - writes the encrypted session to `~/.d2l-session/session.json` (AES-256-GCM)
 - auto-configures Claude Desktop and Cursor if detected
@@ -70,7 +70,7 @@ Tell the user to fully quit and reopen their AI client so it picks up the new MC
 
 ## Re-auth
 
-Sessions auto-reauthenticate on expiry. If auto-reauth fails (missed Duo push, expired cookies, stale locks), run:
+Access tokens are re-minted from the stored session cookie without a browser. When the D2L session itself has expired the server re-launches the browser login. If that fails (missed MFA approval, expired cookies, stale browser locks), run:
 
 ```bash
 npx brightspace-mcp-server auth
@@ -93,6 +93,8 @@ Registered in `src/tools/index.ts`, schemas in `src/tools/schemas.ts`:
 | `get_roster` | Classlist for a course |
 | `get_classlist_emails` | Emails of classmates and instructors |
 | `download_file` | Download a file attachment (PDF, slides, etc.) |
+
+Assignments, quizzes, and due dates each carry a `url` field that deep-links into Brightspace. `get_assignments` also returns `gradeOnly` items for gradebook columns that match no assignment or quiz, such as a proctored exam. `get_upcoming_due_dates` reads `DueDate` from assignments and `DueDate ?? EndDate` from quizzes rather than the calendar feed.
 
 ## Codebase map
 
@@ -155,8 +157,9 @@ src/
 
 | Path | Contents | Permissions |
 |------|----------|-------------|
-| `~/.brightspace-mcp/config.json` | School URL, user identity | 0600 |
-| `~/.d2l-session/session.json` | Encrypted session cookies | 0600 |
+| `~/.brightspace-mcp/config.json` | School URL, username, password (plaintext, relies on file permissions) | 0600 |
+| `~/.d2l-session/session.json` | Encrypted access token, session cookies, and XSRF token (AES-256-GCM) | 0600 |
+| `~/.d2l-session/browser-data/` | Persistent Chromium profile holding the Microsoft Entra cookie | 0700 |
 
 `.env` fallback is supported for CI and dev, but the config store takes precedence.
 
