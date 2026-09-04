@@ -4,7 +4,9 @@
  * Licensed under MIT — see LICENSE file for details.
  */
 
-import { chromium } from "playwright";
+// Playwright is imported lazily inside launchBrowserWithRetry. Loading it at
+// module top costs about 200 ms on every server start, including the common
+// case where the stored session is valid and no browser is ever launched.
 import type { BrowserContext, Page } from "playwright";
 import * as path from "node:path";
 import * as fs from "node:fs/promises";
@@ -1008,6 +1010,9 @@ export class BrowserAuth {
       timeout: number;
     }
   ): Promise<BrowserContext> {
+    // The only place the browser is needed, so the only place it is loaded.
+    const { chromium } = await import("playwright");
+
     // Validate lock files before every launch attempt
     await this.validateAndClearLockFiles(browserDataDir);
 
