@@ -71,7 +71,7 @@ You still need to run `npx brightspace-mcp-server setup` first to save your cred
 
 ## Session Expired?
 
-You should rarely see this. Access tokens are re-minted from your saved session cookie in the background (no browser, about 200 ms), and a browser only opens when the Brightspace session itself has ended, typically after a day or two. If that automatic re-login fails, run:
+You should rarely see this. Access tokens are re-minted from your saved session cookie in the background, with no browser, in about 200 ms. A browser only opens when the Brightspace session itself has ended. How long that takes is set by your school, not by this tool, and it has not been measured over a long enough stretch to quote a number here. If the automatic re-login fails, run:
 
 ```bash
 npx brightspace-mcp-server auth
@@ -131,6 +131,10 @@ If you ever suspect you're on an old version (the auth banner prints the version
 ```bash
 npx clear-npx-cache
 ```
+
+## What's new in 1.6.1
+
+- Your saved login now survives a network change. The session file was encrypted with a key derived from the machine hostname, which on campus wifi is a DHCP name that changes with the lease. When it changed, the saved session became unreadable and you were sent back through a full MFA login. Upgrading costs one final login, then it stops.
 
 ## What's new in 1.6.0
 
