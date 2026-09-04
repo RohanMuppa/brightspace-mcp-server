@@ -23,6 +23,7 @@ import {
   registerGetMyGrades,
   registerGetAnnouncements,
   registerGetAssignments,
+  registerGetAssignmentFiles,
   registerGetCourseContent,
   registerDownloadFile,
   registerGetClasslistEmails,
@@ -185,13 +186,14 @@ if (subcommand === 'setup') {
       registerGetMyGrades(server, apiClient, config);
       registerGetAnnouncements(server, apiClient, config);
       registerGetAssignments(server, apiClient, config);
+      registerGetAssignmentFiles(server, apiClient, config.baseUrl);
       registerGetCourseContent(server, apiClient);
       registerDownloadFile(server, apiClient);
       registerGetClasslistEmails(server, apiClient);
       registerGetRoster(server, apiClient);
       registerGetSyllabus(server, apiClient);
       registerGetDiscussions(server, apiClient);
-      log("DEBUG", "MCP tools registered (11 core tools, total 12 with check_auth)");
+      log("DEBUG", "MCP tools registered (12 core tools, total 13 with check_auth)");
 
       // Connect stdio transport
       const transport = new StdioServerTransport();

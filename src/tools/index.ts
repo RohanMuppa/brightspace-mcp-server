@@ -10,6 +10,7 @@ export { registerGetUpcomingDueDates } from "./get-upcoming-due-dates.js";
 export { registerGetMyGrades } from "./get-my-grades.js";
 export { registerGetAnnouncements } from "./get-announcements.js";
 export { registerGetAssignments } from "./get-assignments.js";
+export { registerGetAssignmentFiles } from "./get-assignment-files.js";
 export { registerGetCourseContent } from "./get-course-content.js";
 export { registerDownloadFile } from "./download-file.js";
 export { registerGetClasslistEmails } from "./get-classlist-emails.js";

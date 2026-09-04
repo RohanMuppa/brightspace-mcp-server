@@ -90,6 +90,19 @@ export const GetDiscussionsSchema = z.object({
     .describe("Specific topic ID to get posts for. Requires forumId."),
 });
 
+export const GetAssignmentFilesSchema = z.object({
+  courseId: z.coerce.number().int().positive()
+    .describe("Course ID whose assignment attachments to look at."),
+  folderId: z.coerce.number().int().positive().optional()
+    .describe("Assignment (dropbox folder) ID. Omit to list every assignment in the course that has attachments."),
+  fileId: z.coerce.number().int().positive().optional()
+    .describe("Attachment file ID to read. Requires folderId. Omit to list the files without reading them."),
+  extractText: z.boolean().default(true)
+    .describe("Extract readable text from the file. Works for PDF, DOCX, XLSX, PPTX, and plain text."),
+  maxChars: z.coerce.number().int().positive().max(100000).default(12000)
+    .describe("Maximum characters of extracted text to return. The response reports whether it was truncated."),
+});
+
 export const GetRosterSchema = z.object({
   courseId: z.coerce.number().int().positive()
     .describe("Course ID to get roster for."),
