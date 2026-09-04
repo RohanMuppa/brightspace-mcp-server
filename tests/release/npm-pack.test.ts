@@ -12,8 +12,12 @@ import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
+// On Windows npm is a .cmd shim, which execFileSync cannot resolve by the
+// bare name. Naming it explicitly avoids spawning through a shell.
+const NPM = process.platform === "win32" ? "npm.cmd" : "npm";
+
 function packedPaths(): string[] {
-  const out = execFileSync("npm", ["pack", "--dry-run", "--json", "--ignore-scripts"], {
+  const out = execFileSync(NPM, ["pack", "--dry-run", "--json", "--ignore-scripts"], {
     cwd: root,
     encoding: "utf-8",
     stdio: ["ignore", "pipe", "ignore"],
