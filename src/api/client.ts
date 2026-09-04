@@ -10,6 +10,7 @@ import { TTLCache } from "./cache.js";
 import { TokenBucket } from "./rate-limiter.js";
 import { discoverVersions } from "./version-discovery.js";
 import { ApiError, RateLimitError, NetworkError } from "./errors.js";
+import { withRetry, isRetryableFailure, retryAfterMsFrom, type RetryConfig } from "./retry.js";
 import { log } from "../utils/logger.js";
 
 /**
@@ -39,11 +40,19 @@ export class D2LApiClient {
   private readonly cacheTTLs: CacheTTLs;
   private readonly timeoutMs: number;
   private readonly onAuthExpired?: () => Promise<boolean>;
+  private readonly retryConfig: RetryConfig;
   private versions: ApiVersions | null = null;
 
   constructor(options: D2LApiClientOptions) {
-    // HTTPS-only enforcement
-    if (options.baseUrl.startsWith("http://")) {
+    // HTTPS-only enforcement, on a parsed URL rather than a string prefix so
+    // a malformed base cannot slip through as "not http".
+    let parsedBase: URL;
+    try {
+      parsedBase = new URL(options.baseUrl);
+    } catch {
+      throw new Error(`Invalid D2L base URL: ${options.baseUrl}`);
+    }
+    if (parsedBase.protocol !== "https:") {
       throw new Error(
         "HTTPS is required for D2L API client. HTTP URLs are not allowed for security reasons.",
       );
@@ -54,6 +63,7 @@ export class D2LApiClient {
     this.tokenManager = options.tokenManager;
     this.timeoutMs = options.timeoutMs ?? 30_000;
     this.onAuthExpired = options.onAuthExpired;
+    this.retryConfig = options.retry ?? {};
 
     // Merge user-provided TTLs with defaults
     this.cacheTTLs = { ...DEFAULT_CACHE_TTLS, ...options.cacheTTLs };
@@ -113,23 +123,24 @@ export class D2LApiClient {
       return this.cache.get(path) as T;
     }
 
-    // Enforce rate limit
-    await this.rateLimiter.consume();
-
-    // Get authentication token — auto-reauth if expired
+    // Get authentication token, auto-reauth if expired
     let token = await this.tokenManager.getToken();
     if (!token) {
       token = await this.tryAutoReauth(path);
     }
+    const authed = token;
 
-    // Make request with retry logic
+    // Transient failures are retried inside the rate limiter, so every
+    // attempt pays for a bucket token and a retry storm cannot bypass it.
     try {
-      return await this.makeRequest<T>(path, token, options);
+      return await this.retrying(() =>
+        this.throttled(() => this.makeRequest<T>(path, authed, options)),
+      );
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) {
         // Final attempt: auto-reauth and retry once
         const freshToken = await this.tryAutoReauth(path);
-        return await this.makeRequest<T>(path, freshToken, options);
+        return await this.throttled(() => this.makeRequest<T>(path, freshToken, options));
       }
       throw error;
     }
@@ -146,26 +157,40 @@ export class D2LApiClient {
    * @throws NetworkError on network/fetch failures
    */
   async getRaw(path: string): Promise<Response> {
-    // Enforce rate limit
-    await this.rateLimiter.consume();
-
-    // Get authentication token — auto-reauth if expired
+    // Get authentication token, auto-reauth if expired
     let token = await this.tokenManager.getToken();
     if (!token) {
       token = await this.tryAutoReauth(path);
     }
+    const authed = token;
 
-    // Make request with retry logic
     try {
-      return await this.makeRawRequest(path, token);
+      return await this.retrying(() =>
+        this.throttled(() => this.makeRawRequest(path, authed)),
+      );
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) {
         // Final attempt: auto-reauth and retry once
         const freshToken = await this.tryAutoReauth(path);
-        return await this.makeRawRequest(path, freshToken);
+        return await this.throttled(() => this.makeRawRequest(path, freshToken));
       }
       throw error;
     }
+  }
+
+  /** One rate limiter token per attempt. */
+  private async throttled<T>(fn: () => Promise<T>): Promise<T> {
+    await this.rateLimiter.consume();
+    return fn();
+  }
+
+  /** Retry 429, 5xx, and network failures. A 401 is never retried here. */
+  private retrying<T>(fn: () => Promise<T>): Promise<T> {
+    return withRetry(fn, {
+      ...this.retryConfig,
+      shouldRetry: isRetryableFailure,
+      retryAfterMs: retryAfterMsFrom,
+    });
   }
 
   /**
@@ -385,6 +410,32 @@ export class D2LApiClient {
       if (!response.ok) {
         const responseText = await response.text();
         throw new ApiError(response.status, path, responseText);
+      }
+
+      // A dead session answers a file request the same way it answers a
+      // JSON one: HTTP 200 carrying an HTML stub that redirects to the
+      // login page. Left alone, that stub would be saved to disk under the
+      // file's own name. Only HTML is inspected, so real downloads are
+      // never buffered here.
+      const contentType = (response.headers.get("content-type") ?? "").toLowerCase();
+      if (contentType.startsWith("text/html")) {
+        const body = await response.text();
+        if (body.includes(EXPIRED_SESSION_MARKER)) {
+          log("DEBUG", "File download answered with the session-expired stub, treating it as a 401");
+          await this.tokenManager.clearToken();
+          throw new ApiError(
+            401,
+            path,
+            "Session expired. Please re-authenticate via brightspace-auth.",
+          );
+        }
+        // A legitimate HTML page: hand back an equivalent response with the
+        // body we already consumed.
+        return new Response(body, {
+          status: response.status,
+          statusText: response.statusText,
+          headers: response.headers,
+        });
       }
 
       // Return raw response for caller to process

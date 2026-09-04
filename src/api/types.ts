@@ -6,6 +6,7 @@
 
 import type { TokenData } from "../types/index.js";
 import type { TokenManager } from "../auth/token-manager.js";
+import type { RetryConfig } from "./retry.js";
 
 // D2L API version information returned by /d2l/api/versions/
 export interface ApiVersions {
@@ -50,6 +51,8 @@ export interface D2LApiClientOptions {
   timeoutMs?: number; // default 30_000
   /** Called when auth is expired and retries are exhausted. Return true if re-auth succeeded. */
   onAuthExpired?: () => Promise<boolean>;
+  /** Backoff for 429, 5xx, and network failures. See retry.ts for defaults. */
+  retry?: RetryConfig;
 }
 
 // Re-export TokenData from shared types for convenience

@@ -454,9 +454,12 @@ describe("D2LApiClient", () => {
 
   describe("get() - 429 rate limiting", () => {
     it("should throw RateLimitError with Retry-After header", async () => {
+      // Retries are covered in client-resilience.test.ts; here a single
+      // attempt keeps the test from honoring the 60 second Retry-After.
       const client = new D2LApiClient({
         baseUrl: "https://purdue.brightspace.com",
         tokenManager: mockTokenManager,
+        retry: { maxAttempts: 1 },
       });
 
       // Initialize
@@ -491,9 +494,12 @@ describe("D2LApiClient", () => {
 
   describe("get() - network errors", () => {
     it("should wrap fetch errors in NetworkError", async () => {
+      // A network error is retryable; a single attempt keeps this test
+      // about the wrapping, not the backoff.
       const client = new D2LApiClient({
         baseUrl: "https://purdue.brightspace.com",
         tokenManager: mockTokenManager,
+        retry: { maxAttempts: 1 },
       });
 
       // Initialize
