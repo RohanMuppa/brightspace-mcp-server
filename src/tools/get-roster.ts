@@ -80,9 +80,9 @@ export function registerGetRoster(
         log("DEBUG", "get_roster tool called", { args });
 
         // Parse and validate input
-        const { courseId, includeStudents, searchTerm } = GetRosterSchema.parse(args);
+        const { courseId, includeStudents, searchTerm, limit } = GetRosterSchema.parse(args);
 
-        let allUsers: ClasslistUser[] = [];
+        const allUsers: ClasslistUser[] = [];
 
         if (!includeStudents) {
           // Fetch instructors and TAs in parallel
@@ -115,29 +115,44 @@ export function registerGetRoster(
           }
         } else {
           // Fetch all users
-          allUsers = await fetchClasslistUsers(apiClient, courseId, {
-            searchTerm,
-          });
+          allUsers.push(
+            ...(await fetchClasslistUsers(apiClient, courseId, { searchTerm }))
+          );
+        }
 
-          // Cap at 100 users to prevent MCP response size issues
-          if (allUsers.length > 100) {
-            log("WARN", "get_roster: Result set exceeds 100 users, truncating", {
-              total: allUsers.length,
-              returned: 100,
-            });
-            allUsers = allUsers.slice(0, 100);
-          }
+        // A very large roster would swamp the response, so it is capped. The
+        // cap is reported in the payload rather than only in a log line the
+        // model never sees: a 340 person lecture used to look like a 100
+        // person one, with nothing to say otherwise.
+        const total = allUsers.length;
+        const truncated = total > limit;
+        const kept = truncated ? allUsers.slice(0, limit) : allUsers;
+
+        if (truncated) {
+          log("WARN", "get_roster: Result set exceeds the limit, truncating", {
+            total,
+            returned: kept.length,
+          });
         }
 
         // Map to clean output
-        const roster = allUsers.map((user) => ({
+        const users = kept.map((user) => ({
           name: user.DisplayName,
           email: user.Email || null,
           role: user.ClasslistRoleDisplayName,
         }));
 
-        log("INFO", `get_roster: Retrieved ${roster.length} users for course ${courseId}`);
-        return toolResponse(roster);
+        log("INFO", `get_roster: Retrieved ${users.length} users for course ${courseId}`);
+        return toolResponse({
+          courseId,
+          total,
+          returned: users.length,
+          truncated,
+          ...(truncated
+            ? { note: `Showing ${users.length} of ${total}. Raise the limit argument to see more.` }
+            : {}),
+          users,
+        });
       } catch (error) {
         return sanitizeError(error);
       }
