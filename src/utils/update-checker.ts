@@ -1,15 +1,25 @@
 /**
- * Background npm update checker — non-blocking fetch on startup.
- * Compares installed version against latest on npm registry.
- * If a newer version exists, auto-updates (clears npx cache or
- * runs npm install -g) so the next launch picks up the new version.
+ * Background npm update checker: look, and tell, but never touch.
+ *
+ * On startup the server asks the npm registry for the latest published
+ * version. If it is newer than the running one, the user is told how to
+ * update. Nothing is ever installed by this module. The one side effect it
+ * keeps is scoped to this package's own stale npx cache directories, because
+ * clearing them is what lets `npx brightspace-mcp-server@latest` actually
+ * pick up the new version on the next start.
+ *
+ * Set D2L_NO_UPDATE_CHECK to any value to switch the check off entirely.
  */
 
-import { exec } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { rm } from "node:fs/promises";
+import { access, readdir, rm } from "node:fs/promises";
+import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve, sep } from "node:path";
+
+const PACKAGE_NAME = "brightspace-mcp-server";
+const REGISTRY_URL = `https://registry.npmjs.org/${PACKAGE_NAME}/latest`;
+const REGISTRY_TIMEOUT_MS = 5000;
 
 const __filename = fileURLToPath(import.meta.url);
 const projectRoot = resolve(dirname(__filename), "..", "..");
@@ -30,65 +40,101 @@ function isNpxCache(): boolean {
   return /[\\/]_npx[\\/][^\\/]+[\\/]node_modules[\\/]brightspace-mcp-server/.test(normalized);
 }
 
+/**
+ * Remove every npx cache entry that holds a copy of this package, so the next
+ * `npx brightspace-mcp-server@latest` downloads the new version instead of
+ * reusing a stale one. Touches nothing outside those directories.
+ */
 async function clearAllNpxCaches(): Promise<number> {
-  const { homedir } = await import("node:os");
   const npxCacheRoot = resolve(homedir(), ".npm", "_npx");
-  const { readdir } = await import("node:fs/promises");
-
   let cleared = 0;
   try {
-    const entries = await readdir(npxCacheRoot);
-    for (const entry of entries) {
-      const pkgPath = resolve(npxCacheRoot, entry, "node_modules", "brightspace-mcp-server");
+    for (const entry of await readdir(npxCacheRoot)) {
+      const entryDir = resolve(npxCacheRoot, entry);
       try {
-        const { access } = await import("node:fs/promises");
-        await access(pkgPath);
-        await rm(resolve(npxCacheRoot, entry), { recursive: true, force: true });
+        await access(resolve(entryDir, "node_modules", PACKAGE_NAME));
+        await rm(entryDir, { recursive: true, force: true });
         cleared++;
       } catch {
-        // Not a brightspace cache entry, skip
+        // Not one of ours, leave it alone.
       }
     }
   } catch {
-    // npx cache dir doesn't exist or not readable
+    // No npx cache, or not readable. Nothing to clear.
   }
   return cleared;
 }
 
-const FALLBACK_MSG = (old: string, latest: string) =>
-  `Update available: v${old} → v${latest}. ` +
-  "Run `npx brightspace-mcp-server@latest` or clear your npx cache to update.";
+function parseTriple(version: string): [number, number, number] | null {
+  const match = /^v?(\d+)\.(\d+)\.(\d+)/.exec(version.trim());
+  if (!match) return null;
+  return [Number(match[1]), Number(match[2]), Number(match[3])];
+}
 
-export function initUpdateChecker(): void {
-  const installed = getInstalledVersion();
+/**
+ * True only when `latest` is strictly newer than `installed`, compared as
+ * numeric major, minor, patch. Prerelease suffixes are ignored, and anything
+ * that does not parse as a version is never "newer", so a registry hiccup
+ * cannot announce an update that does not exist.
+ */
+export function isNewerVersion(latest: string, installed: string): boolean {
+  const a = parseTriple(latest);
+  const b = parseTriple(installed);
+  if (!a || !b) return false;
+  for (let i = 0; i < 3; i++) {
+    if (a[i] !== b[i]) return a[i] > b[i];
+  }
+  return false;
+}
 
-  exec("npm view brightspace-mcp-server version", { timeout: 10000 }, (err, stdout) => {
-    if (err) return;
-    const latest = stdout.trim();
-    if (!latest || latest === installed) return;
+export interface UpdateCheckDeps {
+  fetchImpl?: typeof fetch;
+  env?: Record<string, string | undefined>;
+  installedVersion?: string;
+  runningFromNpxCache?: boolean;
+  clearCaches?: () => Promise<number>;
+}
 
-    if (isNpxCache()) {
-      clearAllNpxCaches()
-        .then((count) => {
-          notice =
-            `Auto-updated: cleared ${count} npx cache(s) (v${installed} → v${latest}). ` +
-            "The new version will be downloaded on next restart.";
-        })
-        .catch(() => {
-          notice = FALLBACK_MSG(installed, latest);
-        });
+/**
+ * Run one update check. Never throws and never blocks the caller for long:
+ * the registry request is bounded by a timeout and every failure is
+ * swallowed, because a version check must not affect the server.
+ */
+export async function initUpdateChecker(deps: UpdateCheckDeps = {}): Promise<void> {
+  const {
+    fetchImpl = fetch,
+    env = process.env,
+    installedVersion = getInstalledVersion(),
+    runningFromNpxCache = isNpxCache(),
+    clearCaches = clearAllNpxCaches,
+  } = deps;
+
+  if (env.D2L_NO_UPDATE_CHECK) return;
+
+  try {
+    const response = await fetchImpl(REGISTRY_URL, {
+      headers: { accept: "application/json" },
+      signal: AbortSignal.timeout(REGISTRY_TIMEOUT_MS),
+    });
+    if (!response.ok) return;
+
+    const latest = ((await response.json()) as { version?: unknown }).version;
+    if (typeof latest !== "string" || !isNewerVersion(latest, installedVersion)) return;
+
+    if (runningFromNpxCache) {
+      const count = await clearCaches();
+      notice =
+        `Update available: v${installedVersion} to v${latest}. ` +
+        `Cleared ${count} stale npx cache director${count === 1 ? "y" : "ies"} for ${PACKAGE_NAME} ` +
+        `so the next start downloads v${latest}. Restart your MCP client to pick it up.`;
     } else {
-      exec("npm install -g brightspace-mcp-server@latest", { timeout: 60000 }, (installErr) => {
-        if (installErr) {
-          notice = FALLBACK_MSG(installed, latest);
-        } else {
-          notice =
-            `Auto-updated from v${installed} to v${latest}. ` +
-            "Restart your MCP client to use the new version.";
-        }
-      });
+      notice =
+        `Update available: v${installedVersion} to v${latest}. ` +
+        `Run: npx ${PACKAGE_NAME}@latest, or npm install -g ${PACKAGE_NAME}@latest`;
     }
-  });
+  } catch {
+    // A version check must never take the server down.
+  }
 }
 
 export function getUpdateNotice(): string | null {
