@@ -85,7 +85,8 @@ npx brightspace-mcp-server auth
 |-------|---------|
 | Grades | "Am I passing all my classes?" · "Compare my grades across all courses" |
 | Assignments | "What's due in the next 48 hours?" · "Summarize every assignment I haven't turned in yet" · "Give me the link to submit HW 4" |
-| Quizzes | "How many attempts do I have left on Quiz 3?" · "Which quizzes close this week?" |
+| Quizzes | "Which quizzes close this week?" · "Is Quiz 3 timed, and does it have a grace period?" |
+| Assignment files | "What does the lab 4 spec actually ask for?" · "Summarize the rubric attached to the project" |
 | Exams | "Is there a midterm in the gradebook that isn't on my assignments list?" |
 | Announcements | "Did any professor post something important today?" · "What did my CS prof announce this week?" |
 | Course content | "Find the midterm review slides" · "Download every PDF from Module 5" |
@@ -130,6 +131,12 @@ If you ever suspect you're on an old version (the auth banner prints the version
 ```bash
 npx clear-npx-cache
 ```
+
+## What's new in 1.6.0
+
+- **Read the files attached to an assignment.** The spec PDF, the starter workbook, the rubric. Ask what an assignment requires and the answer comes from the actual document, not just its one-line description. Handles PDF, Word, Excel, and PowerPoint.
+- The roster no longer hides people: a class larger than the limit now reports the true total and says it was truncated, and the limit can be raised.
+- Fixed a case where a class list or course list could stop short of the last page.
 
 ## What's new in 1.5.0
 

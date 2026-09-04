@@ -92,7 +92,10 @@ Registered in `src/tools/index.ts`, schemas in `src/tools/schemas.ts`:
 | `get_discussions` | Discussion forums and recent posts |
 | `get_roster` | Classlist for a course |
 | `get_classlist_emails` | Emails of classmates and instructors |
-| `download_file` | Download a file attachment (PDF, slides, etc.) |
+| `download_file` | Download a file attachment (PDF, slides, etc.) to disk |
+| `get_assignment_files` | Read the files attached to an assignment (spec, rubric, starter workbook) and return their text |
+
+Quiz attempt counts are unavailable to students on the Purdue tenant: `/quizzes/{id}/attempts/` answers 403. Those quizzes carry `attemptsAvailable: false` with null counts rather than a fabricated zero.
 
 Assignments, quizzes, and due dates each carry a `url` field that deep-links into Brightspace. `get_assignments` also returns `gradeOnly` items for gradebook columns that match no assignment or quiz, such as a proctored exam. `get_upcoming_due_dates` reads `DueDate` from assignments and `DueDate ?? EndDate` from quizzes rather than the calendar feed.
 
