@@ -125,5 +125,10 @@ function nextPath(firstPath: string, next: string): string {
     const url = new URL(next);
     return `${url.pathname}${url.search}`;
   }
+  // A Next that begins with a slash is already a path, not a bookmark.
+  // Appending it as one would ask for a page that does not exist.
+  if (next.startsWith("/")) {
+    return next;
+  }
   return withBookmark(firstPath, next);
 }

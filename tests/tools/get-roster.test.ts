@@ -4,6 +4,11 @@ import { registerGetRoster } from "../../src/tools/get-roster.js";
 /**
  * The roster reads the same paged classlist endpoint, so it dropped users past
  * the first page too. A full class can easily outrun one page.
+ *
+ * It also capped the result at 100 users and said so only in a log line the
+ * model never sees, so a 340 person lecture looked like a 100 person one. The
+ * cap is still there, because an enormous roster would swamp the response, but
+ * it is now reported in the payload and the caller can raise it.
  */
 
 const COURSE_ID = 101;
@@ -41,6 +46,8 @@ function setup(respond: (path: string) => unknown) {
   return { call: (args: unknown) => handler!(args), requested };
 }
 
+const parse = (result: any) => JSON.parse(result.content[0].text);
+
 describe("get_roster pagination", () => {
   it("returns students across both pages", async () => {
     const { call, requested } = setup((path) =>
@@ -49,10 +56,48 @@ describe("get_roster pagination", () => {
         : { Objects: [user("ada")], Next: "b1" }
     );
 
-    const result = await call({ courseId: COURSE_ID, includeStudents: true });
-    const roster = JSON.parse(result.content[0].text);
+    const payload = parse(await call({ courseId: COURSE_ID, includeStudents: true }));
 
-    expect(roster.map((r: { name: string }) => r.name)).toEqual(["ada", "grace"]);
+    expect(payload.users.map((r: { name: string }) => r.name)).toEqual(["ada", "grace"]);
     expect(requested).toHaveLength(2);
+  });
+});
+
+describe("get_roster truncation", () => {
+  const manyUsers = (count: number) =>
+    Array.from({ length: count }, (_, i) => user(`student${i}`));
+
+  it("reports the total and the truncation rather than hiding it", async () => {
+    const { call } = setup(() => ({ Objects: manyUsers(340), Next: null }));
+
+    const payload = parse(await call({ courseId: COURSE_ID, includeStudents: true }));
+
+    expect(payload.total).toBe(340);
+    expect(payload.returned).toBe(100);
+    expect(payload.truncated).toBe(true);
+    expect(payload.users).toHaveLength(100);
+    expect(payload.note).toMatch(/limit/i);
+  });
+
+  it("is not truncated when the class fits", async () => {
+    const { call } = setup(() => ({ Objects: manyUsers(12), Next: null }));
+
+    const payload = parse(await call({ courseId: COURSE_ID, includeStudents: true }));
+
+    expect(payload.total).toBe(12);
+    expect(payload.returned).toBe(12);
+    expect(payload.truncated).toBe(false);
+    expect(payload.note).toBeUndefined();
+  });
+
+  it("honors an explicit limit", async () => {
+    const { call } = setup(() => ({ Objects: manyUsers(340), Next: null }));
+
+    const payload = parse(
+      await call({ courseId: COURSE_ID, includeStudents: true, limit: 250 })
+    );
+
+    expect(payload.returned).toBe(250);
+    expect(payload.truncated).toBe(true);
   });
 });

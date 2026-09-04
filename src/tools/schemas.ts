@@ -97,4 +97,6 @@ export const GetRosterSchema = z.object({
     .describe("Include students in results. Default is instructors and TAs only."),
   searchTerm: z.string().max(200).optional()
     .describe("Optional search term to filter by name."),
+  limit: z.coerce.number().int().positive().max(1000).default(100)
+    .describe("Maximum users to return. Default 100. The response reports the true total and whether it was truncated."),
 });
