@@ -69,6 +69,13 @@ function matchesTypeFilter(item: ContentObject, filter: string): boolean {
 }
 
 /**
+ * How deep the tree builder will descend when the caller names no maxDepth.
+ * A module structure that lists itself is a cycle, and without a ceiling the
+ * recursion would never come back.
+ */
+const MAX_CONTENT_DEPTH = 12;
+
+/**
  * Recursively build the content tree with progress tracking.
  */
 async function buildContentTree(
@@ -81,13 +88,14 @@ async function buildContentTree(
   currentDepth: number = 0,
 ): Promise<any[]> {
   const tree = [];
+  const depthLimit = Math.min(maxDepth ?? MAX_CONTENT_DEPTH, MAX_CONTENT_DEPTH);
 
   for (const item of modules) {
     if (item.Type === 0) {
-      // Module — fetch children recursively (unless maxDepth reached)
+      // Module: fetch children recursively (unless the depth limit is reached)
       let processedChildren: any[] = [];
 
-      if (maxDepth === undefined || currentDepth < maxDepth) {
+      if (currentDepth < depthLimit) {
         let children: ContentObject[] = [];
         try {
           children = await apiClient.get<ContentObject[]>(
@@ -101,6 +109,8 @@ async function buildContentTree(
         processedChildren = await buildContentTree(
           apiClient, courseId, children, progressMap, typeFilter, maxDepth, currentDepth + 1
         );
+      } else if (currentDepth >= MAX_CONTENT_DEPTH) {
+        log('DEBUG', `Content depth ceiling of ${MAX_CONTENT_DEPTH} reached at module ${item.Id}: not descending further`);
       }
 
       // Only include module if it has matching children (or filter is 'all')
