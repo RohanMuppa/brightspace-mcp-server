@@ -101,7 +101,7 @@ async function main(): Promise<void> {
     console.error("1. Ensure D2L_USERNAME and D2L_PASSWORD are set correctly in .env");
     console.error("2. If MFA approval failed, approve the sign-in request in Microsoft Authenticator, entering the number shown above if there was one");
     console.error("3. Check that you have a stable internet connection");
-    console.error("4. Try running with D2L_HEADLESS=false to see the browser");
+    console.error("4. A sign-in always opens a visible browser, even with D2L_HEADLESS=true, because the MFA number has to be readable");
     console.error("\nFor more details, check the error message above.\n");
     process.exit(1);
   }

@@ -32,7 +32,7 @@
         },
         {
           "name": "D2L_HEADLESS",
-          "description": "Run the login browser without a window. Default: false. Only sensible when credentials are saved, since the MFA number match is printed to the log.",
+          "description": "Run the silent session check without a window. Default: false. A real sign-in always opens a visible browser regardless, because the MFA number match has to be readable by a person.",
           "isRequired": false,
           "format": "boolean",
           "isSecret": false
