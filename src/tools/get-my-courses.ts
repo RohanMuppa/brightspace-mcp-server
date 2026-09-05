@@ -24,6 +24,7 @@ interface EnrollmentItem {
   Access: {
     ClasslistRoleName: string;
     IsActive: boolean;
+    CanAccess?: boolean;
     LastAccessed: string | null;
   };
 }
@@ -76,6 +77,7 @@ export function registerGetMyCourses(
             code: item.OrgUnit.Code,
             role: item.Access.ClasslistRoleName,
             isActive: item.Access.IsActive,
+            canAccess: item.Access.CanAccess,
             lastAccessed: item.Access.LastAccessed,
           })),
           { ...config.courseFilter, activeOnly }

@@ -10,6 +10,13 @@ import { log } from "./logger.js";
 interface FilterableCourse {
   id: number;
   isActive: boolean;
+  /**
+   * D2L's own verdict on whether the course is still open. Distinct from
+   * isActive, which describes the enrollment and stays true for a course that
+   * ended years ago. Optional because not every tenant sends it, and a course
+   * we know nothing about must not be hidden.
+   */
+  canAccess?: boolean;
 }
 
 /**
@@ -32,6 +39,11 @@ export function applyCourseFilter<T extends FilterableCourse>(
 
   if (config.activeOnly) {
     filtered = filtered.filter(c => c.isActive);
+    // Every content endpoint on a closed course answers 403, and the
+    // enrollments payload says which those are. On a real Purdue account 31 of
+    // 44 active enrollments were closed past semesters, so skipping them here
+    // removes about 70 percent of the requests an all-courses call would make.
+    filtered = filtered.filter(c => c.canAccess !== false);
   }
 
   if (config.includeCourseIds && config.includeCourseIds.length > 0) {

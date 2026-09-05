@@ -39,6 +39,7 @@ interface EnrollmentItem {
   };
   Access: {
     IsActive: boolean;
+    CanAccess?: boolean;
   };
 }
 
@@ -105,6 +106,7 @@ async function resolveCourses(
       name: item.OrgUnit.Name,
       code: item.OrgUnit.Code,
       isActive: item.Access.IsActive,
+            canAccess: item.Access.CanAccess,
     })),
     config.courseFilter
   );
