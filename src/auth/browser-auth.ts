@@ -38,9 +38,27 @@ const SILENT_SSO = {
   kmsiSubmit: "#idSIButton9",
 } as const;
 
+/**
+ * Thrown when a headless run reaches the point where a human has to see the
+ * screen. Not a failure: the caller relaunches the browser visible and retries.
+ */
+export class HeadlessLoginRequiredError extends Error {
+  constructor() {
+    super("A sign-in is needed and the browser must be visible for it");
+    this.name = "HeadlessLoginRequiredError";
+  }
+}
+
+/** Whether the current attempt has to start over with a window on screen. */
+export function needsVisibleBrowser({ launchedHeadless }: { launchedHeadless: boolean }): boolean {
+  return launchedHeadless;
+}
+
 export class BrowserAuth {
   private config: AppConfig;
   private ssoFlow: SSOFlow;
+  /** Whether the browser for the current attempt was launched without a window. */
+  private launchedHeadless = false;
 
   constructor(config: AppConfig) {
     this.config = config;
@@ -183,7 +201,26 @@ export class BrowserAuth {
     }
   }
 
+  /**
+   * Authenticate, opening a window if the flow turns out to need one.
+   *
+   * Headless is only ever safe for the silent path. The moment a real sign-in
+   * is required the run starts over with a visible browser, because the MFA
+   * number match has to be readable by a human.
+   */
   async authenticate(): Promise<TokenData> {
+    try {
+      return await this.attemptAuthentication(this.config.headless);
+    } catch (error) {
+      if (error instanceof HeadlessLoginRequiredError) {
+        log("INFO", "A sign-in is needed, so the browser is reopening with a window");
+        return await this.attemptAuthentication(false);
+      }
+      throw error;
+    }
+  }
+
+  private async attemptAuthentication(preferHeadless: boolean): Promise<TokenData> {
     let context: BrowserContext | null = null;
 
     try {
@@ -205,10 +242,11 @@ export class BrowserAuth {
       await this.validateAndClearLockFiles(browserDataDir);
 
       // Force headed mode when no credentials — user must interact with the browser
-      const headless = this.ssoFlow.hasCredentials() ? this.config.headless : false;
-      if (!this.ssoFlow.hasCredentials() && this.config.headless) {
+      const headless = this.ssoFlow.hasCredentials() ? preferHeadless : false;
+      if (!this.ssoFlow.hasCredentials() && preferHeadless) {
         log("INFO", "Overriding headless mode — browser must be visible for manual login");
       }
+      this.launchedHeadless = headless;
 
       const launchOptions = {
         headless,
@@ -508,6 +546,14 @@ export class BrowserAuth {
         log("INFO", "Already authenticated - skipping SSO login");
         await this.settle(page);
         return true;
+      }
+
+      // A credential login on Entra ends in a number match: two digits on the
+      // page that the human types into Authenticator. Headless has nowhere to
+      // show them, so the login would time out with the number sitting in a
+      // log file. Bail out and let authenticate() relaunch with a window.
+      if (needsVisibleBrowser({ launchedHeadless: this.launchedHeadless })) {
+        throw new HeadlessLoginRequiredError();
       }
 
       let loginSuccess: boolean;
