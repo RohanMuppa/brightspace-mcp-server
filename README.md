@@ -71,6 +71,8 @@ You still need to run `npx brightspace-mcp-server setup` first to save your cred
 
 ## Session Expired?
 
+There is nothing to log into first. Ask for your grades and the sign-in happens as part of that request, so the assistant never has to check whether you are authenticated before it can answer. Starting your AI client touches Brightspace not at all: a restart on its own will never set off an MFA prompt.
+
 Returning the next day normally requires no action. The server renews short-lived API tokens over HTTPS using the saved Brightspace session. If that session ends, a headless browser restores your saved Microsoft session and tries silent SSO. If Microsoft requires sign-in, your saved credentials are entered automatically and you complete MFA on your phone.
 
 Your school's policy controls when MFA is required. There is no local 24-hour cutoff, and the server no longer discards browser state after one hour. A network outage preserves the saved session and returns a temporary error.
@@ -136,6 +138,13 @@ However, mistakes do occur, so regularly, especially if you suspect you're on an
 ```bash
 npx clear-npx-cache
 ```
+
+## What's new in 2.1.0
+
+- Signing in is part of the first tool call. The separate `check_auth` tool is gone, and so is the step where the assistant had to ask about your login before it could answer anything.
+- Starting the server makes no network requests. API versions are discovered by the first request that needs them, and a tenant that is briefly unreachable no longer stops the server from starting.
+- Concurrent tool calls on a cold session share one sign-in instead of racing, so you get one MFA prompt rather than several.
+- Failed sign-ins now explain themselves in the tool's answer: a locked keychain, a paused MFA cooldown, or a network outage each say what to do.
 
 ## What's new in 2.0.0
 

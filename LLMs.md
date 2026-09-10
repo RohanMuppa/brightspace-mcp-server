@@ -69,6 +69,14 @@ Claude Desktop and Cursor are auto-configured by the setup wizard. For any other
 
 Tell the user to fully quit and reopen their AI client so it picks up the new MCP server.
 
+## Auth
+
+There is no authentication step and no tool to check one. Call the tool that answers the user's question; if no valid session exists, the request signs in first and then proceeds. Never tell the user to authenticate before asking something, and never call a tool purely to establish a session.
+
+A sign-in that cannot be completed comes back as the tool's own error, naming the cause and what to do: a locked credential store, a paused MFA cooldown, an unsupported login page, a network outage. Relay that text. Only the cooldown and unsupported cases need the terminal command below.
+
+Concurrent tool calls on a cold session share one sign-in, so firing several tools at once is safe and produces a single MFA prompt.
+
 ## Re-auth
 
 Access tokens are re-minted from the stored session cookie without a browser. A headless browser restores encrypted state for silent SSO when required, then enters saved credentials if Microsoft needs a full login. Missed MFA pauses automatic browser authentication, including SSO redirects, for four hours to prevent repeated phone prompts. HTTP token renewal remains allowed; the explicit command below bypasses the browser cooldown. Forward the MFA number to the user as it appears and wait for phone approval. Clients may hide server logs, so a terminal is the reliable place to see the number. Network errors and locked native storage should be reported without retrying MFA.
@@ -96,6 +104,8 @@ Registered in `src/tools/index.ts`, schemas in `src/tools/schemas.ts`:
 | `download_file` | Download a file attachment (PDF, slides, etc.) to disk |
 | `get_assignment_files` | Read the files attached to an assignment (spec, rubric, starter workbook) and return their text |
 
+These twelve are the whole surface. An available-update notice, when there is one, rides along as a second text block on the first successful result.
+
 Quiz attempt counts are unavailable to students on the Purdue tenant: `/quizzes/{id}/attempts/` answers 403. Those quizzes carry `attemptsAvailable: false` with null counts rather than a fabricated zero.
 
 Assignments, quizzes, and due dates each carry a `url` field that deep-links into Brightspace. `get_assignments` also returns `gradeOnly` items for gradebook columns that match no assignment or quiz, such as a proctored exam. `get_upcoming_due_dates` reads `DueDate` from assignments and `DueDate ?? EndDate` from quizzes rather than the calendar feed.
@@ -115,7 +125,10 @@ src/
     get-*.ts                One file per tool
     download-file.ts        Binary download + file-type detection
   api/
-    client.ts               HTTP client wrapping the Valence/D2L API
+    client.ts               HTTP client wrapping the Valence/D2L API. lp()/le()
+                            leave the version as a {lp}/{le} placeholder that
+                            get()/getRaw() substitute, so discovery and sign-in
+                            happen on the first request rather than at startup
     version-discovery.ts    Resolves per-product API versions
     cache.ts                In-memory response cache
     rate-limiter.ts         Token-bucket limiter
@@ -182,6 +195,8 @@ Add a preset to `SCHOOL_PRESETS` in `src/setup.ts`. If the school uses a non-sta
 2. Add the input schema to `src/tools/schemas.ts`.
 3. Export it from `src/tools/index.ts`.
 4. Register it in `src/index.ts`.
+
+Build paths with `apiClient.lp()`, `le()`, or `leGlobal()` and nothing else. They return a template carrying a `{lp}`/`{le}` placeholder, which `get()` and `getRaw()` substitute after discovering the versions, so a new tool gets lazy discovery and sign-in without asking for them. A hand-written path with a literal version skips discovery and will break when the tenant moves.
 
 ## Release workflow
 

@@ -122,13 +122,13 @@ describe("D2LApiClient", () => {
       });
     });
 
-    it("should throw if accessed before initialize()", () => {
+    it("should throw if read before any request has discovered them", () => {
       const client = new D2LApiClient({
         baseUrl: "https://purdue.brightspace.com",
         tokenManager: mockTokenManager,
       });
 
-      expect(() => client.apiVersions).toThrow("not initialized");
+      expect(() => client.apiVersions).toThrow("have not been discovered yet");
     });
   });
 
@@ -528,69 +528,39 @@ describe("D2LApiClient", () => {
     });
   });
 
+  // The builders are pure string work that leaves the version as a
+  // placeholder, so they need neither a network round trip nor a discovered
+  // version. Substitution is a property of a request, and is covered against
+  // the URL actually fetched in tests/api/lazy-init.test.ts.
   describe("path helpers", () => {
-    it("should build LP paths correctly with lp()", async () => {
-      const client = new D2LApiClient({
+    const builderClient = () =>
+      new D2LApiClient({
         baseUrl: "https://purdue.brightspace.com",
         tokenManager: mockTokenManager,
       });
 
-      // Initialize
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        json: async () => [
-          { ProductCode: "lp", LatestVersion: "1.56" },
-          { ProductCode: "le", LatestVersion: "1.91" },
-        ],
-      });
-      await client.initialize();
-
-      expect(client.lp("/users/whoami")).toBe("/d2l/api/lp/1.56/users/whoami");
+    it("should build LP paths with a version placeholder", () => {
+      expect(builderClient().lp("/users/whoami")).toBe("/d2l/api/lp/{lp}/users/whoami");
     });
 
-    it("should build LE paths correctly with le()", async () => {
-      const client = new D2LApiClient({
-        baseUrl: "https://purdue.brightspace.com",
-        tokenManager: mockTokenManager,
-      });
-
-      // Initialize
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        json: async () => [
-          { ProductCode: "lp", LatestVersion: "1.56" },
-          { ProductCode: "le", LatestVersion: "1.91" },
-        ],
-      });
-      await client.initialize();
-
-      expect(client.le(123456, "/content/root/")).toBe(
-        "/d2l/api/le/1.91/123456/content/root/",
+    it("should build LE paths with a version placeholder", () => {
+      expect(builderClient().le(123456, "/content/root/")).toBe(
+        "/d2l/api/le/{le}/123456/content/root/",
       );
     });
 
-    it("should build global LE paths correctly with leGlobal()", async () => {
-      const client = new D2LApiClient({
-        baseUrl: "https://purdue.brightspace.com",
-        tokenManager: mockTokenManager,
-      });
-
-      // Initialize
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        json: async () => [
-          { ProductCode: "lp", LatestVersion: "1.56" },
-          { ProductCode: "le", LatestVersion: "1.91" },
-        ],
-      });
-      await client.initialize();
-
-      expect(client.leGlobal("/enrollments/myenrollments/")).toBe(
-        "/d2l/api/le/1.91/enrollments/myenrollments/",
+    it("should build global LE paths with a version placeholder", () => {
+      expect(builderClient().leGlobal("/enrollments/myenrollments/")).toBe(
+        "/d2l/api/le/{le}/enrollments/myenrollments/",
       );
+    });
+
+    it("should not reach the network to build a path", () => {
+      const client = builderClient();
+      client.lp("/users/whoami");
+      client.le(123456, "/content/root/");
+      client.leGlobal("/enrollments/myenrollments/");
+      expect(mockFetch).not.toHaveBeenCalled();
     });
   });
 
