@@ -13,7 +13,7 @@ import { enableStdoutGuard, log } from "./utils/logger.js";
 import { loadConfig } from "./utils/config.js";
 import { TokenManager, AuthRunner } from "./auth/index.js";
 import { D2LApiClient } from "./api/index.js";
-import { initUpdateChecker, getUpdateNotice } from "./utils/update-checker.js";
+import { initUpdateChecker } from "./utils/update-checker.js";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
@@ -102,78 +102,16 @@ if (subcommand === 'setup') {
         onAuthExpired: () => authRunner.run(),
       });
 
-      // Initialize API client (discover API versions)
-      try {
-        await apiClient.initialize();
-        log("INFO", "D2L API Client initialized");
-      } catch (error) {
-        log("ERROR", "Failed to initialize D2L API Client", error);
-        log("ERROR", "MCP server cannot start without API initialization. Exiting.");
-        process.exit(1);
-      }
+      // Nothing here reaches Brightspace. API versions are discovered by the
+      // first request that needs them, and the first request with no saved
+      // session authenticates on its own (see D2LApiClient.withAuthentication).
+      // A server that signed in at startup would open an MFA prompt on the
+      // user's phone every time their editor restarted, whether or not they
+      // ever asked about a course, and a tenant that was briefly unreachable
+      // would take the whole server down with it.
 
       // Start background update check (fire and forget)
       initUpdateChecker();
-
-      // Register check_auth tool (no input schema needed for zero-argument tool)
-      server.registerTool(
-        "check_auth",
-        {
-          title: "Check Authentication Status",
-          description:
-            "Check if you are authenticated with Brightspace. " +
-            "Run the brightspace-auth CLI first to authenticate. " +
-            "Use this when the user asks if they're logged in, if authentication is working, " +
-            "or when other tools return auth errors.",
-        },
-        async () => {
-          log("DEBUG", "check_auth tool called");
-
-          let token = await tokenManager.getToken();
-
-          if (!token) {
-            log("INFO", "check_auth: No valid token, attempting auto-reauthentication...");
-
-            const success = await authRunner.run();
-            if (success) {
-              token = await tokenManager.getToken();
-            }
-
-            if (!token) {
-              log("INFO", "check_auth: Auto-reauthentication failed or produced no valid token");
-
-              const content: Array<{ type: "text"; text: string }> = [
-                {
-                  type: "text",
-                  text: "Not authenticated. Auto-reauthentication was attempted but failed. " +
-                    "Please run `brightspace-auth` manually in your terminal to log in. " +
-                    "Run setup to update your saved credentials, and check your internet connection.",
-                },
-              ];
-              const notice = getUpdateNotice();
-              if (notice) content.push({ type: "text", text: notice });
-              return { content };
-            }
-
-            log("INFO", "check_auth: Auto-reauthentication succeeded");
-          }
-
-          const expiresIn = Math.round((token.expiresAt - Date.now()) / 1000 / 60);
-          log("INFO", `check_auth: Token valid, expires in ~${expiresIn} minutes`);
-
-          const content: Array<{ type: "text"; text: string }> = [
-            {
-              type: "text",
-              text: `Authenticated with Brightspace. Token expires in ~${expiresIn} minutes. Source: ${token.source}.`,
-            },
-          ];
-          const notice = getUpdateNotice();
-          if (notice) content.push({ type: "text", text: notice });
-          return { content };
-        }
-      );
-
-      log("DEBUG", "check_auth tool registered");
 
       // Log active course filter config if any filter is set
       if (config.courseFilter.includeCourseIds || config.courseFilter.excludeCourseIds || !config.courseFilter.activeOnly) {
@@ -197,7 +135,7 @@ if (subcommand === 'setup') {
       registerGetRoster(server, apiClient);
       registerGetSyllabus(server, apiClient);
       registerGetDiscussions(server, apiClient);
-      log("DEBUG", "MCP tools registered (12 core tools, total 13 with check_auth)");
+      log("DEBUG", "MCP tools registered (12 tools)");
 
       // Connect stdio transport
       const transport = new StdioServerTransport();

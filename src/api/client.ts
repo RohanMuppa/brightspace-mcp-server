@@ -42,10 +42,26 @@ function isExpiredSessionRedirect(body: string, baseUrl: string): boolean {
 }
 
 /**
+ * Stand-ins for the discovered LP and LE versions.
+ *
+ * lp(), le(), and leGlobal() are synchronous path builders called from about
+ * forty places across the tools, but the versions they need come from a
+ * network request. Emitting a placeholder and substituting it inside get()
+ * and getRaw() keeps that request off the startup path without turning every
+ * one of those call sites async, and it means a newly added tool cannot
+ * forget to wait for discovery: the path it builds carries the requirement.
+ *
+ * Braces are used because D2L paths never contain them, so a substitution can
+ * never collide with a real path segment.
+ */
+const LP_VERSION = "{lp}";
+const LE_VERSION = "{le}";
+
+/**
  * D2L API client with authentication, caching, rate limiting, and version discovery.
  *
  * Key features:
- * - Auto-discovers LP/LE versions from /d2l/api/versions/
+ * - Auto-discovers LP/LE versions from /d2l/api/versions/ on the first request
  * - Supports both Bearer tokens and cookie-based auth (auto-detected via "cookie:" prefix)
  * - Client-side rate limiting using token bucket algorithm
  * - In-memory response caching with per-data-type TTLs
@@ -64,6 +80,8 @@ export class D2LApiClient {
   private readonly onAuthExpired?: () => Promise<boolean>;
   private readonly retryConfig: RetryConfig;
   private versions: ApiVersions | null = null;
+  /** Single in-flight discovery, so concurrent first requests share one fetch. */
+  private versionsInFlight: Promise<ApiVersions> | null = null;
 
   constructor(options: D2LApiClientOptions) {
     // HTTPS-only enforcement, on a parsed URL rather than a string prefix so
@@ -105,28 +123,69 @@ export class D2LApiClient {
   }
 
   /**
-   * Initialize the client by discovering API versions.
-   * Must be called before making API requests.
+   * Discover the API versions, joining a discovery already in flight.
+   *
+   * Called from get() and getRaw() rather than at startup, so the server
+   * answers tools/list without touching the network and a user who never
+   * calls a tool never pays for a request. Nothing needs to call this
+   * directly.
+   */
+  async ensureVersions(): Promise<ApiVersions> {
+    if (this.versions) return this.versions;
+
+    if (!this.versionsInFlight) {
+      // The latch is released by the flow that owns it, as it settles, so a
+      // failed discovery is never replayed: the request after a network blip
+      // starts a fresh fetch instead of inheriting the stale rejection.
+      const flow = discoverVersions(this.baseUrl, this.timeoutMs)
+        .then(versions => {
+          this.versions = versions;
+          log("INFO", `D2L API versions discovered: LP ${versions.lp}, LE ${versions.le}`);
+          return versions;
+        })
+        .finally(() => {
+          if (this.versionsInFlight === flow) this.versionsInFlight = null;
+        });
+      this.versionsInFlight = flow;
+    }
+
+    return this.versionsInFlight;
+  }
+
+  /**
+   * Discover API versions eagerly. Idempotent, and no longer required:
+   * requests discover on demand. Kept for callers that want the network
+   * failure up front rather than on the first tool call.
    */
   async initialize(): Promise<void> {
-    this.versions = await discoverVersions(this.baseUrl, this.timeoutMs);
-    log(
-      "INFO",
-      `D2L API versions discovered: LP ${this.versions.lp}, LE ${this.versions.le}`,
-    );
+    await this.ensureVersions();
   }
 
   /**
    * Get discovered API versions.
-   * @throws Error if initialize() hasn't been called yet
+   * @throws Error if no request has discovered them yet
    */
   get apiVersions(): ApiVersions {
     if (!this.versions) {
       throw new Error(
-        "API client not initialized. Call initialize() before accessing apiVersions.",
+        "API versions have not been discovered yet. They are fetched on the first request.",
       );
     }
     return this.versions;
+  }
+
+  /**
+   * Substitute the discovered versions into a path built by lp(), le(), or
+   * leGlobal(), discovering them first if no request has yet.
+   *
+   * A path that carries no placeholder is returned untouched and costs
+   * nothing: a bookmark page whose URL came back fully resolved from D2L
+   * does not trigger a discovery of its own.
+   */
+  private async resolvePath(path: string): Promise<string> {
+    if (!path.includes(LP_VERSION) && !path.includes(LE_VERSION)) return path;
+    const { lp, le } = await this.ensureVersions();
+    return path.split(LP_VERSION).join(lp).split(LE_VERSION).join(le);
   }
 
   /**
@@ -139,13 +198,22 @@ export class D2LApiClient {
    * @throws NetworkError on network/fetch failures
    */
   async get<T>(path: string, options?: { ttl?: number }): Promise<T> {
-    // Check cache first
+    // Checked before the path is resolved, and keyed by the path as the caller
+    // wrote it, so a cached read needs neither version discovery nor a token.
     if (options?.ttl && this.cache.has(path)) {
       log("DEBUG", `Cache hit: ${path}`);
       return this.cache.get(path) as T;
     }
 
-    return this.withAuthentication(path, token => this.makeRequest<T>(path, token, options));
+    const resolved = await this.resolvePath(path);
+    const data = await this.withAuthentication(resolved, token => this.makeRequest<T>(resolved, token));
+
+    if (options?.ttl) {
+      this.cache.set(path, data, options.ttl);
+      log("DEBUG", `Cached response for ${path} (TTL: ${options.ttl}ms)`);
+    }
+
+    return data;
   }
 
   /**
@@ -159,7 +227,8 @@ export class D2LApiClient {
    * @throws NetworkError on network/fetch failures
    */
   async getRaw(path: string): Promise<Response> {
-    return this.withAuthentication(path, token => this.makeRawRequest(path, token));
+    const resolved = await this.resolvePath(path);
+    return this.withAuthentication(resolved, token => this.makeRawRequest(resolved, token));
   }
 
   /** One HTTP refresh and at most one browser login per caller. */
@@ -235,7 +304,6 @@ export class D2LApiClient {
   private async makeRequest<T>(
     path: string,
     token: TokenData,
-    options?: { ttl?: number },
   ): Promise<T> {
     const url = `${this.baseUrl}${path}`;
     const headers = this.buildAuthHeaders(token);
@@ -298,11 +366,6 @@ export class D2LApiClient {
           path,
           `Expected JSON from ${path} but the body did not parse`,
         );
-      }
-
-      if (options?.ttl) {
-        this.cache.set(path, data, options.ttl);
-        log("DEBUG", `Cached response for ${path} (TTL: ${options.ttl}ms)`);
       }
 
       return data;
@@ -445,33 +508,34 @@ export class D2LApiClient {
 
   /**
    * Build path for LP (Learning Platform) API endpoints.
+   *
+   * The version is left as a placeholder and substituted by get() or getRaw()
+   * once it has been discovered. See LP_VERSION above.
+   *
    * @param path - Path within LP API (e.g., "/users/whoami")
-   * @returns Full versioned path (e.g., "/d2l/api/lp/1.56/users/whoami")
+   * @returns Versioned path template (e.g., "/d2l/api/lp/{lp}/users/whoami")
    */
   lp(path: string): string {
-    const { lp } = this.apiVersions;
-    return `/d2l/api/lp/${lp}${path}`;
+    return `/d2l/api/lp/${LP_VERSION}${path}`;
   }
 
   /**
    * Build path for LE (Learning Environment) API endpoints with orgUnitId.
    * @param orgUnitId - Organizational unit ID (course ID)
    * @param path - Path within LE API (e.g., "/content/root/")
-   * @returns Full versioned path (e.g., "/d2l/api/le/1.91/123456/content/root/")
+   * @returns Versioned path template (e.g., "/d2l/api/le/{le}/123456/content/root/")
    */
   le(orgUnitId: number, path: string): string {
-    const { le } = this.apiVersions;
-    return `/d2l/api/le/${le}/${orgUnitId}${path}`;
+    return `/d2l/api/le/${LE_VERSION}/${orgUnitId}${path}`;
   }
 
   /**
    * Build path for global LE (Learning Environment) API endpoints without orgUnitId.
    * @param path - Path within LE API (e.g., "/enrollments/myenrollments/")
-   * @returns Full versioned path (e.g., "/d2l/api/le/1.91/enrollments/myenrollments/")
+   * @returns Versioned path template (e.g., "/d2l/api/le/{le}/enrollments/myenrollments/")
    */
   leGlobal(path: string): string {
-    const { le } = this.apiVersions;
-    return `/d2l/api/le/${le}${path}`;
+    return `/d2l/api/le/${LE_VERSION}${path}`;
   }
 
   /**

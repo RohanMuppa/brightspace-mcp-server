@@ -46,13 +46,40 @@ describe("AuthRunner", () => {
     expect(progress.mock.calls).toEqual([["MFA number: 42"], ["Waiting for approval"]]);
   });
 
-  it("returns a useful busy failure without starting a second child", async () => {
+  it("joins the login already in flight instead of spawning a second child", async () => {
     const runner = new AuthRunner();
     const first = runner.run();
-    await expect(runner.run()).rejects.toMatchObject({ kind: "busy" });
+    const second = runner.run();
+
     expect(spawn).toHaveBeenCalledTimes(1);
     child.emit("close", 0);
-    await first;
+
+    expect(await first).toBe(true);
+    expect(await second).toBe(true);
+  });
+
+  it("hands the same failure to every caller that joined", async () => {
+    const runner = new AuthRunner();
+    const first = expect(runner.run()).rejects.toMatchObject({ kind: "cooldown" });
+    const second = expect(runner.run()).rejects.toMatchObject({ kind: "cooldown" });
+    child.emit("close", 3);
+    await Promise.all([first, second]);
+    expect(spawn).toHaveBeenCalledTimes(1);
+  });
+
+  it("starts a fresh login after a failed one rather than replaying it", async () => {
+    const runner = new AuthRunner();
+    const failed = expect(runner.run()).rejects.toMatchObject({ kind: "failed" });
+    child.emit("close", 1);
+    await failed;
+
+    child = mockChild();
+    vi.mocked(spawn).mockReturnValue(child as never);
+    const retry = runner.run();
+    child.emit("close", 0);
+
+    expect(await retry).toBe(true);
+    expect(spawn).toHaveBeenCalledTimes(2);
   });
 
   it.each([[2, "busy"], [3, "cooldown"], [4, "unsupported"], [5, "secureStorage"], [6, "transport"], [1, "failed"]])(
