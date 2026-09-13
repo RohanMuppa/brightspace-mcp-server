@@ -232,9 +232,11 @@ describe("notice delivery", () => {
 
 describe("ownNpxCacheDir", () => {
   it("finds the cache root when running from an npx cache", () => {
+    // The function resolves its result, which on Windows attaches a drive
+    // letter, so the expectation has to be resolved the same way.
     expect(
       ownNpxCacheDir("/Users/me/.npm/_npx/abc123/node_modules/brightspace-mcp-server")
-    ).toBe("/Users/me/.npm/_npx/abc123");
+    ).toBe(resolve("/Users/me/.npm/_npx/abc123"));
   });
 
   it("is null for a global install", () => {
