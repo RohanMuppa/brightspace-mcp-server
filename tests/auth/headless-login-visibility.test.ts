@@ -44,11 +44,11 @@ beforeEach(async () => {
 
 afterEach(() => { vi.restoreAllMocks(); });
 
-describe("headless BrowserAuth lifecycle", () => {
-  it("always launches an ephemeral headless context and restores state without checking its age", async () => {
+describe("BrowserAuth lifecycle", () => {
+  it("honors the configured browser visibility and restores state without checking its age", async () => {
     const onAuthenticated = vi.fn(async () => {});
     await expect(auth.authenticate({ onAuthenticated })).resolves.toEqual(token);
-    expect(mocks.launch).toHaveBeenCalledWith(expect.objectContaining({ headless: true, timeout: 60000 }));
+    expect(mocks.launch).toHaveBeenCalledWith(expect.objectContaining({ headless: false, timeout: 60000 }));
     expect(browser.newContext).toHaveBeenCalledWith(expect.objectContaining({ storageState: await mocks.load.mock.results[0].value }));
     expect(context.storageState).toHaveBeenCalledWith();
     expect(mocks.save).toHaveBeenCalledWith({ cookies: [], origins: [] });

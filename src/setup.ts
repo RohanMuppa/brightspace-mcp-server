@@ -11,11 +11,12 @@ import * as readline from "node:readline";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
-import { execFile } from "node:child_process";
+import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { getConfigStorePath } from "./utils/config-store.js";
 import { saveSecureConfig } from "./utils/secure-config.js";
 import type { ConfigStoreData } from "./utils/config-store.js";
+import { AUTH_COMMAND } from "./utils/commands.js";
 
 // ANSI helpers
 const bold = (s: string) => `\x1b[1m${s}\x1b[0m`;
@@ -43,7 +44,7 @@ const SCHOOL_PRESETS: Record<string, SchoolPreset> = {
     name: "Purdue University",
     baseUrl: "https://purdue.brightspace.com",
     usernameLabel: "Purdue career account username or full email",
-    mfaNote: "Approve the sign-in in Microsoft Authenticator. The number is printed here; no browser window opens.",
+    mfaNote: "Microsoft Authenticator number matching can run without a browser window.",
   },
   suny: {
     name: "SUNY",
@@ -265,20 +266,16 @@ function runAuth(): Promise<boolean> {
   const scriptPath = path.resolve(thisDir, "auth-cli.js");
 
   return new Promise((resolve) => {
-    const child = execFile(
+    const child = spawn(
       process.execPath,
       [scriptPath],
       {
-        timeout: 8 * 60 * 1000,
         env: { ...process.env },
-      },
-      (error) => {
-        resolve(!error);
+        stdio: "inherit",
       },
     );
-    // Pipe child output so the user sees the auth flow
-    child.stdout?.pipe(process.stdout);
-    child.stderr?.pipe(process.stderr);
+    child.once("error", () => resolve(false));
+    child.once("close", (code) => resolve(code === 0));
   });
 }
 
@@ -379,7 +376,7 @@ async function main(): Promise<void> {
   console.log("");
 
   // Re-open readline for remaining prompts
-  const rl2 = readline.createInterface({
+  let rl2 = readline.createInterface({
     input: process.stdin,
     output: process.stdout,
   });
@@ -391,12 +388,30 @@ async function main(): Promise<void> {
     console.log(dim("  MFA: You will be prompted to approve the sign-in on your phone during auth."));
   }
   console.log("");
+  // Only two outcomes exist: a hidden browser or a visible one. Which kind of
+  // MFA you have is detected at sign-in time, so offering "approve a prompt"
+  // and "type a code" as separate choices would be a distinction the code does
+  // not make, and picking between them would change nothing on disk.
+  console.log("  How do you complete MFA?");
+  console.log("    1. On your phone, or by typing a code here (recommended)");
+  console.log("    2. In a visible browser window");
+  let mfaChoice = "";
+  while (!/^[12]$/.test(mfaChoice)) {
+    mfaChoice = await ask(rl2, "  Choose 1 or 2 [1]: ") || "1";
+    if (!/^[12]$/.test(mfaChoice)) console.log(yellow("  Please enter 1 or 2."));
+  }
+  const headless = mfaChoice !== "2";
+  console.log(dim(headless
+    ? "  Authentication will run without a browser window."
+    : "  A browser window will open when authentication is needed."));
+  console.log("");
 
   // ── Step 5: Save config ──────────────────────────────────────────
   const config: ConfigStoreData = {
     baseUrl,
     username,
     password,
+    headless,
   };
   if (campus) {
     config.campus = campus;
@@ -410,17 +425,19 @@ async function main(): Promise<void> {
   // ── Step 6: Authenticate now? ────────────────────────────────────
   const authNow = await ask(rl2, "Would you like to authenticate now? (yes/no): ");
   if (/^y(es)?$/i.test(authNow)) {
+    rl2.close();
     console.log("");
     console.log(dim("  Starting authentication..."));
     console.log("");
     const ok = await runAuth();
+    rl2 = readline.createInterface({ input: process.stdin, output: process.stdout });
     if (ok) {
       console.log(green("\n  Authentication successful!"));
     } else {
-      console.log(yellow("\n  Authentication failed. You can retry later with: brightspace-auth"));
+      console.log(yellow(`\n  Authentication failed. You can retry later with: ${AUTH_COMMAND}`));
     }
   } else {
-    console.log(dim("  You can authenticate later by running: brightspace-auth"));
+    console.log(dim(`  You can authenticate later by running: ${AUTH_COMMAND}`));
   }
   console.log("");
 
@@ -488,7 +505,7 @@ async function main(): Promise<void> {
   console.log(`  Config saved to: ${dim(getConfigStorePath())}`);
   console.log("");
   console.log("  Next steps:");
-  console.log("  1. Run 'brightspace-auth' to authenticate (if you haven't already)");
+  console.log(`  1. Run '${AUTH_COMMAND}' to authenticate (if you haven't already)`);
   console.log("  2. Restart Claude Desktop");
   console.log("  3. Ask Claude about your Brightspace courses!");
   console.log("");

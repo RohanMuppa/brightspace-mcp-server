@@ -34,23 +34,23 @@ https://github.com/RohanMuppa/brightspace-mcp-server/blob/main/LLMs.md
 **Option 2: Run it yourself**
 
 ```bash
-npx brightspace-mcp-server setup
+npx -y brightspace-mcp-server@latest setup
 ```
 
 Purdue students can add `--purdue` to skip entering the school URL:
 
 ```bash
-npx brightspace-mcp-server setup --purdue
+npx -y brightspace-mcp-server@latest setup --purdue
 ```
 
 SUNY campuses share one Brightspace site, so `--suny` also asks which campus
 you're at and skips SUNY's campus picker when you sign in:
 
 ```bash
-npx brightspace-mcp-server setup --suny
+npx -y brightspace-mcp-server@latest setup --suny
 ```
 
-The wizard saves your password in the native credential store and runs login in a headless browser. At Purdue, approve Microsoft Authenticator using the number printed in the terminal. No browser window opens. The wizard can configure Claude Desktop and Cursor. Restart your AI client when it finishes.
+The wizard saves your password in the native credential store and asks how you complete MFA. Authentication can wait for approval or number matching, prompt in the terminal for a code from Google Authenticator or another app, or open a visible browser for other interactive methods. The wizard can configure Claude Desktop and Cursor. Restart your AI client when it finishes.
 
 Any other D2L school: run `setup` without a flag and paste your Brightspace URL (for example `https://yourschool.brightspace.com`).
 
@@ -65,23 +65,25 @@ npx -y brightspace-mcp-server@latest
 
 On **Windows**, npx must be wrapped: `cmd /c npx -y brightspace-mcp-server@latest`
 
-You still need to run `npx brightspace-mcp-server setup` first to save your credentials.
+You still need to run `npx -y brightspace-mcp-server@latest setup` first to save your credentials.
 
 </details>
 
 ## Session Expired?
 
-Returning the next day normally requires no action. The server renews short-lived API tokens over HTTPS using the saved Brightspace session. If that session ends, a headless browser restores your saved Microsoft session and tries silent SSO. If Microsoft requires sign-in, your saved credentials are entered automatically and you complete MFA on your phone.
+There is nothing to log into first. Ask for your grades and the sign-in happens as part of that request, so the assistant never has to check whether you are authenticated before it can answer. Starting your AI client touches Brightspace not at all: a restart on its own will never set off an MFA prompt.
+
+Returning the next day normally requires no action. The server renews short-lived API tokens over HTTPS using the saved Brightspace session. If that session ends, a browser restores your saved Microsoft session and tries silent SSO. Approval and code-based modes stay headless; when an automatic run needs a code, run the auth command below to enter it securely in the terminal.
 
 Your school's policy controls when MFA is required. There is no local 24-hour cutoff, and the server no longer discards browser state after one hour. A network outage preserves the saved session and returns a temporary error.
 
-If you miss an MFA request, automatic browser authentication waits four hours before trying again. Existing tokens and HTTP token renewal still work. Browser-based SSO also pauses because Microsoft can send another phone prompt during a redirect, even without a password submission. Run this command in a terminal to retry immediately and see the MFA number:
+If you miss an MFA request, automatic browser authentication pauses for five minutes before trying again. Existing tokens and HTTP token renewal still work. Browser-based SSO also pauses because Microsoft can send another phone prompt during a redirect, even without a password submission. Run this command in a terminal to retry immediately, see a number match, or enter an authenticator code:
 
 ```bash
-npx brightspace-mcp-server auth
+npx -y brightspace-mcp-server@latest auth
 ```
 
-**MFA at Purdue** is Microsoft Authenticator number matching: enter the terminal-displayed number on your phone. The MCP also sends authentication progress as logging notifications to clients that display them. Some desktop clients hide server logs, so use the terminal command above if the number is not visible. Unsupported identity-provider pages require a supported sign-in handler; the server does not silently open a visible browser.
+**MFA at Purdue** commonly uses Microsoft Authenticator number matching: enter the terminal-displayed number on your phone. Google Authenticator and other one-time-code apps work too, with no setting to change: run the auth command above in a terminal and it prompts for the code when your provider asks for one. Pick the visible-browser option during setup only if your identity provider needs interaction the server cannot drive. The MCP also sends authentication progress as logging notifications to clients that display them. Some desktop clients hide server logs, so use the terminal command above for interactive MFA.
 
 ## What You Can Ask About
 
@@ -129,13 +131,32 @@ Licensed under the MIT License.
 
 ## Updates
 
-Automatic. Every time your AI client starts a session, it runs commands which pull the newest version from npm. No action needed.
+Automatic, in both places it matters.
 
-However, mistakes do occur, so regularly, especially if you suspect you're on an old version, clear the npx cache and restart your client:
+**The MCP server** is registered as `npx -y brightspace-mcp-server@latest`, so your AI client pulls the newest version every time it starts a session.
+
+**The auth CLI** updates itself too. If you installed globally with `npm install -g`, that copy stays at whatever version you installed it at — npm never revisits it. So when the CLI notices it is behind, it re-runs itself through `npx -y brightspace-mcp-server@latest auth` and you get the current code. You are not prompted and there is nothing to confirm.
+
+One caveat worth knowing: a re-exec runs the newest code, it does not overwrite the old copy on disk. `npm ls -g` will still report the version you installed. To actually replace it:
 
 ```bash
+npm install -g brightspace-mcp-server@latest
 npx clear-npx-cache
 ```
+
+Then restart your AI client. The server and the CLI both check npm on startup, and the server re-checks every few hours, so you get told when either one falls behind — including when they disagree with each other.
+
+Set `D2L_NO_UPDATE_CHECK=1` to switch all of this off.
+
+## What's new in 3.0.0
+
+- Signing in is part of the first tool call. The separate `check_auth` tool is gone, and so is the step where the assistant had to ask about your login before it could answer anything. **This removes a tool, so any saved prompt that names `check_auth` needs updating.**
+- Starting the server makes no network requests. API versions are discovered by the first request that needs them, and a tenant that is briefly unreachable no longer stops the server from starting.
+- Concurrent tool calls on a cold session share one sign-in instead of racing, so you get one MFA prompt rather than several.
+- Failed sign-ins now explain themselves in the tool's answer: a locked keychain, a paused MFA cooldown, or a network outage each say what to do.
+- A missed MFA prompt pauses automatic sign-in for five minutes instead of four hours.
+- Authenticator-code MFA (Google Authenticator and similar) works, with the code entered in the terminal.
+- Every command the server prints is pinned to `@latest`, so following its own advice can never run a stale copy.
 
 ## What's new in 2.0.0
 

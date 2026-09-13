@@ -6,12 +6,12 @@
     "url": "https://github.com/RohanMuppa/brightspace-mcp-server",
     "source": "github"
   },
-  "version": "2.0.0",
+  "version": "3.0.0",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "brightspace-mcp-server",
-      "version": "2.0.0",
+      "version": "3.0.0",
       "transport": {
         "type": "stdio"
       },
@@ -32,7 +32,7 @@
         },
         {
           "name": "D2L_HEADLESS",
-          "description": "Deprecated compatibility setting. Authentication in v2 always runs headlessly. MFA number matches are printed in the terminal.",
+          "description": "Run browser authentication without a visible window. Set false only for MFA methods that require browser interaction. Default: true",
           "isRequired": false,
           "format": "boolean",
           "isSecret": false

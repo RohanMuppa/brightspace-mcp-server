@@ -30,8 +30,10 @@ export async function loadConfig(): Promise<AppConfig> {
       ? expandTilde(store.sessionDir)
       : path.join(os.homedir(), ".d2l-session");
 
-  // Authentication always runs without a visible browser in v2.
-  const headless = true;
+  // Code-entry and other interactive MFA methods need a visible browser.
+  const headless = process.env.D2L_HEADLESS !== undefined
+    ? process.env.D2L_HEADLESS !== "false"
+    : store?.headless ?? true;
 
   // Resolve tokenTtl: env > store > default (3600)
   const tokenTtl = process.env.D2L_TOKEN_TTL

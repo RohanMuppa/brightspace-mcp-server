@@ -7,6 +7,31 @@
 import path from "node:path";
 import { fileTypeFromBuffer } from "file-type";
 import sanitizeFilename from "sanitize-filename";
+import { DownloadError } from "./download-errors.js";
+
+/**
+ * file-type reports every OLE2 Compound File Binary container as
+ * application/x-cfb. It does not read the CFB directory, so it cannot tell a
+ * .doc from a .xls from an .msi. The three legacy Office entries in
+ * ALLOWED_MIME_TYPES were therefore unreachable and every legacy Office
+ * download failed with a generic error.
+ *
+ * Allowing application/x-cfb outright is not the fix: .msi installers are the
+ * same container, and letting one through under a .doc name is exactly what a
+ * magic-byte allowlist exists to prevent. Reconcile against the declared
+ * extension instead, which admits the formats the allowlist already intended
+ * and still refuses everything else.
+ */
+const CFB_MIME = "application/x-cfb";
+const CFB_EXTENSION_MIMES: Record<string, string> = {
+  ".doc": "application/msword",
+  ".dot": "application/msword",
+  ".xls": "application/vnd.ms-excel",
+  ".xlt": "application/vnd.ms-excel",
+  ".ppt": "application/vnd.ms-powerpoint",
+  ".pot": "application/vnd.ms-powerpoint",
+  ".pps": "application/vnd.ms-powerpoint",
+};
 
 /**
  * Maximum file size for downloads (50 MB).
@@ -60,14 +85,21 @@ export function validateDownloadPath(
   baseDir: string,
   filename: string
 ): string {
-  // Decode URL-encoded characters
-  const decoded = decodeURIComponent(filename);
+  // A filename carrying a bare '%' (say "100% Final.doc") makes
+  // decodeURIComponent throw URIError. Brightspace supplies these names, so
+  // that is remote input, and the raw name is the right fallback.
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(filename);
+  } catch {
+    decoded = filename;
+  }
 
   // Sanitize filename (removes path separators, null bytes, etc.)
   const sanitized = sanitizeFilename(decoded);
 
   if (!sanitized || sanitized.length === 0) {
-    throw new Error("Invalid filename after sanitization");
+    throw new DownloadError("badFilename", "Invalid filename after sanitization");
   }
 
   // Resolve full path
@@ -79,7 +111,7 @@ export function validateDownloadPath(
     !fullPath.startsWith(resolvedBase + path.sep) &&
     fullPath !== resolvedBase
   ) {
-    throw new Error("Path traversal detected");
+    throw new DownloadError("pathTraversal", "Path traversal detected");
   }
 
   return fullPath;
@@ -96,15 +128,30 @@ export function validateDownloadPath(
  */
 export async function validateFileType(
   buffer: Buffer,
-  allowedTypes: string[] = ALLOWED_MIME_TYPES
+  allowedTypes: string[] = ALLOWED_MIME_TYPES,
+  filename?: string
 ): Promise<{ mime: string; ext: string }> {
   // Try magic byte detection first
   const detected = await fileTypeFromBuffer(buffer);
 
   if (detected) {
+    if (detected.mime === CFB_MIME) {
+      const ext = filename ? path.extname(filename).toLowerCase() : "";
+      const resolved = CFB_EXTENSION_MIMES[ext];
+      if (resolved && allowedTypes.includes(resolved)) {
+        return { mime: resolved, ext: ext.slice(1) };
+      }
+      throw new DownloadError(
+        "unsupportedType",
+        `Compound File Binary with extension '${ext || "none"}' is not an allowed Office format`,
+        CFB_MIME
+      );
+    }
     if (!allowedTypes.includes(detected.mime)) {
-      throw new Error(
-        `File type '${detected.mime}' not allowed. Allowed types: ${allowedTypes.join(", ")}`
+      throw new DownloadError(
+        "unsupportedType",
+        `File type '${detected.mime}' not allowed`,
+        detected.mime
       );
     }
     return { mime: detected.mime, ext: detected.ext };
@@ -135,7 +182,8 @@ export async function validateFileType(
     }
   }
 
-  throw new Error(
+  throw new DownloadError(
+    "undetectableType",
     "Could not determine file type or type not allowed"
   );
 }

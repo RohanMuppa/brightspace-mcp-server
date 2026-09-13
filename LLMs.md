@@ -10,7 +10,7 @@ Before anything else, read [README.md](https://github.com/RohanMuppa/brightspace
 
 An MCP (Model Context Protocol) server that connects an AI client to D2L Brightspace so it can read grades, assignments, announcements, syllabus, roster, discussions, and course content on demand.
 
-Distributed on npm as `brightspace-mcp-server`. Users run it via `npx`, so they always get the latest version.
+Distributed on npm as `brightspace-mcp-server`. Register it as `npx -y brightspace-mcp-server@latest` so each client start pulls the newest version. Always include the `@latest` tag: without it npx prefers a binary already on PATH and will silently run an old global install instead. The auth CLI re-execs itself through the pinned command when it detects it is stale.
 
 ## Installing it for a user
 
@@ -27,26 +27,26 @@ If Node is missing or below v20, tell the user to install the LTS from https://n
 ### 2. Run the setup wizard
 
 ```bash
-npx brightspace-mcp-server setup
+npx -y brightspace-mcp-server@latest setup
 ```
 
 If the user is at Purdue, use the preset:
 
 ```bash
-npx brightspace-mcp-server setup --purdue
+npx -y brightspace-mcp-server@latest setup --purdue
 ```
 
 If the user is at a SUNY campus, use the SUNY preset. It also asks which campus
 they attend, which lets sign-in skip SUNY's shared campus picker:
 
 ```bash
-npx brightspace-mcp-server setup --suny
+npx -y brightspace-mcp-server@latest setup --suny
 ```
 
 The wizard:
 
 - prompts for the school's Brightspace URL (skipped with `--purdue` or `--suny`)
-- runs a headless Chromium login and prints Microsoft Authenticator number matches in the terminal
+- asks whether MFA uses device approval, terminal code entry, or a visible browser, then authenticates accordingly
 - saves the password in the native credential store and public settings in `~/.brightspace-mcp/config.json` (0600)
 - writes the encrypted session below `~/.d2l-session/accounts/<account-hash>/` (AES-256-GCM)
 - auto-configures Claude Desktop and Cursor if detected
@@ -69,12 +69,20 @@ Claude Desktop and Cursor are auto-configured by the setup wizard. For any other
 
 Tell the user to fully quit and reopen their AI client so it picks up the new MCP server.
 
+## Auth
+
+There is no authentication step and no tool to check one. Call the tool that answers the user's question; if no valid session exists, the request signs in first and then proceeds. Never tell the user to authenticate before asking something, and never call a tool purely to establish a session.
+
+A sign-in that cannot be completed comes back as the tool's own error, naming the cause and what to do: a locked credential store, a paused MFA cooldown, an unsupported login page, a network outage. Relay that text. Only the cooldown and unsupported cases need the terminal command below.
+
+Concurrent tool calls on a cold session share one sign-in, so firing several tools at once is safe and produces a single MFA prompt.
+
 ## Re-auth
 
-Access tokens are re-minted from the stored session cookie without a browser. A headless browser restores encrypted state for silent SSO when required, then enters saved credentials if Microsoft needs a full login. Missed MFA pauses automatic browser authentication, including SSO redirects, for four hours to prevent repeated phone prompts. HTTP token renewal remains allowed; the explicit command below bypasses the browser cooldown. Forward the MFA number to the user as it appears and wait for phone approval. Clients may hide server logs, so a terminal is the reliable place to see the number. Network errors and locked native storage should be reported without retrying MFA.
+Access tokens are re-minted from the stored session cookie without a browser. When browser authentication is required, setup's MFA choice controls whether Chromium stays hidden for approval or terminal code entry, or opens for other interaction. Automatic MCP authentication cannot read a code from stdio; tell the user to run the explicit command below, which prompts without echoing the code into MCP logs. Missed approval pauses automatic browser authentication for five minutes. HTTP token renewal remains allowed, and the explicit command bypasses the cooldown. Forward the MFA number to the user as it appears and wait for phone approval. Clients may hide server logs, so a terminal is the reliable place to see the number. Network errors and locked native storage should be reported without retrying MFA.
 
 ```bash
-npx brightspace-mcp-server auth
+npx -y brightspace-mcp-server@latest auth
 ```
 
 ## Available tools
@@ -96,6 +104,8 @@ Registered in `src/tools/index.ts`, schemas in `src/tools/schemas.ts`:
 | `download_file` | Download a file attachment (PDF, slides, etc.) to disk |
 | `get_assignment_files` | Read the files attached to an assignment (spec, rubric, starter workbook) and return their text |
 
+These twelve are the whole surface. An available-update notice, when there is one, rides along as a second text block on the first successful result.
+
 Quiz attempt counts are unavailable to students on the Purdue tenant: `/quizzes/{id}/attempts/` answers 403. Those quizzes carry `attemptsAvailable: false` with null counts rather than a fabricated zero.
 
 Assignments, quizzes, and due dates each carry a `url` field that deep-links into Brightspace. `get_assignments` also returns `gradeOnly` items for gradebook columns that match no assignment or quiz, such as a proctored exam. `get_upcoming_due_dates` reads `DueDate` from assignments and `DueDate ?? EndDate` from quizzes rather than the calendar feed.
@@ -115,7 +125,10 @@ src/
     get-*.ts                One file per tool
     download-file.ts        Binary download + file-type detection
   api/
-    client.ts               HTTP client wrapping the Valence/D2L API
+    client.ts               HTTP client wrapping the Valence/D2L API. lp()/le()
+                            leave the version as a {lp}/{le} placeholder that
+                            get()/getRaw() substitute, so discovery and sign-in
+                            happen on the first request rather than at startup
     version-discovery.ts    Resolves per-product API versions
     cache.ts                In-memory response cache
     rate-limiter.ts         Token-bucket limiter
@@ -151,10 +164,10 @@ src/
 
 | Command | What it does |
 |---------|--------------|
-| `npx brightspace-mcp-server setup` | Interactive setup wizard |
-| `npx brightspace-mcp-server setup --purdue` | Setup with Purdue preset |
-| `npx brightspace-mcp-server setup --suny` | Setup with SUNY preset (also asks for campus) |
-| `npx brightspace-mcp-server auth` | Manual reauth |
+| `npx -y brightspace-mcp-server@latest setup` | Interactive setup wizard |
+| `npx -y brightspace-mcp-server@latest setup --purdue` | Setup with Purdue preset |
+| `npx -y brightspace-mcp-server@latest setup --suny` | Setup with SUNY preset (also asks for campus) |
+| `npx -y brightspace-mcp-server@latest auth` | Manual reauth |
 | `npx -y brightspace-mcp-server@latest` | Run the MCP server (registered in AI client config) |
 | `npm run build` | Compile TypeScript to `build/` |
 | `npm run dev` | Watch-mode TypeScript compile |
@@ -182,6 +195,8 @@ Add a preset to `SCHOOL_PRESETS` in `src/setup.ts`. If the school uses a non-sta
 2. Add the input schema to `src/tools/schemas.ts`.
 3. Export it from `src/tools/index.ts`.
 4. Register it in `src/index.ts`.
+
+Build paths with `apiClient.lp()`, `le()`, or `leGlobal()` and nothing else. They return a template carrying a `{lp}`/`{le}` placeholder, which `get()` and `getRaw()` substitute after discovering the versions, so a new tool gets lazy discovery and sign-in without asking for them. A hand-written path with a literal version skips discovery and will break when the tenant moves.
 
 ## Release workflow
 
