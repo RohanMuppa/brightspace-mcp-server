@@ -65,6 +65,20 @@ describe("remediation commands are pinned to @latest", () => {
     expect(hits, `Unpinned commands found:\n${hits.join("\n")}`).toEqual([]);
   });
 
+  it("never tells a user to run the bare brightspace-auth binary", () => {
+    // That shim only exists after `npm install -g`. The documented install is
+    // npx, so for most users the command simply does not exist.
+    const files = walk(resolve(repoRoot, "src"), [".ts"]);
+    const hits: string[] = [];
+    for (const file of files) {
+      readFileSync(file, "utf-8").split("\n").forEach((line, i) => {
+        if (!/`brightspace-auth`|Run brightspace-auth/.test(line)) return;
+        hits.push(`${file.replace(repoRoot + "/", "")}:${i + 1}  ${line.trim()}`);
+      });
+    }
+    expect(hits, `Unpinned bare command found:\n${hits.join("\n")}`).toEqual([]);
+  });
+
   it("the regex actually catches the form that caused the incident", () => {
     expect(new RegExp(UNPINNED.source).test("npx brightspace-mcp-server auth")).toBe(true);
     expect(new RegExp(UNPINNED.source).test("npx -y brightspace-mcp-server setup")).toBe(true);

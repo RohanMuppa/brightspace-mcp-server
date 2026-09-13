@@ -7,7 +7,7 @@
  * per Node version under a version manager, one per npx cache entry, plus a
  * local checkout. They are installed at different times and nothing keeps them
  * in step. The failure that motivated this had a v2.0.0 MCP server running
- * happily while `brightspace-auth` in the shell resolved to v1.2.6, whose
+ * happily while the auth command typed in a shell resolved to v1.2.6, whose
  * sign-in flow no longer worked, with no way to see the mismatch.
  *
  * This scan needs no network, so unlike the registry check it still works

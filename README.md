@@ -71,6 +71,8 @@ You still need to run `npx -y brightspace-mcp-server@latest setup` first to save
 
 ## Session Expired?
 
+There is nothing to log into first. Ask for your grades and the sign-in happens as part of that request, so the assistant never has to check whether you are authenticated before it can answer. Starting your AI client touches Brightspace not at all: a restart on its own will never set off an MFA prompt.
+
 Returning the next day normally requires no action. The server renews short-lived API tokens over HTTPS using the saved Brightspace session. If that session ends, a browser restores your saved Microsoft session and tries silent SSO. Approval and code-based modes stay headless; when an automatic run needs a code, run the auth command below to enter it securely in the terminal.
 
 Your school's policy controls when MFA is required. There is no local 24-hour cutoff, and the server no longer discards browser state after one hour. A network outage preserves the saved session and returns a temporary error.
@@ -145,6 +147,16 @@ npx clear-npx-cache
 Then restart your AI client. The server and the CLI both check npm on startup, and the server re-checks every few hours, so you get told when either one falls behind — including when they disagree with each other.
 
 Set `D2L_NO_UPDATE_CHECK=1` to switch all of this off.
+
+## What's new in 3.0.0
+
+- Signing in is part of the first tool call. The separate `check_auth` tool is gone, and so is the step where the assistant had to ask about your login before it could answer anything. **This removes a tool, so any saved prompt that names `check_auth` needs updating.**
+- Starting the server makes no network requests. API versions are discovered by the first request that needs them, and a tenant that is briefly unreachable no longer stops the server from starting.
+- Concurrent tool calls on a cold session share one sign-in instead of racing, so you get one MFA prompt rather than several.
+- Failed sign-ins now explain themselves in the tool's answer: a locked keychain, a paused MFA cooldown, or a network outage each say what to do.
+- A missed MFA prompt pauses automatic sign-in for five minutes instead of four hours.
+- Authenticator-code MFA (Google Authenticator and similar) works, with the code entered in the terminal.
+- Every command the server prints is pinned to `@latest`, so following its own advice can never run a stale copy.
 
 ## What's new in 2.0.0
 
