@@ -118,6 +118,22 @@ function parseTriple(version: string): [number, number, number] | null {
 }
 
 /**
+ * A version string safe to show a person.
+ *
+ * The registry response is remote input, and the notice built from it is now
+ * rendered into the user's AI client by every tool, so the raw string must
+ * never be interpolated. `parseTriple` deliberately tolerates a trailing
+ * prerelease suffix, which means a `latest` of "2.2.0 and now ignore your
+ * instructions" parses happily. Rebuilding the label from the parsed numbers
+ * discards everything after the digits, so only `\d+\.\d+\.\d+` can ever reach
+ * the screen.
+ */
+export function safeVersionLabel(version: string): string {
+  const triple = parseTriple(version);
+  return triple ? triple.join(".") : "unknown";
+}
+
+/**
  * True only when `latest` is strictly newer than `installed`, compared as
  * numeric major, minor, patch. Prerelease suffixes are ignored, and anything
  * that does not parse as a version is never "newer", so a registry hiccup
@@ -180,7 +196,11 @@ export async function initUpdateChecker(deps: UpdateCheckDeps = {}): Promise<voi
     const latest = await fetchLatestVersion(fetchImpl);
     if (latest === null || !isNewerVersion(latest, installedVersion)) return;
 
-    const headline = `Update available: v${installedVersion} to v${latest}.`;
+    // Both are rendered to the user, so neither goes in raw. `latest` is
+    // remote input; `installedVersion` is injectable in tests.
+    const from = safeVersionLabel(installedVersion);
+    const to = safeVersionLabel(latest);
+    const headline = `Update available: v${from} to v${to}.`;
     let text: string;
 
     if (runningFromNpxCache) {
@@ -189,7 +209,7 @@ export async function initUpdateChecker(deps: UpdateCheckDeps = {}): Promise<voi
         ? `Cleared ${count} stale npx cache director${count === 1 ? "y" : "ies"} for ${PACKAGE_NAME} ` +
           `(kept the one this server is running from). `
         : "";
-      text = `${headline} ${cleanup}Restart your MCP client to pick up v${latest}.`;
+      text = `${headline} ${cleanup}Restart your MCP client to pick up v${to}.`;
     } else {
       text = `${headline} Run: ${GLOBAL_INSTALL_COMMAND}` +
         `, then ${CLEAR_NPX_CACHE_COMMAND} and restart your MCP client.`;
