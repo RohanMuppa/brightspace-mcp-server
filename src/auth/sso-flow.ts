@@ -9,6 +9,7 @@ import type { AppConfig } from "../types/index.js";
 import { PurdueSSOFlow } from "./purdue-sso.js";
 import { SunySSOFlow, isSunyBrightspace } from "./suny-sso.js";
 import { BrowserAuthError } from "../utils/errors.js";
+import { AUTH_COMMAND } from "../utils/commands.js";
 
 export class UnsupportedAuthenticationError extends BrowserAuthError {
   readonly code = "AUTH_UNSUPPORTED";
@@ -21,7 +22,7 @@ export class UnsupportedAuthenticationError extends BrowserAuthError {
 export class MfaApprovalError extends BrowserAuthError {
   readonly code = "AUTH_MFA_FAILED";
   constructor(cause?: Error) {
-    super("MFA approval failed or timed out after 5 minutes. Run brightspace-auth to retry.", "mfa_approval", cause);
+    super(`MFA approval failed or timed out after 5 minutes. Run ${AUTH_COMMAND} to retry.`, "mfa_approval", cause);
     this.name = "MfaApprovalError";
   }
 }

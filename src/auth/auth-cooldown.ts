@@ -1,13 +1,28 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
+import { AUTH_COMMAND } from "../utils/commands.js";
 
-export const MFA_COOLDOWN_MS = 4 * 60 * 60 * 1000;
+/**
+ * How long automatic sign-in pauses after a missed MFA prompt.
+ *
+ * Long enough to stop a hot loop of phone prompts, short enough that tapping
+ * the wrong number costs a coffee break rather than an afternoon. This was
+ * four hours, which meant one mistyped number disabled background sign-in
+ * until dinner, with nothing on screen explaining why.
+ */
+export const MFA_COOLDOWN_MS = 5 * 60 * 1000;
 
 export class AuthenticationCooldownError extends Error {
   readonly code = "AUTH_COOLDOWN";
   constructor(public readonly retryAt: number) {
-    super(`A previous MFA attempt failed. Automatic login resumes at ${new Date(retryAt).toISOString()}. Run brightspace-auth to retry now.`);
+    // Say it the way a person would. A timestamp tells someone staring at a
+    // stalled chat window nothing they can act on.
+    const minutes = Math.max(1, Math.ceil((retryAt - Date.now()) / 60000));
+    super(
+      `The last sign-in prompt was not approved, so automatic sign-in is paused for ${minutes} more minute${minutes === 1 ? "" : "s"}. ` +
+      `To sign in right now, run this in a terminal: ${AUTH_COMMAND}`
+    );
     this.name = "AuthenticationCooldownError";
   }
 }

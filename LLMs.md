@@ -10,7 +10,7 @@ Before anything else, read [README.md](https://github.com/RohanMuppa/brightspace
 
 An MCP (Model Context Protocol) server that connects an AI client to D2L Brightspace so it can read grades, assignments, announcements, syllabus, roster, discussions, and course content on demand.
 
-Distributed on npm as `brightspace-mcp-server`. Users run it via `npx`, so they always get the latest version.
+Distributed on npm as `brightspace-mcp-server`. Register it as `npx -y brightspace-mcp-server@latest` so each client start pulls the newest version. Always include the `@latest` tag: without it npx prefers a binary already on PATH and will silently run an old global install instead. The auth CLI re-execs itself through the pinned command when it detects it is stale.
 
 ## Installing it for a user
 
@@ -27,20 +27,20 @@ If Node is missing or below v20, tell the user to install the LTS from https://n
 ### 2. Run the setup wizard
 
 ```bash
-npx brightspace-mcp-server setup
+npx -y brightspace-mcp-server@latest setup
 ```
 
 If the user is at Purdue, use the preset:
 
 ```bash
-npx brightspace-mcp-server setup --purdue
+npx -y brightspace-mcp-server@latest setup --purdue
 ```
 
 If the user is at a SUNY campus, use the SUNY preset. It also asks which campus
 they attend, which lets sign-in skip SUNY's shared campus picker:
 
 ```bash
-npx brightspace-mcp-server setup --suny
+npx -y brightspace-mcp-server@latest setup --suny
 ```
 
 The wizard:
@@ -71,10 +71,10 @@ Tell the user to fully quit and reopen their AI client so it picks up the new MC
 
 ## Re-auth
 
-Access tokens are re-minted from the stored session cookie without a browser. A headless browser restores encrypted state for silent SSO when required, then enters saved credentials if Microsoft needs a full login. Missed MFA pauses automatic browser authentication, including SSO redirects, for four hours to prevent repeated phone prompts. HTTP token renewal remains allowed; the explicit command below bypasses the browser cooldown. Forward the MFA number to the user as it appears and wait for phone approval. Clients may hide server logs, so a terminal is the reliable place to see the number. Network errors and locked native storage should be reported without retrying MFA.
+Access tokens are re-minted from the stored session cookie without a browser. A headless browser restores encrypted state for silent SSO when required, then enters saved credentials if Microsoft needs a full login. Missed MFA pauses automatic browser authentication, including SSO redirects, for five minutes to prevent repeated phone prompts. HTTP token renewal remains allowed; the explicit command below bypasses the browser cooldown. Forward the MFA number to the user as it appears and wait for phone approval. Clients may hide server logs, so a terminal is the reliable place to see the number. Network errors and locked native storage should be reported without retrying MFA.
 
 ```bash
-npx brightspace-mcp-server auth
+npx -y brightspace-mcp-server@latest auth
 ```
 
 ## Available tools
@@ -151,10 +151,10 @@ src/
 
 | Command | What it does |
 |---------|--------------|
-| `npx brightspace-mcp-server setup` | Interactive setup wizard |
-| `npx brightspace-mcp-server setup --purdue` | Setup with Purdue preset |
-| `npx brightspace-mcp-server setup --suny` | Setup with SUNY preset (also asks for campus) |
-| `npx brightspace-mcp-server auth` | Manual reauth |
+| `npx -y brightspace-mcp-server@latest setup` | Interactive setup wizard |
+| `npx -y brightspace-mcp-server@latest setup --purdue` | Setup with Purdue preset |
+| `npx -y brightspace-mcp-server@latest setup --suny` | Setup with SUNY preset (also asks for campus) |
+| `npx -y brightspace-mcp-server@latest auth` | Manual reauth |
 | `npx -y brightspace-mcp-server@latest` | Run the MCP server (registered in AI client config) |
 | `npm run build` | Compile TypeScript to `build/` |
 | `npm run dev` | Watch-mode TypeScript compile |

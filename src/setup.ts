@@ -16,6 +16,7 @@ import { fileURLToPath } from "node:url";
 import { getConfigStorePath } from "./utils/config-store.js";
 import { saveSecureConfig } from "./utils/secure-config.js";
 import type { ConfigStoreData } from "./utils/config-store.js";
+import { AUTH_COMMAND } from "./utils/commands.js";
 
 // ANSI helpers
 const bold = (s: string) => `\x1b[1m${s}\x1b[0m`;
@@ -417,10 +418,10 @@ async function main(): Promise<void> {
     if (ok) {
       console.log(green("\n  Authentication successful!"));
     } else {
-      console.log(yellow("\n  Authentication failed. You can retry later with: brightspace-auth"));
+      console.log(yellow(`\n  Authentication failed. You can retry later with: ${AUTH_COMMAND}`));
     }
   } else {
-    console.log(dim("  You can authenticate later by running: brightspace-auth"));
+    console.log(dim(`  You can authenticate later by running: ${AUTH_COMMAND}`));
   }
   console.log("");
 
@@ -488,7 +489,7 @@ async function main(): Promise<void> {
   console.log(`  Config saved to: ${dim(getConfigStorePath())}`);
   console.log("");
   console.log("  Next steps:");
-  console.log("  1. Run 'brightspace-auth' to authenticate (if you haven't already)");
+  console.log(`  1. Run '${AUTH_COMMAND}' to authenticate (if you haven't already)`);
   console.log("  2. Restart Claude Desktop");
   console.log("  3. Ask Claude about your Brightspace courses!");
   console.log("");
