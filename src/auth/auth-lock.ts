@@ -2,6 +2,41 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { hostname } from "node:os";
 import { randomUUID } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
+
+/**
+ * Windows refuses to rename or remove a directory while any process still
+ * holds a handle inside it. Every contender for a stale lock is doing exactly
+ * that: reclaim.lock lives inside the directory the winner is trying to rename,
+ * so the loser's own scan blocks the winner. POSIX renames by inode and never
+ * sees this.
+ *
+ * The condition clears in milliseconds, so a short retry turns a spurious
+ * EPERM into an ordinary release instead of an unhandled crash.
+ */
+const CONTENTION_CODES = new Set(["EPERM", "EBUSY", "EACCES", "ENOTEMPTY"]);
+const RENAME_ATTEMPTS = 5;
+
+/**
+ * Rename, tolerating Windows contention. Resolves true when the directory
+ * moved, false when it is already gone or contention never cleared. Only a
+ * genuinely unexpected error is thrown, so callers decide what a failed
+ * rename means rather than being handed an ambiguous EPERM.
+ */
+async function renameThroughContention(from: string, to: string): Promise<boolean> {
+  for (let attempt = 0; attempt < RENAME_ATTEMPTS; attempt += 1) {
+    try {
+      await fs.rename(from, to);
+      return true;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code ?? "";
+      if (code === "ENOENT") return false;
+      if (!CONTENTION_CODES.has(code)) throw error;
+      await delay(10 * (attempt + 1));
+    }
+  }
+  return false;
+}
 
 export class AuthenticationInProgressError extends Error {
   readonly code = "AUTH_IN_PROGRESS";
@@ -56,8 +91,15 @@ class Lease {
     const current = await readOwner(this.directory);
     if (current?.nonce !== this.owner.nonce) return;
     const retired = `${this.directory}.released.${this.owner.nonce}`;
-    await fs.rename(this.directory, retired);
-    await cleanRetired(retired);
+    // Releasing must never throw. It runs in a finally, so an exception here
+    // would mask the real failure and strand the lock for everyone else.
+    if (await renameThroughContention(this.directory, retired)) {
+      await cleanRetired(retired);
+      return;
+    }
+    // Contention never cleared. Clear the directory where it stands so the
+    // next process sees no owner rather than a lock nobody holds.
+    await cleanRetired(this.directory);
   }
 }
 
@@ -96,7 +138,12 @@ async function acquireLease(lockPath: string, depth: number): Promise<Lease> {
       const current = await readOwner(lockPath);
       if (current?.nonce !== stale.nonce || !isDead(current)) throw new AuthenticationInProgressError();
       const retired = `${lockPath}.stale.${owner.nonce}`;
-      await fs.rename(lockPath, retired);
+      // A rename blocked by contention means another contender is inside this
+      // directory recovering the same stale lock. That is someone else holding
+      // authentication, not a failure of ours.
+      if (!await renameThroughContention(lockPath, retired)) {
+        throw new AuthenticationInProgressError();
+      }
       claim.directory = path.join(retired, "reclaim.lock");
       await claim.release();
       await cleanRetired(retired);
