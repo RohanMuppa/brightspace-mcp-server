@@ -12,6 +12,11 @@ import { AuthProcessError, type AuthFailureKind } from "../auth/auth-runner.js";
 import { log } from "../utils/logger.js";
 import { AUTH_COMMAND } from "../utils/commands.js";
 import { getUpdateNotice } from "../utils/update-checker.js";
+import {
+  DownloadError,
+  isSafeDetail,
+  type DownloadFailureKind,
+} from "../utils/download-errors.js";
 
 /**
  * Wrap data as MCP-compatible tool result.
@@ -85,6 +90,30 @@ const AUTH_FAILURE_GUIDANCE: Record<AuthFailureKind, string> = {
 };
 
 /**
+ * What to tell someone when a download fails.
+ *
+ * Same contract as AUTH_FAILURE_GUIDANCE: keyed off a kind this package
+ * assigns, never off the caught message, so a Content-Disposition header or a
+ * file body cannot put words in a tool response. The only value that crosses
+ * from the remote side is a detected MIME type, and only after isSafeDetail
+ * confirms it is a bare type token.
+ */
+const DOWNLOAD_FAILURE_GUIDANCE: Record<DownloadFailureKind, string> = {
+  unsupportedType:
+    "The file's format is not on the allowed download list. " +
+    "Open it from Brightspace in a browser instead.",
+  undetectableType:
+    "The file's format could not be identified, so it was not saved. " +
+    "This usually means Brightspace returned an error page instead of the file.",
+  badFilename:
+    "The name Brightspace gave this file cannot be used on disk. " +
+    "Pass customFilename to choose one yourself.",
+  pathTraversal:
+    "The name Brightspace gave this file pointed outside the download " +
+    "directory and was refused. Pass customFilename to choose one yourself.",
+};
+
+/**
  * Sanitize errors for user-friendly messages
  *
  * SECURITY: Never include stack traces, raw API responses, or token values
@@ -113,6 +142,18 @@ export function sanitizeError(error: unknown): CallToolResult {
   }
 
   // Map to user-friendly messages
+  // Without this every validation failure lands in the generic fallback, which
+  // is how a .doc download reported nothing more than "unexpected error".
+  if (error instanceof DownloadError) {
+    const detail =
+      error.detail && isSafeDetail(error.detail)
+        ? ` (detected type: ${error.detail})`
+        : "";
+    return errorResponse(
+      `Could not save the file.${detail} ${DOWNLOAD_FAILURE_GUIDANCE[error.kind]}`
+    );
+  }
+
   if (error instanceof ApiError) {
     if (error.status === 404) {
       return errorResponse(

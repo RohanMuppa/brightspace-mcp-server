@@ -91,7 +91,8 @@ export async function secureDownload(options: {
   log("DEBUG", `secureDownload: file size ${size} bytes (within limit)`);
 
   // Validate file type via magic bytes
-  const { mime } = await validateFileType(data, allowedTypes);
+  // The filename decides which legacy Office format a CFB container is.
+  const { mime } = await validateFileType(data, allowedTypes, filename);
   log("DEBUG", `secureDownload: file type validated as ${mime}`);
 
   // Validate download path (prevent path traversal)
