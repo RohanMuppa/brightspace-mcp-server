@@ -11,6 +11,8 @@ import { SunySSOFlow, isSunyBrightspace } from "./suny-sso.js";
 import { BrowserAuthError } from "../utils/errors.js";
 import { AUTH_COMMAND } from "../utils/commands.js";
 
+export type RequestMfaCode = () => Promise<string>;
+
 export class UnsupportedAuthenticationError extends BrowserAuthError {
   readonly code = "AUTH_UNSUPPORTED";
   constructor(message: string, cause?: Error) {
@@ -45,8 +47,14 @@ export interface SSOFlow {
  * else uses the default flow, which already covers the common Shibboleth,
  * CAS, and Microsoft Entra forms.
  */
-export function createSSOFlow(config: AppConfig): SSOFlow {
-  const credentials = { username: config.username, password: config.password, baseUrl: config.baseUrl };
+export function createSSOFlow(config: AppConfig, requestMfaCode?: RequestMfaCode): SSOFlow {
+  const credentials = {
+    username: config.username,
+    password: config.password,
+    baseUrl: config.baseUrl,
+    headless: config.headless,
+    requestMfaCode,
+  };
 
   if (isSunyBrightspace(config.baseUrl)) {
     return new SunySSOFlow({ ...credentials, campus: config.campus });

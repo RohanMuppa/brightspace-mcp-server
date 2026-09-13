@@ -50,7 +50,7 @@ you're at and skips SUNY's campus picker when you sign in:
 npx -y brightspace-mcp-server@latest setup --suny
 ```
 
-The wizard saves your password in the native credential store and runs login in a headless browser. At Purdue, approve Microsoft Authenticator using the number printed in the terminal. No browser window opens. The wizard can configure Claude Desktop and Cursor. Restart your AI client when it finishes.
+The wizard saves your password in the native credential store and asks how you complete MFA. Authentication can wait for approval or number matching, prompt in the terminal for a code from Google Authenticator or another app, or open a visible browser for other interactive methods. The wizard can configure Claude Desktop and Cursor. Restart your AI client when it finishes.
 
 Any other D2L school: run `setup` without a flag and paste your Brightspace URL (for example `https://yourschool.brightspace.com`).
 
@@ -71,17 +71,17 @@ You still need to run `npx -y brightspace-mcp-server@latest setup` first to save
 
 ## Session Expired?
 
-Returning the next day normally requires no action. The server renews short-lived API tokens over HTTPS using the saved Brightspace session. If that session ends, a headless browser restores your saved Microsoft session and tries silent SSO. If Microsoft requires sign-in, your saved credentials are entered automatically and you complete MFA on your phone.
+Returning the next day normally requires no action. The server renews short-lived API tokens over HTTPS using the saved Brightspace session. If that session ends, a browser restores your saved Microsoft session and tries silent SSO. Approval and code-based modes stay headless; when an automatic run needs a code, run the auth command below to enter it securely in the terminal.
 
 Your school's policy controls when MFA is required. There is no local 24-hour cutoff, and the server no longer discards browser state after one hour. A network outage preserves the saved session and returns a temporary error.
 
-If you miss an MFA request, automatic browser authentication pauses for five minutes before trying again. Existing tokens and HTTP token renewal still work. Browser-based SSO also pauses because Microsoft can send another phone prompt during a redirect, even without a password submission. Run this command in a terminal to retry immediately and see the MFA number:
+If you miss an MFA request, automatic browser authentication pauses for five minutes before trying again. Existing tokens and HTTP token renewal still work. Browser-based SSO also pauses because Microsoft can send another phone prompt during a redirect, even without a password submission. Run this command in a terminal to retry immediately, see a number match, or enter an authenticator code:
 
 ```bash
 npx -y brightspace-mcp-server@latest auth
 ```
 
-**MFA at Purdue** is Microsoft Authenticator number matching: enter the terminal-displayed number on your phone. The MCP also sends authentication progress as logging notifications to clients that display them. Some desktop clients hide server logs, so use the terminal command above if the number is not visible. Unsupported identity-provider pages require a supported sign-in handler; the server does not silently open a visible browser.
+**MFA at Purdue** commonly uses Microsoft Authenticator number matching: enter the terminal-displayed number on your phone. For Google Authenticator or another one-time-code app, rerun setup and choose option 2; choose option 3 only when the identity provider requires browser interaction. The MCP also sends authentication progress as logging notifications to clients that display them. Some desktop clients hide server logs, so use the terminal command above for interactive MFA.
 
 ## What You Can Ask About
 

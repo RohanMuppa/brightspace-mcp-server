@@ -8,6 +8,8 @@ import type { Locator, Page } from "playwright";
 import { BrowserAuthError } from "../utils/errors.js";
 import { log } from "../utils/logger.js";
 import { MfaApprovalError, UnsupportedAuthenticationError } from "./sso-flow.js";
+import type { RequestMfaCode } from "./sso-flow.js";
+import { AUTH_COMMAND } from "../utils/commands.js";
 
 const EMAIL_SELECTORS = ["input[type=email]", "input[name=loginfmt]"];
 const PASSWORD_SELECTORS = ["input[type=password]", "input[name=passwd]"];
@@ -22,6 +24,8 @@ const FIELD_POLL_MS = 250;
  * logged. Plain DOM text, no OCR.
  */
 const NUMBER_MATCH_SELECTOR = "#idRichContext_DisplaySign";
+const MFA_CODE_SELECTORS = ["#idTxtBx_SAOTCC_OTC", 'input[name="otc"]'];
+const MFA_CODE_SUBMIT_SELECTORS = ["#idSubmit_SAOTCC_Continue", "#idSIButton9"];
 
 /** How often to look for the number while waiting on MFA. */
 const NUMBER_MATCH_POLL_MS = 2000;
@@ -33,6 +37,8 @@ interface PurdueSSOConfig {
   username?: string;
   password?: string;
   baseUrl?: string;
+  headless?: boolean;
+  requestMfaCode?: RequestMfaCode;
 }
 
 /** Microsoft expects Purdue's full sign-in name, while setup also accepts a career account. */
@@ -193,6 +199,7 @@ export class PurdueSSOFlow {
     let announced: string | null = null;
     try {
       while (Date.now() < deadline) {
+        if (await this.submitMfaCode(page)) challenged = true;
         const number = await this.readNumberMatch(page);
         const challengeVisible = number !== null ||
           await page.locator("#idDiv_SAOTCAS_Title").first().isVisible().catch(() => false) ||
@@ -213,11 +220,39 @@ export class PurdueSSOFlow {
         await page.waitForTimeout(NUMBER_MATCH_POLL_MS);
       }
     } catch (error) {
+      if (error instanceof BrowserAuthError) throw error;
       if (challenged) throw new MfaApprovalError(error as Error);
       throw new UnsupportedAuthenticationError("Headless sign-in stopped before a supported MFA challenge completed.", error as Error);
     }
     if (challenged) throw new MfaApprovalError();
     throw new UnsupportedAuthenticationError("Sign-in did not reach a supported MFA challenge or Brightspace within 5 minutes.");
+  }
+
+  private async submitMfaCode(page: Page): Promise<boolean> {
+    const input = await this.firstVisible(page, MFA_CODE_SELECTORS);
+    if (!input) return false;
+    if (this.config.headless === false) return false;
+    if (!this.config.requestMfaCode) {
+      throw new UnsupportedAuthenticationError(
+        `This MFA method requires a code. Run \`${AUTH_COMMAND}\` in a terminal to enter it.`,
+      );
+    }
+    const code = await this.config.requestMfaCode();
+    if (!/^\d{6,8}$/.test(code)) throw new UnsupportedAuthenticationError("The MFA code must contain 6-8 digits.");
+    await input.fill(code);
+    const submit = await this.firstVisible(page, MFA_CODE_SUBMIT_SELECTORS);
+    if (submit) await submit.click();
+    else await input.press("Enter");
+    log("INFO", "Authenticator code submitted");
+    return true;
+  }
+
+  private async firstVisible(page: Page, selectors: readonly string[]): Promise<Locator | null> {
+    for (const selector of selectors) {
+      const target = page.locator(selector).first();
+      if (await target.isVisible().catch(() => false)) return target;
+    }
+    return null;
   }
 
   /** The login shell also exposes D2L.LP, so verify origin and home as well. */

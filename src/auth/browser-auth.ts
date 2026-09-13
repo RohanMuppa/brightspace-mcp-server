@@ -12,6 +12,7 @@ import { BrowserAuthError } from "../utils/errors.js";
 import { log } from "../utils/logger.js";
 import { createSSOFlow, UnsupportedAuthenticationError, MfaApprovalError } from "./sso-flow.js";
 import type { SSOFlow } from "./sso-flow.js";
+import type { RequestMfaCode } from "./sso-flow.js";
 import { BrowserStateStore } from "./browser-state-store.js";
 import { acquireProcessLock } from "./auth-lock.js";
 import { AuthCooldown } from "./auth-cooldown.js";
@@ -51,9 +52,9 @@ export class BrowserAuth {
   private readonly stateStore: BrowserStateStore;
   private readonly cooldown: AuthCooldown;
 
-  constructor(config: AppConfig) {
+  constructor(config: AppConfig, requestMfaCode?: RequestMfaCode) {
     this.config = config;
-    this.ssoFlow = createSSOFlow(config);
+    this.ssoFlow = createSSOFlow(config, requestMfaCode);
     this.stateStore = new BrowserStateStore(config.sessionDir);
     this.cooldown = new AuthCooldown(config.sessionDir);
   }
@@ -106,7 +107,7 @@ export class BrowserAuth {
       if (BrowserAuth.isWSLOrDocker()) args.push("--no-sandbox", "--disable-setuid-sandbox");
       // Use Playwright's own timeout, which cleans up an unsuccessful launch.
       try {
-        browser = await chromium.launch({ headless: true, timeout: 60000, args });
+        browser = await chromium.launch({ headless: this.config.headless, timeout: 60000, args });
       } catch (launchError) {
         // Keep the remedy attached to the failure. Without this the hint is
         // lost when the auth runner flattens errors into "Authentication failed".
@@ -150,7 +151,7 @@ export class BrowserAuth {
       }
       if (!token) throw new BrowserAuthError("Brightspace did not provide a usable API token. Saved SSO cookies have been preserved.", "token_extraction");
       if (interrupted) throw new BrowserAuthError("Authentication interrupted", "interrupted");
-      log("INFO", "Headless authentication complete");
+      log("INFO", "Browser authentication complete");
       return { ...token, ...material, tenantOrigin: new URL(this.config.baseUrl).origin };
     } finally {
       process.removeListener("SIGINT", closeOnSignal);

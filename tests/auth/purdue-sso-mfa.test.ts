@@ -1,12 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PurdueSSOFlow } from "../../src/auth/purdue-sso.js";
 import { MfaApprovalError, UnsupportedAuthenticationError } from "../../src/auth/sso-flow.js";
+import { AUTH_COMMAND } from "../../src/utils/commands.js";
 
 const BASE_URL = "https://purdue.brightspace.com";
 const SIGN_SELECTOR = "#idRichContext_DisplaySign";
 
 interface PollState {
   number?: string;
+  code?: boolean;
   challenge?: boolean;
   kmsi?: boolean;
   url?: string;
@@ -27,16 +29,22 @@ function captureWarnings() {
 function makeMfaPage(states: PollState[]) {
   let poll = 0;
   const yes = vi.fn(async () => {});
+  const fill = vi.fn(async () => {});
+  const press = vi.fn(async () => {});
   const current = () => states[Math.min(poll, states.length - 1)] ?? {};
   const locatorTarget = (selector: string) => ({
     isVisible: async () => {
       if (selector === SIGN_SELECTOR) return current().number !== undefined;
-      if (selector === "#idDiv_SAOTCAS_Title" || selector === "#idDiv_SAOTCC_Title") return Boolean(current().challenge);
+      if (selector === "#idTxtBx_SAOTCC_OTC" || selector === 'input[name="otc"]') return Boolean(current().code);
+      if (selector === "#idSubmit_SAOTCC_Continue") return Boolean(current().code);
+      if (selector === "#idDiv_SAOTCAS_Title" || selector === "#idDiv_SAOTCC_Title") return Boolean(current().challenge || current().code);
       if (selector === "#KmsiCheckboxField" || selector === "#idSIButton9") return Boolean(current().kmsi);
       return false;
     },
     textContent: async () => selector === SIGN_SELECTOR ? current().number ?? null : null,
     click: yes,
+    fill,
+    press,
   });
   const page = {
     url: vi.fn(() => current().url ?? "https://login.microsoftonline.com/common/SAS/BeginAuth"),
@@ -51,7 +59,7 @@ function makeMfaPage(states: PollState[]) {
       vi.advanceTimersByTime(milliseconds);
     }),
   };
-  return { page, yes, poll: () => poll };
+  return { page, yes, fill, press, poll: () => poll };
 }
 
 describe("Purdue MFA loop ported from Brightspace Bar", () => {
@@ -64,8 +72,8 @@ describe("Purdue MFA loop ported from Brightspace Bar", () => {
     vi.restoreAllMocks();
   });
 
-  const handleMFA = (page: unknown): Promise<void> =>
-    (new PurdueSSOFlow({ baseUrl: BASE_URL }) as any).handleMFA(page);
+  const handleMFA = (page: unknown, requestMfaCode?: () => Promise<string>): Promise<void> =>
+    (new PurdueSSOFlow({ baseUrl: BASE_URL, requestMfaCode }) as any).handleMFA(page);
 
   it("logs a number once per change and stops only at verified Brightspace home", async () => {
     const lines = captureWarnings();
@@ -89,6 +97,36 @@ describe("Purdue MFA loop ported from Brightspace Bar", () => {
     ]);
     await handleMFA(page);
     expect(yes).toHaveBeenCalledOnce();
+  });
+
+  it("submits an authenticator code without exposing it in logs", async () => {
+    const requestMfaCode = vi.fn(async () => "123456");
+    const { page, fill, yes } = makeMfaPage([
+      { code: true },
+      { url: `${BASE_URL}/d2l/home`, cookie: true, d2l: true },
+    ]);
+    await handleMFA(page, requestMfaCode);
+    expect(requestMfaCode).toHaveBeenCalledOnce();
+    expect(fill).toHaveBeenCalledWith("123456");
+    expect(yes).toHaveBeenCalledOnce();
+  });
+
+  it("directs non-interactive authentication to the CLI when a code is required", async () => {
+    const { page, poll } = makeMfaPage([{ code: true }]);
+    // Must be the pinned command. An untagged npx invocation runs whatever old
+    // global copy is on PATH, which is how a healthy server once sent someone
+    // into a stale build that could not sign in at all.
+    await expect(handleMFA(page)).rejects.toThrow(`Run \`${AUTH_COMMAND}\``);
+    expect(poll()).toBe(0);
+  });
+
+  it("leaves code entry to the user when the browser is visible", async () => {
+    const { page, fill } = makeMfaPage([
+      { code: true },
+      { url: `${BASE_URL}/d2l/home`, cookie: true, d2l: true },
+    ]);
+    await (new PurdueSSOFlow({ baseUrl: BASE_URL, headless: false }) as any).handleMFA(page);
+    expect(fill).not.toHaveBeenCalled();
   });
 
   it("rejects the login shell even when it has a cookie and D2L.LP", async () => {

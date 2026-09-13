@@ -4,6 +4,7 @@
 import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { createInterface } from "node:readline/promises";
 import dotenv from "dotenv";
 import { loadConfig } from "./utils/config.js";
 import { BrowserAuth, TokenManager } from "./auth/index.js";
@@ -16,6 +17,19 @@ import { detectSkew } from "./utils/install-sites.js";
 
 dotenv.config({ quiet: true });
 const pkg = JSON.parse(readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "package.json"), "utf8"));
+
+async function requestMfaCode(): Promise<string> {
+  const rl = createInterface({ input: process.stdin, output: process.stderr });
+  try {
+    while (true) {
+      const code = (await rl.question("Enter the code from your authenticator app: ")).replace(/\s/g, "");
+      if (/^\d{6,8}$/.test(code)) return code;
+      console.error("Enter the 6-8 digit code shown by your authenticator app.");
+    }
+  } finally {
+    rl.close();
+  }
+}
 
 async function main(): Promise<void> {
   const automatic = process.argv.includes("--automatic");
@@ -37,14 +51,17 @@ async function main(): Promise<void> {
   try {
     const config = await loadConfig();
     console.error(`\n=== Brightspace Authentication v${pkg.version} ===\n`);
-    console.error("Authentication runs headlessly. If Microsoft requests MFA, the number appears here.");
+    console.error(config.headless
+      ? "Authentication runs headlessly. MFA numbers and code prompts appear here."
+      : "Authentication opens a browser so you can complete MFA in the sign-in page.");
 
     const tokenManager = new TokenManager({
       sessionDir: config.sessionDir,
       baseUrl: config.baseUrl,
       tokenTtl: config.tokenTtl,
     });
-    await new BrowserAuth(config).authenticate({
+    const codePrompt = config.headless && !automatic && process.stdin.isTTY ? requestMfaCode : undefined;
+    await new BrowserAuth(config, codePrompt).authenticate({
       automatic,
       onAuthenticated: async (token) => {
         await tokenManager.setToken(token);

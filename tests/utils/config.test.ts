@@ -1,9 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as path from "node:path";
 
-const fake = vi.hoisted(() => ({ dotenv: vi.fn(), password: vi.fn(), migrate: vi.fn() }));
+const fake = vi.hoisted(() => ({
+  dotenv: vi.fn(), password: vi.fn(), migrate: vi.fn(),
+  store: null as Record<string, unknown> | null,
+}));
 vi.mock("dotenv", () => ({ default: { config: fake.dotenv } }));
-vi.mock("../../src/utils/config-store.js", () => ({ configStoreExists: () => false, loadConfigStore: vi.fn() }));
+vi.mock("../../src/utils/config-store.js", () => ({
+  configStoreExists: () => fake.store !== null,
+  loadConfigStore: () => fake.store,
+}));
 vi.mock("../../src/utils/secure-config.js", () => ({ resolveStoredPassword: fake.password }));
 vi.mock("../../src/auth/legacy-state.js", () => ({ migrateLegacyState: fake.migrate }));
 import { accountSessionDirectory, loadConfig } from "../../src/utils/config.js";
@@ -12,6 +18,7 @@ describe("resolved authentication configuration", () => {
   beforeEach(() => {
     vi.resetAllMocks();
     for (const key of Object.keys(process.env).filter(key => key.startsWith("D2L_"))) vi.stubEnv(key, undefined);
+    fake.store = null;
     fake.password.mockResolvedValue("native-password");
     fake.migrate.mockResolvedValue({ tokenState: "absent", browserState: "encrypted" });
   });
@@ -28,12 +35,17 @@ describe("resolved authentication configuration", () => {
     const config = await loadConfig();
     expect(config).toMatchObject({
       baseUrl: "https://school.example", username: "alice", password: "native-password",
-      sessionRoot: root, sessionDir: accountSessionDirectory(root, "https://school.example", "alice"), headless: true,
+      sessionRoot: root, sessionDir: accountSessionDirectory(root, "https://school.example", "alice"), headless: false,
     });
     expect(fake.dotenv).toHaveBeenCalledWith({ quiet: true });
     expect(fake.password).toHaveBeenCalledWith("https://school.example", "alice", null);
     expect(fake.migrate).toHaveBeenCalledWith(root);
     expect(config.legacyBrowserStateMigrated).toBe(true);
+  });
+
+  it("uses the setup MFA preference when no environment override is present", async () => {
+    fake.store = { baseUrl: "https://school.example", username: "alice", headless: false };
+    expect(await loadConfig()).toMatchObject({ headless: false });
   });
 
   it("rejects credential-bearing URLs before accessing native storage", async () => {
