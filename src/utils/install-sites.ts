@@ -25,9 +25,6 @@ import { PACKAGE_NAME, GLOBAL_INSTALL_COMMAND, AUTH_COMMAND } from "./commands.j
 /** Whole-scan budget. A stalled network mount on PATH must not hang startup. */
 const SCAN_BUDGET_MS = 2000;
 
-/** Most sites named in one notice before it turns into noise. */
-const MAX_REPORTED = 3;
-
 export interface InstallSite {
   kind: "global" | "npx-cache" | "self";
   /** The package directory, i.e. .../node_modules/brightspace-mcp-server */
@@ -169,22 +166,22 @@ export async function scanInstallSites(deps: InstallScanDeps = {}): Promise<Inst
     const isWin = platform === "win32";
     if (!isWin) {
       const shims = ["brightspace-auth", PACKAGE_NAME];
-      await Promise.allSettled(
-        (env.PATH ?? "").split(":").filter(Boolean).flatMap((entry) =>
-          shims.map(async (shim) => {
-            const binPath = join(entry, shim);
-            try {
-              const target = await realpath(binPath);
-              const marker = `${sep}node_modules${sep}${PACKAGE_NAME}${sep}`;
-              const idx = target.indexOf(marker);
-              if (idx === -1) return;
-              await record(target.slice(0, idx + marker.length - 1), "global", binPath);
-            } catch {
-              // No such shim here.
-            }
-          })
-        )
-      );
+      const pathEntries = (env.PATH ?? "").split(":").filter(Boolean);
+      await Promise.allSettled(shims.map(async (shim) => {
+        for (const entry of pathEntries) {
+          const binPath = join(entry, shim);
+          try {
+            const target = await realpath(binPath);
+            const marker = `${sep}node_modules${sep}${PACKAGE_NAME}${sep}`;
+            const idx = target.indexOf(marker);
+            if (idx === -1) continue;
+            await record(target.slice(0, idx + marker.length - 1), "global", binPath);
+            return;
+          } catch {
+            // No such shim here.
+          }
+        }
+      }));
     }
 
     // npx cache entries.
@@ -229,13 +226,12 @@ function shorten(path: string, home: string): string {
 }
 
 /**
- * A warning about copies that disagree with the running version, or null when
- * there is nothing worth saying.
+ * A warning about shell-resolved copies that disagree with the running
+ * version, or null when there is nothing worth saying.
  *
- * Deliberately quiet: it only speaks when another copy exists at a *different*
- * version, since a machine with several copies all in step is fine. Copies a
- * shell command actually resolves to are reported first, because those are the
- * ones a user can trip over.
+ * Dormant installs under inactive Node versions and old npx cache entries are
+ * harmless. Only report a mismatch when a command the user can type currently
+ * resolves to that copy.
  */
 export function formatSkewNotice(
   sites: InstallSite[],
@@ -243,30 +239,22 @@ export function formatSkewNotice(
   home: string = homedir()
 ): string | null {
   const mismatched = sites
-    .filter((s) => !s.isSelf && s.version !== null && s.version !== runningVersion)
-    .sort((a, b) => Number(Boolean(b.binPath)) - Number(Boolean(a.binPath)));
+    .filter((s) =>
+      !s.isSelf &&
+      s.binPath !== undefined &&
+      s.version !== null &&
+      s.version !== runningVersion
+    );
 
   if (mismatched.length === 0) return null;
 
-  const shown = mismatched.slice(0, MAX_REPORTED);
-  const lines = shown.map((s) => {
-    const where = s.binPath
-      ? `\`${shorten(s.binPath, home)}\` resolves to v${s.version}`
-      : `v${s.version} at ${shorten(s.dir, home)}`;
-    return `  - ${where}`;
-  });
-
-  const extra = mismatched.length - shown.length;
-  if (extra > 0) lines.push(`  - and ${extra} more`);
-
-  const resolvable = shown.some((s) => s.binPath);
-  const advice = resolvable
-    ? `An out-of-date auth CLI fails during sign-in. Run \`${GLOBAL_INSTALL_COMMAND}\`, or use \`${AUTH_COMMAND}\`.`
-    : `Run \`${GLOBAL_INSTALL_COMMAND}\` to bring them in line.`;
+  const lines = mismatched.map(
+    (s) => `  - \`${shorten(s.binPath!, home)}\` resolves to v${s.version}`
+  );
 
   return [
     `Version mismatch. This process is v${runningVersion}, but other copies of ${PACKAGE_NAME} are installed:`,
     ...lines,
-    advice,
+    `An out-of-date auth CLI fails during sign-in. Run \`${GLOBAL_INSTALL_COMMAND}\`, or use \`${AUTH_COMMAND}\`.`,
   ].join("\n");
 }

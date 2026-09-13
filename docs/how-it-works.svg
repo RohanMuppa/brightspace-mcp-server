@@ -45,7 +45,7 @@
 
   <!-- Skill pills row 1 -->
   <rect x="140" y="222" width="100" height="30" rx="15" fill="#f0fff4" stroke="#c6f6d5" stroke-width="1"/>
-  <text x="190" y="242" text-anchor="middle" fill="#22543d" font-size="11" font-weight="500">Check Login</text>
+  <text x="190" y="242" text-anchor="middle" fill="#22543d" font-size="11" font-weight="500">Auto Sign-in</text>
 
   <rect x="248" y="222" width="100" height="30" rx="15" fill="#f0fff4" stroke="#c6f6d5" stroke-width="1"/>
   <text x="298" y="242" text-anchor="middle" fill="#22543d" font-size="11" font-weight="500">My Courses</text>
@@ -79,7 +79,7 @@
   <text x="660" y="282" text-anchor="middle" fill="#22543d" font-size="11" font-weight="500">Class Emails</text>
 
   <!-- Subtitle row -->
-  <text x="480" y="322" text-anchor="middle" fill="#718096" font-size="10">API token renewal over HTTPS; headless authentication only when needed</text>
+  <text x="480" y="322" text-anchor="middle" fill="#718096" font-size="10">API token renewal over HTTPS; browser authentication only when needed</text>
 
   <!-- Arrow 2 -->
   <line x1="480" y1="335" x2="480" y2="388" stroke="#cbd5e0" stroke-width="2"/>
@@ -124,8 +124,8 @@
   <rect x="14" y="224" width="88" height="12" fill="url(#loginGrad)"/>
   <text x="58" y="224" text-anchor="middle" fill="#fff" font-size="13" font-weight="700">Login</text>
 
-  <text x="58" y="280" text-anchor="middle" fill="#4a5568" font-size="11" font-weight="500">Headless</text>
-  <text x="58" y="296" text-anchor="middle" fill="#4a5568" font-size="11" font-weight="500">silent SSO</text>
+  <text x="58" y="280" text-anchor="middle" fill="#4a5568" font-size="11" font-weight="500">Hidden or</text>
+  <text x="58" y="296" text-anchor="middle" fill="#4a5568" font-size="11" font-weight="500">visible browser</text>
   <line x1="58" y1="304" x2="58" y2="326" stroke="#e2e8f0" stroke-width="1.5"/>
   <polygon points="53,321 58,331 63,321" fill="#e2e8f0"/>
 
@@ -134,7 +134,7 @@
   <line x1="58" y1="374" x2="58" y2="396" stroke="#e2e8f0" stroke-width="1.5"/>
   <polygon points="53,391 58,401 63,391" fill="#e2e8f0"/>
 
-  <text x="58" y="420" text-anchor="middle" fill="#4a5568" font-size="11" font-weight="500">Terminal MFA</text>
+  <text x="58" y="420" text-anchor="middle" fill="#4a5568" font-size="11" font-weight="500">MFA prompts</text>
   <line x1="58" y1="428" x2="58" y2="450" stroke="#e2e8f0" stroke-width="1.5"/>
   <polygon points="53,445 58,455 63,445" fill="#e2e8f0"/>
 

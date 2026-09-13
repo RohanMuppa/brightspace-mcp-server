@@ -128,6 +128,12 @@ describe("headless credential login and cooldown", () => {
     expect((auth as any).ssoFlow.login).toHaveBeenCalledOnce();
   });
 
+  it("uses mode-neutral taxonomy for unsupported SSO", () => {
+    const error = new UnsupportedAuthenticationError("unsupported");
+    expect(error.step).toBe("sso_login");
+    expect(error.message).not.toMatch(/headless/i);
+  });
+
   it("blocks every automatic browser attempt during cooldown before loading or launching", async () => {
     await new AuthCooldown(directory).recordMfaFailure();
     await expect(auth.authenticate({ automatic: true })).rejects.toBeInstanceOf(AuthenticationCooldownError);
@@ -148,9 +154,11 @@ describe("headless credential login and cooldown", () => {
     await expect(new AuthCooldown(directory).assertAllowed()).resolves.toBeUndefined();
   });
 
-  it("rejects incomplete saved credentials without waiting for manual input", async () => {
+  it("keeps visible mode available when saved credentials are incomplete", async () => {
     (auth as any).ssoFlow.hasCredentials = () => false;
-    await expect(auth.authenticate()).rejects.toBeInstanceOf(UnsupportedAuthenticationError);
+    vi.spyOn(auth as any, "waitForVisibleLogin").mockResolvedValue(undefined);
+    await expect(auth.authenticate()).resolves.toEqual(token);
+    expect((auth as any).waitForVisibleLogin).toHaveBeenCalledOnce();
     expect((auth as any).ssoFlow.login).not.toHaveBeenCalled();
   });
 
