@@ -77,6 +77,122 @@ function makeQuizClient(quizzes: any[], onAttempts: (quizId: number) => unknown)
 const quizzesOf = (assignments: any[]) => assignments.filter((a) => a.type === "quiz");
 
 describe("fetchCourseAssignments quiz mapping", () => {
+  it("recovers a visible quiz omitted from the quiz listing via the content table of contents", async () => {
+    const requested: string[] = [];
+    const apiClient = {
+      le: (orgUnitId: number, p: string) => `/d2l/api/le/1.0/${orgUnitId}${p}`,
+      get: vi.fn(async (path: string) => {
+        requested.push(path);
+        if (path.endsWith("/dropbox/folders/")) return [];
+        if (path.endsWith("/quizzes/")) throw forbidden();
+        if (path.endsWith("/grades/")) return [];
+        if (path.endsWith("/content/toc")) {
+          return {
+            Modules: [{
+              ModuleId: 10,
+              Title: "Week 1",
+              Modules: [],
+              Topics: [{
+                TopicId: 21916707,
+                Title: "VNOS #1",
+                ActivityType: 4,
+                ToolItemId: 1408513,
+                IsHidden: false,
+                IsBroken: false,
+                IsExempt: false,
+              }],
+            }],
+          };
+        }
+        if (path.endsWith("/quizzes/1408513")) {
+          return {
+            QuizId: 1408513,
+            Name: "VNOS #1",
+            IsActive: true,
+            DueDate: "2026-09-14T03:59:00.000Z",
+          };
+        }
+        if (path.endsWith("/quizzes/1408513/attempts/")) throw forbidden();
+        throw notFound();
+      }),
+    };
+
+    const quizzes = quizzesOf(await fetchCourseAssignments(apiClient as any, COURSE_ID, BASE));
+
+    expect(quizzes).toHaveLength(1);
+    expect(quizzes[0]).toMatchObject({
+      id: 1408513,
+      name: "VNOS #1",
+      dueDate: "2026-09-14T03:59:00.000Z",
+    });
+    expect(requested).toContain(`/d2l/api/le/1.0/${COURSE_ID}/quizzes/1408513`);
+  });
+
+  it("does not refetch a content-linked quiz already present in the quiz listing", async () => {
+    const { apiClient, requested } = makeQuizClient(
+      [{ QuizId: 1408513, Name: "VNOS #1", IsActive: true }],
+      () => {
+        throw forbidden();
+      }
+    );
+    apiClient.get.mockImplementation(async (path: string) => {
+      requested.push(path);
+      if (path.endsWith("/quizzes/")) {
+        return { Objects: [{ QuizId: 1408513, Name: "VNOS #1", IsActive: true }] };
+      }
+      if (path.endsWith("/content/toc")) {
+        return {
+          Modules: [{
+            Topics: [{ TopicId: 21916707, Title: "VNOS #1", ActivityType: 4, ToolItemId: 1408513 }],
+          }],
+        };
+      }
+      if (path.includes("/attempts/")) throw forbidden();
+      throw notFound();
+    });
+
+    const quizzes = quizzesOf(await fetchCourseAssignments(apiClient as any, COURSE_ID));
+
+    expect(quizzes).toHaveLength(1);
+    expect(requested).not.toContain(`/d2l/api/le/1.0/${COURSE_ID}/quizzes/1408513`);
+  });
+
+  it("uses visible content metadata when the individual quiz route is unavailable", async () => {
+    const apiClient = {
+      le: (orgUnitId: number, p: string) => `/d2l/api/le/1.0/${orgUnitId}${p}`,
+      get: vi.fn(async (path: string) => {
+        if (path.endsWith("/dropbox/folders/")) return [];
+        if (path.endsWith("/quizzes/")) return { Objects: [] };
+        if (path.endsWith("/grades/")) return [];
+        if (path.endsWith("/content/toc")) {
+          return {
+            Modules: [{
+              Topics: [{ TopicId: 21916707, Title: "VNOS #1", ActivityType: 4, ToolItemId: 1408513 }],
+            }],
+          };
+        }
+        if (path.endsWith("/quizzes/1408513")) throw forbidden();
+        if (path.endsWith("/content/topics/21916707")) {
+          return {
+            TopicId: 21916707,
+            Title: "VNOS #1",
+            DueDate: "2026-09-14T03:59:00.000Z",
+          };
+        }
+        throw notFound();
+      }),
+    };
+
+    const [quiz] = quizzesOf(await fetchCourseAssignments(apiClient as any, COURSE_ID));
+
+    expect(quiz).toMatchObject({
+      id: 1408513,
+      name: "VNOS #1",
+      dueDate: "2026-09-14T03:59:00.000Z",
+      attemptsAvailable: false,
+    });
+  });
+
   it("reads instructions from the nested Description the tenant sends", async () => {
     const { apiClient } = makeQuizClient(
       [

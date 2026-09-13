@@ -100,6 +100,8 @@ npx -y brightspace-mcp-server@latest auth
 | Discussions | "What are people saying in the final project thread?" · "Summarize the latest discussion posts" |
 | Planning | "Build me a study schedule based on my upcoming due dates" · "Which class needs the most attention right now?" |
 
+Assignment results cross-check the visible course table of contents and gradebook. This catches quizzes and other graded work that some Brightspace courses omit from their normal assignment or quiz listings.
+
 ## Security
 
 - Your school URL and username live in `~/.brightspace-mcp/config.json`. Your password lives in the native credential store. macOS and Windows use `@napi-rs/keyring`; Linux uses `secret-tool` directly to require Secret Service without a temporary kernel-key fallback. Linux secrets travel through stdin, never command-line arguments.

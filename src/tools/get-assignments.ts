@@ -94,6 +94,7 @@ interface QuizReadData {
   TimeLimit?: QuizTimeLimit | null;
   SubmissionGracePeriod?: number | null;
   Password?: string | null;
+  ContentMetadataOnly?: boolean;
 }
 
 /** The display HTML of a quiz rich-text field, nested shape or flat. */
@@ -142,12 +143,112 @@ interface GradeObject {
   AssociatedTool: { ToolId: number; ToolItemId: number } | null;
 }
 
+interface ContentQuizTopic {
+  TopicId: number;
+  Title: string;
+  TypeIdentifier?: string;
+  Url?: string;
+  ActivityId?: string | null;
+  ToolItemId?: number | null;
+  ActivityType?: number;
+  IsHidden?: boolean;
+  IsBroken?: boolean;
+  IsExempt?: boolean;
+  StartDateTime?: string | null;
+  EndDateTime?: string | null;
+  StartDate?: string | null;
+  EndDate?: string | null;
+  DueDate?: string | null;
+  Description?: QuizRichText | null;
+}
+
+interface ContentModule {
+  Modules?: ContentModule[];
+  Topics?: ContentQuizTopic[];
+}
+
+interface ContentTableOfContents {
+  Modules?: ContentModule[];
+}
+
 /**
  * The grade object types a student is actually scored on: 1 numeric,
  * 2 passfail, 3 selectbox, 4 text. The rest (category, calculated, formula,
  * final) are the gradebook's own arithmetic, not work anybody owes.
  */
 const STUDENT_SCORED = new Set([1, 2, 3, 4]);
+
+/** Quiz topics visible in course content but absent from the quiz listing. */
+function missingContentQuizTopics(raw: unknown, listedIds: Set<number>): ContentQuizTopic[] {
+  if (!raw || typeof raw !== "object") return [];
+
+  const found = new Map<number, ContentQuizTopic>();
+  const visit = (modules: ContentModule[] | undefined): void => {
+    if (!Array.isArray(modules)) return;
+    for (const module of modules) {
+      for (const topic of module.Topics ?? []) {
+        const isQuiz = topic.ActivityType === 4
+          || topic.TypeIdentifier?.toLowerCase() === "quiz"
+          || /(?:[?&]|&amp;)type=quiz(?:[&#]|$)/i.test(topic.Url ?? "");
+        if (!isQuiz || topic.IsHidden || topic.IsBroken || topic.IsExempt) continue;
+
+        const activityId = topic.ToolItemId ?? Number(topic.ActivityId);
+        if (!Number.isSafeInteger(activityId) || activityId <= 0 || listedIds.has(activityId)) continue;
+        if (!found.has(activityId)) found.set(activityId, topic);
+      }
+      visit(module.Modules);
+    }
+  };
+
+  visit((raw as ContentTableOfContents).Modules);
+  return [...found.values()];
+}
+
+/**
+ * Resolve quizzes that D2L's list route omitted but the student's visible
+ * content table of contents still references. The individual quiz route gives
+ * us the normal full shape. If that route is also unavailable, the content
+ * topic still provides enough information to avoid silently hiding the work.
+ */
+async function recoverContentQuizzes(
+  apiClient: D2LApiClient,
+  courseId: number,
+  toc: unknown,
+  listedIds: Set<number>
+): Promise<QuizReadData[]> {
+  return Promise.all(missingContentQuizTopics(toc, listedIds).map(async (topic) => {
+    const quizId = topic.ToolItemId ?? Number(topic.ActivityId);
+    try {
+      return await apiClient.get<QuizReadData>(apiClient.le(courseId, `/quizzes/${quizId}`), {
+        ttl: DEFAULT_CACHE_TTLS.assignments,
+      });
+    } catch (error) {
+      log("DEBUG", `Failed to fetch content-linked quiz ${quizId}: using content metadata`, error);
+    }
+
+    let detail = topic;
+    try {
+      detail = await apiClient.get<ContentQuizTopic>(
+        apiClient.le(courseId, `/content/topics/${topic.TopicId}`),
+        { ttl: DEFAULT_CACHE_TTLS.courseContent }
+      );
+    } catch (error) {
+      log("DEBUG", `Failed to fetch content topic ${topic.TopicId}: using table-of-contents metadata`, error);
+    }
+
+    return {
+      QuizId: quizId,
+      Name: detail.Title || topic.Title,
+      Description: detail.Description ?? null,
+      StartDate: detail.StartDate ?? detail.StartDateTime ?? topic.StartDateTime ?? null,
+      EndDate: detail.EndDate ?? detail.EndDateTime ?? topic.EndDateTime ?? null,
+      DueDate: detail.DueDate ?? null,
+      IsActive: true,
+      AttemptsAllowed: null,
+      ContentMetadataOnly: true,
+    };
+  }));
+}
 
 /**
  * Fetch assignments (dropbox + quizzes) for a single course
@@ -165,7 +266,7 @@ export async function fetchCourseAssignments(
   // gradebook is fetched alongside them but read last: a heads-up row is a
   // column that nothing the other two returned matched, so the comparison
   // cannot be made until they have answered.
-  const [dropboxResult, quizResult, gradebookResult] = await Promise.allSettled([
+  const [dropboxResult, quizResult, gradebookResult, contentResult] = await Promise.allSettled([
     apiClient.get<{ Objects: DropboxFolder[] } | DropboxFolder[]>(
       apiClient.le(courseId, "/dropbox/folders/"),
       { ttl: DEFAULT_CACHE_TTLS.assignments }
@@ -176,6 +277,9 @@ export async function fetchCourseAssignments(
     ),
     apiClient.get<GradeObject[]>(apiClient.le(courseId, "/grades/"), {
       ttl: DEFAULT_CACHE_TTLS.assignments,
+    }),
+    apiClient.get<ContentTableOfContents>(apiClient.le(courseId, "/content/toc"), {
+      ttl: DEFAULT_CACHE_TTLS.courseContent,
     }),
   ]);
 
@@ -269,13 +373,30 @@ export async function fetchCourseAssignments(
     log("DEBUG", `Failed to fetch dropbox folders for course ${courseId}`, dropboxResult.reason);
   }
 
-  // Process Quizzes
+  // Process quizzes. Content discovery remains useful when the list route is
+  // forbidden or unavailable, so a failed list starts from an empty set.
+  let quizzes: QuizReadData[] = [];
   if (quizResult.status === "fulfilled") {
     const quizResponse = quizResult.value;
     // D2L quizzes API returns paged result { Objects: [...] } or a plain array
-    const quizzes: QuizReadData[] = Array.isArray(quizResponse)
+    quizzes = Array.isArray(quizResponse)
       ? quizResponse
       : (quizResponse as any)?.Objects ?? [];
+  } else {
+    log("DEBUG", `Failed to fetch quizzes for course ${courseId}`, quizResult.reason);
+  }
+
+  if (contentResult.status === "fulfilled") {
+    const listedIds = new Set(quizzes.map((quiz) => quiz.QuizId));
+    quizzes.push(...await recoverContentQuizzes(
+      apiClient,
+      courseId,
+      contentResult.value,
+      listedIds
+    ));
+  } else {
+    log("DEBUG", `Failed to fetch course content for quiz discovery in course ${courseId}`, contentResult.reason);
+  }
 
     // Students on this tenant get 403 from /quizzes/{id}/attempts/. Once the
     // first quiz of a course proves that, the remaining quizzes are not asked:
@@ -289,7 +410,7 @@ export async function fetchCourseAssignments(
       // Fetch quiz attempts. null means "not measured", which is different
       // from an empty list, and the output says which one it was.
       let attempts: QuizAttemptData[] | null = null;
-      if (!attemptsForbidden) {
+      if (!attemptsForbidden && !quiz.ContentMetadataOnly) {
         try {
           const attemptsRaw = await apiClient.get<{ Objects: QuizAttemptData[] } | QuizAttemptData[]>(
             apiClient.le(courseId, `/quizzes/${quiz.QuizId}/attempts/`),
@@ -364,10 +485,6 @@ export async function fetchCourseAssignments(
       };
 
       assignments.push(quizAssignment);
-    }
-  } else {
-    // Log quiz fetch failure but don't throw
-    log("DEBUG", `Failed to fetch quizzes for course ${courseId}`, quizResult.reason);
   }
 
   // Process the gradebook last, once the fetched items are known.

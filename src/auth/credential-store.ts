@@ -186,7 +186,16 @@ export async function getSessionEncryptionKey(sessionDir: string, backend: Crede
   const canonicalDir = await fs.realpath(sessionDir);
   const account = `session-key:${createHash("sha256").update(canonicalDir).digest("hex")}`;
   const existing = await backend.getPassword(SERVICE, account);
-  if (existing !== null) return decodeKey(existing);
+  if (existing !== null) {
+    try {
+      return decodeKey(existing);
+    } catch (error) {
+      // Another process may still be finishing the first native-store write.
+      // Recheck malformed optimistic reads after acquiring the init lock. A
+      // persistently invalid value will fail at the guarded read below.
+      if (!(error instanceof NativeCredentialStoreError)) throw error;
+    }
+  }
   if (!create) {
     throw new NativeCredentialStoreError("The session encryption key is missing from the native credential store. Existing encrypted session data was preserved. Restore the native credential store entry before retrying.");
   }
