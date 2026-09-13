@@ -57,6 +57,20 @@ describe("native session key stability", () => {
     expect(backend.writes).toBe(1);
   });
 
+  it("rechecks a transient partial key read inside the initialization lock", async () => {
+    const key = "ab".repeat(32);
+    const transientBackend = {
+      getPassword: vi.fn()
+        .mockResolvedValueOnce("partially-written")
+        .mockResolvedValue(key),
+      setPassword: vi.fn(async () => {}),
+      deletePassword: vi.fn(async () => {}),
+    };
+
+    expect(await getSessionEncryptionKey(dir, transientBackend)).toEqual(Buffer.from(key, "hex"));
+    expect(transientBackend.setPassword).not.toHaveBeenCalled();
+  });
+
   it("serializes master key creation across independent Node processes", async () => {
     const codeDir = path.join(dir, "worker-code");
     const sessionDir = path.join(dir, "session");
