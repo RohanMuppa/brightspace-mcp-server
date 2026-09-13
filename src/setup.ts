@@ -388,16 +388,19 @@ async function main(): Promise<void> {
     console.log(dim("  MFA: You will be prompted to approve the sign-in on your phone during auth."));
   }
   console.log("");
+  // Only two outcomes exist: a hidden browser or a visible one. Which kind of
+  // MFA you have is detected at sign-in time, so offering "approve a prompt"
+  // and "type a code" as separate choices would be a distinction the code does
+  // not make, and picking between them would change nothing on disk.
   console.log("  How do you complete MFA?");
-  console.log("    1. Approve a notification or enter a displayed number on another device");
-  console.log("    2. Enter a code from an authenticator app in this terminal");
-  console.log("    3. Complete MFA in a visible browser window");
+  console.log("    1. On your phone, or by typing a code here (recommended)");
+  console.log("    2. In a visible browser window");
   let mfaChoice = "";
-  while (!/^[123]$/.test(mfaChoice)) {
-    mfaChoice = await ask(rl2, "  Choose 1, 2, or 3 [1]: ") || "1";
-    if (!/^[123]$/.test(mfaChoice)) console.log(yellow("  Please enter 1, 2, or 3."));
+  while (!/^[12]$/.test(mfaChoice)) {
+    mfaChoice = await ask(rl2, "  Choose 1 or 2 [1]: ") || "1";
+    if (!/^[12]$/.test(mfaChoice)) console.log(yellow("  Please enter 1 or 2."));
   }
-  const headless = mfaChoice !== "3";
+  const headless = mfaChoice !== "2";
   console.log(dim(headless
     ? "  Authentication will run without a browser window."
     : "  A browser window will open when authentication is needed."));

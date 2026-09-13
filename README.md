@@ -81,7 +81,7 @@ If you miss an MFA request, automatic browser authentication pauses for five min
 npx -y brightspace-mcp-server@latest auth
 ```
 
-**MFA at Purdue** commonly uses Microsoft Authenticator number matching: enter the terminal-displayed number on your phone. For Google Authenticator or another one-time-code app, rerun setup and choose option 2; choose option 3 only when the identity provider requires browser interaction. The MCP also sends authentication progress as logging notifications to clients that display them. Some desktop clients hide server logs, so use the terminal command above for interactive MFA.
+**MFA at Purdue** commonly uses Microsoft Authenticator number matching: enter the terminal-displayed number on your phone. Google Authenticator and other one-time-code apps work too, with no setting to change: run the auth command above in a terminal and it prompts for the code when your provider asks for one. Pick the visible-browser option during setup only if your identity provider needs interaction the server cannot drive. The MCP also sends authentication progress as logging notifications to clients that display them. Some desktop clients hide server logs, so use the terminal command above for interactive MFA.
 
 ## What You Can Ask About
 

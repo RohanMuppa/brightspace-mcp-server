@@ -120,6 +120,21 @@ describe("Purdue MFA loop ported from Brightspace Bar", () => {
     expect(poll()).toBe(0);
   });
 
+  it("asks for a code once even if the field lingers while Microsoft validates", async () => {
+    // Microsoft often leaves the OTC input on screen for a few seconds after
+    // submit. The poll must not read that as "ask them again".
+    const requestMfaCode = vi.fn(async () => "123456");
+    const { page, fill } = makeMfaPage([
+      { code: true },
+      { code: true },
+      { code: true },
+      { url: `${BASE_URL}/d2l/home`, cookie: true, d2l: true },
+    ]);
+    await handleMFA(page, requestMfaCode);
+    expect(requestMfaCode).toHaveBeenCalledOnce();
+    expect(fill).toHaveBeenCalledOnce();
+  });
+
   it("leaves code entry to the user when the browser is visible", async () => {
     const { page, fill } = makeMfaPage([
       { code: true },

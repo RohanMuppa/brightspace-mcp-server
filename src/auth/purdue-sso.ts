@@ -50,6 +50,8 @@ function signInName(username: string, baseUrl?: string): string {
 export class PurdueSSOFlow {
   private config: PurdueSSOConfig;
   private accountHintSubmitted = false;
+  /** One authenticator code per login. See submitMfaCode. */
+  private mfaCodeSubmitted = false;
 
   constructor(config: PurdueSSOConfig) {
     this.config = config;
@@ -232,11 +234,18 @@ export class PurdueSSOFlow {
     const input = await this.firstVisible(page, MFA_CODE_SELECTORS);
     if (!input) return false;
     if (this.config.headless === false) return false;
+    // Ask once per login. This runs on every two-second poll, and Microsoft
+    // commonly leaves the field on screen while it validates, so without this
+    // a correct code gets a second prompt on the next tick. That prompt blocks
+    // on stdin, and the deadline is only checked between iterations, so the
+    // five-minute budget can never fire while parked there.
+    if (this.mfaCodeSubmitted) return false;
     if (!this.config.requestMfaCode) {
       throw new UnsupportedAuthenticationError(
         `This MFA method requires a code. Run \`${AUTH_COMMAND}\` in a terminal to enter it.`,
       );
     }
+    this.mfaCodeSubmitted = true;
     const code = await this.config.requestMfaCode();
     if (!/^\d{6,8}$/.test(code)) throw new UnsupportedAuthenticationError("The MFA code must contain 6-8 digits.");
     await input.fill(code);
