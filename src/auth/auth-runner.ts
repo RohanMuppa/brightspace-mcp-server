@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 import * as path from "node:path";
 import { log } from "../utils/logger.js";
 import { AuthError } from "../utils/errors.js";
+import { AUTH_COMMAND } from "../utils/commands.js";
 
 /**
  * Timeout for the auth process. It has to outlast the child's own MFA wait,
@@ -168,7 +169,7 @@ export class AuthRunner {
           kill("SIGTERM");
           killTimer = setTimeout(() => {
             kill("SIGKILL");
-            finish(new AuthProcessError("timeout", "Authentication timed out. Run brightspace-auth to try again."));
+            finish(new AuthProcessError("timeout", `Authentication timed out. Run ${AUTH_COMMAND} to try again.`));
           }, KILL_GRACE_MS);
         }, this.timeoutMs);
 
@@ -184,26 +185,26 @@ export class AuthRunner {
           if (settled) return;
           log("ERROR", "Auto-auth process failed", error.message);
           kill("SIGKILL");
-          finish(new AuthProcessError("failed", "Could not start authentication. Run brightspace-auth for details."));
+          finish(new AuthProcessError("failed", `Could not start authentication. Run ${AUTH_COMMAND} for details.`));
         });
 
         child.on("close", (code) => {
           if (settled) return;
           if (timedOut) {
             kill("SIGKILL");
-            finish(new AuthProcessError("timeout", "Authentication timed out. Run brightspace-auth to try again."));
+            finish(new AuthProcessError("timeout", `Authentication timed out. Run ${AUTH_COMMAND} to try again.`));
           } else if (code === 0) {
             log("INFO", "Auto-auth completed successfully");
             finish();
           } else {
             const failures: Record<number, [AuthFailureKind, string]> = {
               2: ["busy", "Authentication already in progress in another process. Complete that attempt, then retry."],
-              3: ["cooldown", "Automatic MFA is paused after an unsuccessful attempt. Run brightspace-auth to retry immediately."],
+              3: ["cooldown", `Automatic MFA is paused after an unsuccessful attempt. Run ${AUTH_COMMAND} to retry immediately.`],
               4: ["unsupported", "This identity provider cannot complete headless authentication. See the authentication logs."],
               5: ["secureStorage", "The native credential store is unavailable or locked. Unlock it and retry."],
               6: ["transport", "Brightspace authentication is temporarily unavailable because of a network or server failure. Your saved session was preserved. Try again later."],
             };
-            const [kind, message] = failures[code ?? -1] ?? ["failed", "Authentication failed. Run brightspace-auth to try again."];
+            const [kind, message] = failures[code ?? -1] ?? ["failed", `Authentication failed. Run ${AUTH_COMMAND} to try again.`];
             kill("SIGKILL");
             finish(new AuthProcessError(kind, message));
           }

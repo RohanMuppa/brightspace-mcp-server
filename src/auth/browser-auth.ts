@@ -16,6 +16,7 @@ import { BrowserStateStore } from "./browser-state-store.js";
 import { acquireProcessLock } from "./auth-lock.js";
 import { AuthCooldown } from "./auth-cooldown.js";
 import { mintAccessToken } from "./token-mint.js";
+import { isMissingBrowserError, PLAYWRIGHT_INSTALL_HINT } from "../utils/browser-install.js";
 
 const SILENT_SSO_TIMEOUT_MS = 30000;
 const SILENT_SSO_POLL_MS = 1000;
@@ -104,7 +105,16 @@ export class BrowserAuth {
       const args = ["--disable-blink-features=AutomationControlled"];
       if (BrowserAuth.isWSLOrDocker()) args.push("--no-sandbox", "--disable-setuid-sandbox");
       // Use Playwright's own timeout, which cleans up an unsuccessful launch.
-      browser = await chromium.launch({ headless: true, timeout: 60000, args });
+      try {
+        browser = await chromium.launch({ headless: true, timeout: 60000, args });
+      } catch (launchError) {
+        // Keep the remedy attached to the failure. Without this the hint is
+        // lost when the auth runner flattens errors into "Authentication failed".
+        if (isMissingBrowserError(launchError)) {
+          throw new BrowserAuthError(PLAYWRIGHT_INSTALL_HINT, "browser_missing", launchError as Error);
+        }
+        throw launchError;
+      }
       process.once("SIGINT", closeOnSignal);
       process.once("SIGTERM", closeOnSignal);
       context = await browser.newContext({ viewport: { width: 1280, height: 720 }, storageState: state });

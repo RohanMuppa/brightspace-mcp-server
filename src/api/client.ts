@@ -12,6 +12,7 @@ import { discoverVersions } from "./version-discovery.js";
 import { ApiError, RateLimitError, NetworkError } from "./errors.js";
 import { withRetry, isRetryableFailure, retryAfterMsFrom, type RetryConfig } from "./retry.js";
 import { log } from "../utils/logger.js";
+import { AUTH_COMMAND } from "../utils/commands.js";
 
 /** An ordinary course HTML link to the login page is not an expired session. */
 function isExpiredSessionRedirect(body: string, baseUrl: string): boolean {
@@ -226,7 +227,7 @@ export class D2LApiClient {
       }
       log("WARN", "Auto-reauthentication did not produce a valid token");
     }
-    throw new ApiError(401, path, "Session expired. Please re-authenticate via brightspace-auth.");
+    throw new ApiError(401, path, `Session expired. Please re-authenticate via ${AUTH_COMMAND}.`);
   }
 
   /**
@@ -290,7 +291,7 @@ export class D2LApiClient {
           throw new ApiError(
             401,
             path,
-            "Session expired. Please re-authenticate via brightspace-auth.",
+            `Session expired. Please re-authenticate via ${AUTH_COMMAND}.`,
           );
         }
         throw new ApiError(
@@ -386,7 +387,7 @@ export class D2LApiClient {
           throw new ApiError(
             401,
             path,
-            "Session expired. Please re-authenticate via brightspace-auth.",
+            `Session expired. Please re-authenticate via ${AUTH_COMMAND}.`,
           );
         }
         // A legitimate HTML page: hand back an equivalent response with the

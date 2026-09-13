@@ -13,7 +13,7 @@ import { enableStdoutGuard, log } from "./utils/logger.js";
 import { loadConfig } from "./utils/config.js";
 import { TokenManager, AuthRunner } from "./auth/index.js";
 import { D2LApiClient } from "./api/index.js";
-import { initUpdateChecker, getUpdateNotice } from "./utils/update-checker.js";
+import { startUpdateChecks, getUpdateNotice } from "./utils/update-checker.js";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
@@ -31,6 +31,7 @@ import {
   registerGetSyllabus,
   registerGetDiscussions,
 } from "./tools/index.js";
+import { AUTH_COMMAND } from "./utils/commands.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -112,8 +113,10 @@ if (subcommand === 'setup') {
         process.exit(1);
       }
 
-      // Start background update check (fire and forget)
-      initUpdateChecker();
+      // Check for updates now, then every few hours. A stdio server can stay
+      // alive for days, so a boot-only check would never see a release. The
+      // interval is unref'd and cannot hold the process open.
+      startUpdateChecks();
 
       // Register check_auth tool (no input schema needed for zero-argument tool)
       server.registerTool(
@@ -122,7 +125,7 @@ if (subcommand === 'setup') {
           title: "Check Authentication Status",
           description:
             "Check if you are authenticated with Brightspace. " +
-            "Run the brightspace-auth CLI first to authenticate. " +
+            `Run \`${AUTH_COMMAND}\` first to authenticate. ` +
             "Use this when the user asks if they're logged in, if authentication is working, " +
             "or when other tools return auth errors.",
         },
@@ -146,7 +149,7 @@ if (subcommand === 'setup') {
                 {
                   type: "text",
                   text: "Not authenticated. Auto-reauthentication was attempted but failed. " +
-                    "Please run `brightspace-auth` manually in your terminal to log in. " +
+                    `Please run \`${AUTH_COMMAND}\` in your terminal to log in. ` +
                     "Run setup to update your saved credentials, and check your internet connection.",
                 },
               ];

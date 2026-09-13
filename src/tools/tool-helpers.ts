@@ -8,19 +8,30 @@ import { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { ZodError } from "zod";
 import { ApiError, RateLimitError, NetworkError } from "../api/index.js";
 import { log } from "../utils/logger.js";
+import { AUTH_COMMAND } from "../utils/commands.js";
+import { getUpdateNotice } from "../utils/update-checker.js";
 
 /**
- * Wrap data as MCP-compatible tool result
+ * Wrap data as MCP-compatible tool result.
+ *
+ * Every tool returns through here, which makes it the one place an update
+ * notice can reach a user regardless of which tool they happen to call. The
+ * notice is appended as a separate content block so content[0].text stays a
+ * pure JSON document for anything parsing it, and it is throttled inside
+ * getUpdateNotice so a busy session is not spammed.
  */
 export function toolResponse(data: unknown): CallToolResult {
-  return {
-    content: [
-      {
-        type: "text",
-        text: JSON.stringify(data, null, 2),
-      },
-    ],
-  };
+  const content: CallToolResult["content"] = [
+    {
+      type: "text",
+      text: JSON.stringify(data, null, 2),
+    },
+  ];
+
+  const notice = getUpdateNotice();
+  if (notice) content.push({ type: "text", text: notice });
+
+  return { content };
 }
 
 /**
@@ -55,10 +66,15 @@ export function sanitizeError(error: unknown): CallToolResult {
       );
     }
     if (error.status === 401) {
-      return errorResponse(
+      // A stale install is a common cause of sign-in failing, so this is the
+      // one error worth attaching the update notice to.
+      const result = errorResponse(
         "Authentication expired. Auto-reauthentication was attempted but failed. " +
-        "Please run `brightspace-auth` manually in your terminal, then try again."
+        `Please run \`${AUTH_COMMAND}\` in your terminal, then try again.`
       );
+      const notice = getUpdateNotice();
+      if (notice) result.content.push({ type: "text", text: notice });
+      return result;
     }
     if (error.status === 403) {
       return errorResponse(
