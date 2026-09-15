@@ -97,7 +97,7 @@ export class SunySSOFlow {
       await this.startSamlLogin(page);
       await this.selectCampus(page);
     } catch (error) {
-      throw new UnsupportedAuthenticationError("SUNY campus selection could not complete headlessly. Run brightspace-mcp-server setup --suny and select a campus.", error as Error);
+      throw new UnsupportedAuthenticationError("SUNY campus selection could not complete automatically. Run brightspace-mcp-server setup --suny and select a campus.", error as Error);
     }
     return this.defaultFlow.login(page);
   }

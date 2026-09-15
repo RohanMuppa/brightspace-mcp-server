@@ -178,6 +178,23 @@ describe("BrowserAuth.navigateAndLogin", () => {
     expect(page.waitForTimeout).toHaveBeenCalledTimes(30);
   });
 
+  it("hands an inconclusive page to a configured visible browser", async () => {
+    withConfig({ headless: false });
+    const { page, state } = makePage({
+      url: "https://idp.example.edu/custom-login",
+    });
+    page.waitForURL.mockImplementation(async () => {
+      state.url = `${BASE_URL}/d2l/home`;
+      state.cookies = LIVE_SESSION.cookies;
+      state.d2l = true;
+    });
+
+    await expect(navigate(page)).resolves.toBe(false);
+    expect(page.waitForTimeout).toHaveBeenCalledTimes(30);
+    expect(page.waitForURL).toHaveBeenCalledOnce();
+    expect(ssoFlow.login).not.toHaveBeenCalled();
+  });
+
   it("short-circuits without waiting when the first check finds a live session", async () => {
     const { page, clicks } = makePage({ url: `${BASE_URL}/d2l/home`, ...LIVE_SESSION });
 
@@ -242,6 +259,48 @@ describe("BrowserAuth.navigateAndLogin", () => {
 
     await expect(navigate(page)).resolves.toBe(false);
     expect(ssoFlow.login).toHaveBeenCalledOnce();
+  });
+
+  it("keeps a configured visible browser open for manual sign-in", async () => {
+    withConfig({ headless: false, username: undefined, password: undefined });
+    ssoFlow.hasCredentials.mockReturnValue(false);
+    const { page, state } = makePage({
+      url: "https://login.microsoftonline.com/common/oauth2/authorize",
+      visible: [EMAIL_SELECTOR],
+    });
+    page.waitForURL.mockImplementation(async () => {
+      state.url = `${BASE_URL}/d2l/home`;
+      state.cookies = LIVE_SESSION.cookies;
+      state.d2l = true;
+    });
+
+    await expect(navigate(page)).resolves.toBe(false);
+    expect(page.waitForURL).toHaveBeenCalledOnce();
+    expect(ssoFlow.login).not.toHaveBeenCalled();
+  });
+
+  it("still rejects missing credentials immediately in headless mode", async () => {
+    ssoFlow.hasCredentials.mockReturnValue(false);
+    const { page } = makePage({
+      url: "https://login.microsoftonline.com/common/oauth2/authorize",
+      visible: [EMAIL_SELECTOR],
+    });
+
+    await expect(navigate(page)).rejects.toThrow("Automatic sign-in requires saved credentials");
+    expect(page.waitForURL).not.toHaveBeenCalled();
+    expect(ssoFlow.login).not.toHaveBeenCalled();
+  });
+
+  it("times out a visible login with an interactive error", async () => {
+    withConfig({ headless: false, username: undefined, password: undefined });
+    ssoFlow.hasCredentials.mockReturnValue(false);
+    const { page } = makePage({
+      url: "https://login.microsoftonline.com/common/oauth2/authorize",
+      visible: [EMAIL_SELECTOR],
+    });
+
+    await expect(navigate(page)).rejects.toMatchObject({ step: "interactive_login" });
+    expect(ssoFlow.login).not.toHaveBeenCalled();
   });
 
   it("continues polling after the initial navigation times out", async () => {

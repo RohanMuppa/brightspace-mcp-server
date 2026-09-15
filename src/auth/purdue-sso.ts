@@ -108,7 +108,7 @@ export class PurdueSSOFlow {
       return true;
     } catch (error) {
       if (error instanceof BrowserAuthError) throw error;
-      throw new UnsupportedAuthenticationError("The identity provider could not complete headless sign-in. Check saved credentials and supported MFA settings.", error as Error);
+      throw new UnsupportedAuthenticationError("The identity provider could not complete automatic sign-in. Check saved credentials and supported MFA settings.", error as Error);
     }
   }
 
@@ -143,18 +143,18 @@ export class PurdueSSOFlow {
     if (!this.accountHintSubmitted) {
       const email = signInName(this.config.username, this.config.baseUrl);
       if (!await this.fillWhenReady(page, EMAIL_SELECTORS, email)) {
-        throw new UnsupportedAuthenticationError("The Microsoft email field did not appear. Headless sign-in cannot continue.");
+        throw new UnsupportedAuthenticationError("The Microsoft email field did not appear. Automatic sign-in cannot continue.");
       }
       if (!await this.clickWhenReady(page, SUBMIT_SELECTORS)) {
-        throw new UnsupportedAuthenticationError("The Microsoft email submit button did not appear. Headless sign-in cannot continue.");
+        throw new UnsupportedAuthenticationError("The Microsoft email submit button did not appear. Automatic sign-in cannot continue.");
       }
     }
     this.accountHintSubmitted = false;
     if (!await this.fillWhenReady(page, PASSWORD_SELECTORS, this.config.password)) {
-      throw new UnsupportedAuthenticationError("The Microsoft password field did not appear. Headless sign-in cannot continue.");
+      throw new UnsupportedAuthenticationError("The Microsoft password field did not appear. Automatic sign-in cannot continue.");
     }
     if (!await this.clickWhenReady(page, SUBMIT_SELECTORS)) {
-      throw new UnsupportedAuthenticationError("The Microsoft password submit button did not appear. Headless sign-in cannot continue.");
+      throw new UnsupportedAuthenticationError("The Microsoft password submit button did not appear. Automatic sign-in cannot continue.");
     }
   }
 
@@ -194,7 +194,7 @@ export class PurdueSSOFlow {
   /** Brightspace Bar's bounded number/auth/KMSI polling loop. */
   private async handleMFA(page: Page): Promise<void> {
     if (!this.config.baseUrl) {
-      throw new UnsupportedAuthenticationError("A school URL is required to verify headless authentication.");
+      throw new UnsupportedAuthenticationError("A school URL is required to verify authentication.");
     }
     const deadline = Date.now() + MFA_TIMEOUT_MS;
     let challenged = false;
@@ -224,7 +224,7 @@ export class PurdueSSOFlow {
     } catch (error) {
       if (error instanceof BrowserAuthError) throw error;
       if (challenged) throw new MfaApprovalError(error as Error);
-      throw new UnsupportedAuthenticationError("Headless sign-in stopped before a supported MFA challenge completed.", error as Error);
+      throw new UnsupportedAuthenticationError("Automatic sign-in stopped before a supported MFA challenge completed.", error as Error);
     }
     if (challenged) throw new MfaApprovalError();
     throw new UnsupportedAuthenticationError("Sign-in did not reach a supported MFA challenge or Brightspace within 5 minutes.");

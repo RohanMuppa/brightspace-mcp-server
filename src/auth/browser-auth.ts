@@ -22,6 +22,7 @@ import { isMissingBrowserError, PLAYWRIGHT_INSTALL_HINT } from "../utils/browser
 const SILENT_SSO_TIMEOUT_MS = 30000;
 const SILENT_SSO_POLL_MS = 1000;
 const INITIAL_NAVIGATION_TIMEOUT_MS = 60000;
+const VISIBLE_LOGIN_TIMEOUT_MS = 5 * 60 * 1000;
 const SILENT_SSO = {
   emailFields: ["input[type=email]", "input[name=loginfmt]"],
   credentialFields: ['input#username', 'input#userName', 'input[type="password"]'],
@@ -284,18 +285,28 @@ export class BrowserAuth {
       return true;
     }
     const pendingMfa = await this.isAnyOnScreen(page, SILENT_SSO.mfaChallenges);
-    if (!pendingMfa && !await this.hasCredentialPrompt(page)) {
+    const credentialPrompt = await this.hasCredentialPrompt(page);
+    const hasCredentials = this.ssoFlow.hasCredentials();
+    if (!hasCredentials && !pendingMfa) {
+      if (this.config.headless === false) {
+        await this.waitForVisibleLogin(page);
+        return false;
+      }
+      throw new UnsupportedAuthenticationError("Automatic sign-in requires saved credentials. Run brightspace-mcp-server setup.");
+    }
+    if (!pendingMfa && !credentialPrompt) {
+      if (this.config.headless === false) {
+        await this.waitForVisibleLogin(page);
+        return false;
+      }
       throw new BrowserAuthTransportError(
         "The sign-in page has not settled on a supported login challenge. Retry shortly; saved state is preserved.",
         navigationError === undefined ? undefined : { cause: navigationError }
       );
     }
-    if (!this.ssoFlow.hasCredentials() && !pendingMfa) {
-      throw new UnsupportedAuthenticationError("Headless sign-in requires saved credentials. Run brightspace-mcp-server setup.");
-    }
     try {
       if (!await this.ssoFlow.login(page)) {
-        throw new UnsupportedAuthenticationError("The identity provider could not complete headless sign-in.");
+        throw new UnsupportedAuthenticationError("The identity provider could not complete automatic sign-in.");
       }
     } catch (error) {
       if (error instanceof MfaApprovalError) await this.cooldown.recordMfaFailure();
@@ -305,6 +316,32 @@ export class BrowserAuth {
       throw new BrowserAuthError("Sign-in did not produce a verified Brightspace session.", "session_validation");
     }
     return false;
+  }
+
+  /** Keep a configured visible browser open while the user completes sign-in. */
+  private async waitForVisibleLogin(page: Page): Promise<void> {
+    const expected = new URL(this.config.baseUrl);
+    log("INFO", "Complete sign-in and MFA in the visible browser window.");
+    try {
+      await page.waitForURL(
+        (url) => url.origin === expected.origin && /^\/d2l\/home(?:\/|$)/.test(url.pathname),
+        { timeout: VISIBLE_LOGIN_TIMEOUT_MS },
+      );
+    } catch (error) {
+      throw new BrowserAuthError(
+        "Visible sign-in did not reach Brightspace within 5 minutes.",
+        "interactive_login",
+        error as Error,
+      );
+    }
+
+    if (!await this.hasLiveSession(page)) {
+      throw new BrowserAuthError(
+        "Visible sign-in reached Brightspace but did not produce a verified session.",
+        "session_validation",
+      );
+    }
+    log("INFO", "Visible browser sign-in completed.");
   }
 
   /**
@@ -359,6 +396,7 @@ export class BrowserAuth {
       }
     } while (Date.now() < deadline);
 
+    if (this.config.headless === false) return false;
     throw new BrowserAuthTransportError("Silent sign-in did not reach Brightspace or a supported login challenge within 30 seconds. Retry shortly; saved state is preserved.");
   }
 

@@ -50,7 +50,7 @@ you're at and skips SUNY's campus picker when you sign in:
 npx -y brightspace-mcp-server@latest setup --suny
 ```
 
-The wizard saves your password in the native credential store and asks how you complete MFA. Authentication can wait for approval or number matching, prompt in the terminal for a code from Google Authenticator or another app, or open a visible browser for other interactive methods. The wizard can configure Claude Desktop and Cursor. Restart your AI client when it finishes.
+The wizard saves your password in the native credential store and asks how you complete MFA. Authentication can wait for approval or number matching, prompt in the terminal for a code from Google Authenticator or another app, or open a visible browser for other interactive methods. The wizard can configure Claude Desktop, Cursor, Codex Desktop and CLI, and Claude Code when they are installed. Restart your AI client when it finishes.
 
 Any other D2L school: run `setup` without a flag and paste your Brightspace URL (for example `https://yourschool.brightspace.com`).
 
@@ -67,6 +67,22 @@ On **Windows**, npx must be wrapped: `cmd /c npx -y brightspace-mcp-server@lates
 
 You still need to run `npx -y brightspace-mcp-server@latest setup` first to save your credentials.
 
+For Codex Desktop and Codex CLI, run:
+
+```bash
+codex mcp add brightspace -- npx -y brightspace-mcp-server@latest
+```
+
+Codex Desktop and CLI use the same user configuration on a computer. Restart the desktop app or start a new CLI session after registration.
+
+For Claude Code, run:
+
+```bash
+claude mcp add --scope user brightspace -- npx -y brightspace-mcp-server@latest
+```
+
+Claude Desktop uses a separate configuration, which the setup wizard can update automatically.
+
 </details>
 
 ## Session Expired?
@@ -74,6 +90,8 @@ You still need to run `npx -y brightspace-mcp-server@latest setup` first to save
 There is nothing to log into first. Ask for your grades and the sign-in happens as part of that request, so the assistant never has to check whether you are authenticated before it can answer. Starting your AI client touches Brightspace not at all: a restart on its own will never set off an MFA prompt.
 
 Returning the next day normally requires no action. The server renews short-lived API tokens over HTTPS using the saved Brightspace session. If that session ends, a browser restores your saved Microsoft session and tries silent SSO. Approval and code-based modes stay headless; when an automatic run needs a code, run the auth command below to enter it securely in the terminal.
+
+If visible-browser mode is configured, the window stays open for up to five minutes so you can finish credentials and MFA manually when automatic sign-in cannot continue. Rerunning setup preserves your previous hidden or visible choice as the prompt default.
 
 Your school's policy controls when MFA is required. There is no local 24-hour cutoff, and the server no longer discards browser state after one hour. A network outage preserves the saved session and returns a temporary error.
 
@@ -137,16 +155,16 @@ Automatic, in both places it matters.
 
 **The MCP server** is registered as `npx -y brightspace-mcp-server@latest`, so your AI client pulls the newest version every time it starts a session.
 
-**The auth CLI** updates itself too. If you installed globally with `npm install -g`, that copy stays at whatever version you installed it at — npm never revisits it. So when the CLI notices it is behind, it re-runs itself through `npx -y brightspace-mcp-server@latest auth` and you get the current code. You are not prompted and there is nothing to confirm.
+**The auth CLI** updates itself too. If you installed globally with `npm install -g`, that copy stays at whatever version you installed it at because npm never revisits it. So when the CLI notices it is behind, it re-runs itself through `npx -y brightspace-mcp-server@latest auth` and you get the current code. You are not prompted and there is nothing to confirm.
 
-One caveat worth knowing: a re-exec runs the newest code, it does not overwrite the old copy on disk. `npm ls -g` will still report the version you installed. To actually replace it:
+One caveat worth knowing: a re-exec runs the newest code, but it does not overwrite the old copy on disk. `npm ls -g` will still report the version you installed. To actually replace it:
 
 ```bash
 npm install -g brightspace-mcp-server@latest
 npx clear-npx-cache
 ```
 
-Then restart your AI client. The server and the CLI both check npm on startup, and the server re-checks every few hours, so you get told when either one falls behind — including when they disagree with each other.
+Then restart your AI client. The server and the CLI both check npm on startup, and the server re-checks every few hours. A version mismatch warning appears only when a command available in your current shell resolves to an outdated copy. Dormant installs under inactive Node versions and old npx cache entries are ignored.
 
 Set `D2L_NO_UPDATE_CHECK=1` to switch all of this off.
 

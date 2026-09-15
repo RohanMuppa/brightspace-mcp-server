@@ -49,7 +49,7 @@ The wizard:
 - asks whether MFA uses device approval, terminal code entry, or a visible browser, then authenticates accordingly
 - saves the password in the native credential store and public settings in `~/.brightspace-mcp/config.json` (0600)
 - writes the encrypted session below `~/.d2l-session/accounts/<account-hash>/` (AES-256-GCM)
-- auto-configures Claude Desktop and Cursor if detected
+- auto-configures Claude Desktop and Cursor, and uses their own CLIs to configure Codex and Claude Code when detected
 
 Wait for the user to finish login and MFA before continuing.
 
@@ -63,7 +63,7 @@ npx -y brightspace-mcp-server@latest
 
 On **Windows**, wrap with cmd: `cmd /c npx -y brightspace-mcp-server@latest`.
 
-Claude Desktop and Cursor are auto-configured by the setup wizard. For any other client (Windsurf, Copilot, Codex, Zed, Continue, etc.), look up the client's current MCP config format and file path, then add an entry with the command above. Config formats and paths differ per client and change over time, so verify against current client docs rather than guessing.
+Claude Desktop and Cursor are auto-configured by the setup wizard. When their CLIs are installed, Codex Desktop and CLI are configured together through `codex mcp add`, and Claude Code is configured at user scope through `claude mcp add --scope user`. For any other client (Windsurf, Copilot, Zed, Continue, etc.), look up the client's current MCP config format and file path, then add an entry with the command above. Config formats and paths differ per client and change over time, so verify against current client docs rather than guessing.
 
 ### 4. Restart the AI client
 
@@ -80,6 +80,8 @@ Concurrent tool calls on a cold session share one sign-in, so firing several too
 ## Re-auth
 
 Access tokens are re-minted from the stored session cookie without a browser. When browser authentication is required, setup's MFA choice controls whether Chromium stays hidden for approval or terminal code entry, or opens for other interaction. Automatic MCP authentication cannot read a code from stdio; tell the user to run the explicit command below, which prompts without echoing the code into MCP logs. Missed approval pauses automatic browser authentication for five minutes. HTTP token renewal remains allowed, and the explicit command bypasses the cooldown. Forward the MFA number to the user as it appears and wait for phone approval. Clients may hide server logs, so a terminal is the reliable place to see the number. Network errors and locked native storage should be reported without retrying MFA.
+
+Visible mode remains open for up to five minutes when automatic credential handling is unavailable or the identity provider needs direct interaction. Rerunning setup preserves the existing hidden or visible preference as the default choice.
 
 ```bash
 npx -y brightspace-mcp-server@latest auth

@@ -13,10 +13,19 @@ import * as path from "node:path";
 import * as os from "node:os";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { getConfigStorePath } from "./utils/config-store.js";
+import {
+  configStoreExists,
+  getConfigStorePath,
+  loadConfigStore,
+} from "./utils/config-store.js";
 import { saveSecureConfig } from "./utils/secure-config.js";
 import type { ConfigStoreData } from "./utils/config-store.js";
 import { AUTH_COMMAND } from "./utils/commands.js";
+import {
+  cliMcpClients,
+  configureCliMcpClient,
+  isCliAvailable,
+} from "./utils/mcp-client-cli.js";
 
 // ANSI helpers
 const bold = (s: string) => `\x1b[1m${s}\x1b[0m`;
@@ -380,6 +389,7 @@ async function main(): Promise<void> {
     input: process.stdin,
     output: process.stdout,
   });
+  const configuredClients: string[] = [];
 
   // ── Step 4: MFA info ─────────────────────────────────────────────
   if (preset) {
@@ -395,9 +405,16 @@ async function main(): Promise<void> {
   console.log("  How do you complete MFA?");
   console.log("    1. On your phone, or by typing a code here (recommended)");
   console.log("    2. In a visible browser window");
+  let savedHeadless: boolean | undefined;
+  try {
+    savedHeadless = configStoreExists() ? loadConfigStore().headless : undefined;
+  } catch {
+    // An invalid old config is replaced by the setup values below.
+  }
+  const defaultMfaChoice = savedHeadless === false ? "2" : "1";
   let mfaChoice = "";
   while (!/^[12]$/.test(mfaChoice)) {
-    mfaChoice = await ask(rl2, "  Choose 1 or 2 [1]: ") || "1";
+    mfaChoice = await ask(rl2, `  Choose 1 or 2 [${defaultMfaChoice}]: `) || defaultMfaChoice;
     if (!/^[12]$/.test(mfaChoice)) console.log(yellow("  Please enter 1 or 2."));
   }
   const headless = mfaChoice !== "2";
@@ -451,6 +468,7 @@ async function main(): Promise<void> {
     if (/^y(es)?$/i.test(configClaude)) {
       try {
         configureMcpClient(claudePath);
+        configuredClients.push("Claude Desktop");
         console.log(green("  Claude Desktop configured! Restart Claude Desktop to connect."));
       } catch (err) {
         console.log(
@@ -472,6 +490,7 @@ async function main(): Promise<void> {
     if (/^y(es)?$/i.test(configCursor)) {
       try {
         configureMcpClient(cursorPath);
+        configuredClients.push("Cursor");
         console.log(green("  Cursor configured! Restart Cursor to connect."));
       } catch (err) {
         console.log(
@@ -482,7 +501,30 @@ async function main(): Promise<void> {
     console.log("");
   }
 
-  // ── Step 9: ChatGPT Desktop instructions ─────────────────────────
+  // ── Step 9: Codex and Claude Code auto-config ─────────────────────
+  for (const client of cliMcpClients()) {
+    if (!isCliAvailable(client)) continue;
+
+    const configureClient = await ask(
+      rl2,
+      `${client.displayName} detected. Configure it automatically? (yes/no): `,
+    );
+    if (/^y(es)?$/i.test(configureClient)) {
+      const result = configureCliMcpClient(client);
+      if (result === "failed") {
+        console.log(yellow(`  Could not configure ${client.displayName}. See README.md for the manual command.`));
+      } else {
+        configuredClients.push(client.displayName);
+        const message = result === "already-configured"
+          ? `  ${client.displayName} already has Brightspace configured.`
+          : `  ${client.displayName} configured!`;
+        console.log(green(message));
+      }
+    }
+    console.log("");
+  }
+
+  // ── Step 10: ChatGPT Desktop instructions ────────────────────────
   if (isChatGPTInstalled()) {
     const isWindows = process.platform === "win32";
     const mcpJson = isWindows
@@ -505,9 +547,14 @@ async function main(): Promise<void> {
   console.log(`  Config saved to: ${dim(getConfigStorePath())}`);
   console.log("");
   console.log("  Next steps:");
-  console.log(`  1. Run '${AUTH_COMMAND}' to authenticate (if you haven't already)`);
-  console.log("  2. Restart Claude Desktop");
-  console.log("  3. Ask Claude about your Brightspace courses!");
+  if (configuredClients.length > 0) {
+    console.log(`  1. Restart ${configuredClients.join(", ")}`);
+    console.log("  2. Ask your AI client about your Brightspace courses");
+    console.log("     Sign-in runs automatically if your saved session has expired.");
+  } else {
+    console.log("  1. Register the MCP server in your AI client using the command in README.md");
+    console.log("  2. Restart your AI client and ask about your Brightspace courses");
+  }
   console.log("");
 }
 

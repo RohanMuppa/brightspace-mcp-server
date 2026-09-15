@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { join, resolve, sep, delimiter } from "node:path";
+import { dirname, join, resolve, sep, delimiter } from "node:path";
 import { scanInstallSites, formatSkewNotice, type InstallSite } from "../../src/utils/install-sites.js";
 
 /**
@@ -134,6 +134,26 @@ describe.skipIf(process.platform === "win32")("scanInstallSites: shim resolution
     expect(resolved!.binPath).toBe(shim);
     expect(resolved!.version).toBe("1.2.6");
   });
+
+  it("uses the first matching PATH entry for each shell command", async () => {
+    const deps = incidentMachine();
+    const currentBin = join(NVM, "v24.19.0", "bin");
+    const staleBin = join(NVM, "v24.11.0", "bin");
+
+    const sites = await scanInstallSites({
+      ...deps,
+      env: { PATH: [currentBin, staleBin].join(delimiter) },
+      realpath: async (p: string) => {
+        if (dirname(p) === currentBin) return join(nvmPkg("v24.19.0"), "build", "auth-cli.js");
+        if (dirname(p) === staleBin) return join(nvmPkg("v24.11.0"), "build", "auth-cli.js");
+        throw new Error("no shim");
+      },
+    });
+
+    const resolved = sites.filter((s) => s.binPath);
+    expect(resolved).toHaveLength(1);
+    expect(resolved[0].dir).toBe(resolve(nvmPkg("v24.19.0")));
+  });
 });
 
 describe("formatSkewNotice", () => {
@@ -158,8 +178,12 @@ describe("formatSkewNotice", () => {
     expect(formatSkewNotice([], "2.0.0", HOME)).toBeNull();
   });
 
-  it("names the stale version and shortens the home path", () => {
-    const notice = formatSkewNotice([site({})], "2.0.0", HOME);
+  it("names an actionable stale version and shortens the home path", () => {
+    const notice = formatSkewNotice(
+      [site({ binPath: join(NVM, "v24.11.0", "bin", "brightspace-auth") })],
+      "2.0.0",
+      HOME
+    );
     expect(notice).toContain("v2.0.0");
     expect(notice).toContain("v1.2.6");
     expect(notice).toContain("~");
@@ -167,7 +191,7 @@ describe("formatSkewNotice", () => {
     expect(notice).not.toContain(HOME);
   });
 
-  it("leads with the copy a shell command resolves to", () => {
+  it("ignores dormant installs while reporting a shell-resolved copy", () => {
     const notice = formatSkewNotice(
       [
         site({ dir: join(sep, "somewhere", "else"), version: "1.5.0" }),
@@ -177,14 +201,16 @@ describe("formatSkewNotice", () => {
       HOME
     );
     expect(notice!.split("\n")[1]).toContain("brightspace-auth");
+    expect(notice).not.toContain("somewhere");
     expect(notice).toMatch(/fails during sign-in/);
   });
 
-  it("caps how many copies it lists", () => {
-    const many = ["1.0.0", "1.1.0", "1.2.0", "1.3.0", "1.4.0"].map((v, i) =>
-      site({ version: v, dir: join(sep, `root${i}`, "node_modules", PKG) })
-    );
-    expect(formatSkewNotice(many, "2.0.0", HOME)).toContain("and 2 more");
+  it("is silent for stale installs that are not shell-resolved", () => {
+    const dormant = [
+      site({}),
+      site({ kind: "npx-cache", dir: npxPkg("old"), version: "1.0.0" }),
+    ];
+    expect(formatSkewNotice(dormant, "2.0.0", HOME)).toBeNull();
   });
 
   it("ignores copies whose version could not be read", () => {

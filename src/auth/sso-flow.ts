@@ -16,7 +16,7 @@ export type RequestMfaCode = () => Promise<string>;
 export class UnsupportedAuthenticationError extends BrowserAuthError {
   readonly code = "AUTH_UNSUPPORTED";
   constructor(message: string, cause?: Error) {
-    super(message, "headless_login", cause);
+    super(message, "sso_login", cause);
     this.name = "UnsupportedAuthenticationError";
   }
 }
@@ -37,7 +37,7 @@ export interface SSOFlow {
   identifyAccount?(page: Page): Promise<boolean>;
   /** True when saved credentials allow an automated sign-in attempt. */
   hasCredentials(): boolean;
-  /** Drive the supported headless sign-in form, surfacing MFA in terminal logs. */
+  /** Drive the supported automatic sign-in form, surfacing MFA in terminal logs. */
   login(page: Page): Promise<boolean>;
 }
 
