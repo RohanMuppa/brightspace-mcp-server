@@ -9,6 +9,7 @@ import { BrowserAuthError } from "../utils/errors.js";
 import { log } from "../utils/logger.js";
 import { MfaApprovalError, UnsupportedAuthenticationError } from "./sso-flow.js";
 import type { RequestMfaCode } from "./sso-flow.js";
+import { DuoMfaHandler } from "./duo-mfa.js";
 import { AUTH_COMMAND } from "../utils/commands.js";
 
 const EMAIL_SELECTORS = ["input[type=email]", "input[name=loginfmt]"];
@@ -52,9 +53,11 @@ export class PurdueSSOFlow {
   private accountHintSubmitted = false;
   /** One authenticator code per login. See submitMfaCode. */
   private mfaCodeSubmitted = false;
+  private readonly duoMfa: DuoMfaHandler;
 
   constructor(config: PurdueSSOConfig) {
     this.config = config;
+    this.duoMfa = new DuoMfaHandler(config);
   }
 
   /**
@@ -93,12 +96,7 @@ export class PurdueSSOFlow {
       await this.handleCampusSelector(page);
 
       // Restored Microsoft state can lead directly to MFA or stay-signed-in.
-      const postCredential = await this.anyVisible(page, [
-        NUMBER_MATCH_SELECTOR,
-        "#idDiv_SAOTCAS_Title",
-        "#idDiv_SAOTCC_Title",
-        "#KmsiCheckboxField",
-      ]);
+      const postCredential = await this.hasPostCredentialChallenge(page);
       const kmsi = await page.getByText("Stay signed in?").first().isVisible().catch(() => false);
       if (!page.url().includes("/d2l/home") && !postCredential && !kmsi) await this.enterCredentials(page);
 
@@ -191,6 +189,15 @@ export class PurdueSSOFlow {
     return false;
   }
 
+  private async hasPostCredentialChallenge(page: Page): Promise<boolean> {
+    return this.duoMfa.isChallenge(page) || await this.anyVisible(page, [
+      NUMBER_MATCH_SELECTOR,
+      "#idDiv_SAOTCAS_Title",
+      "#idDiv_SAOTCC_Title",
+      "#KmsiCheckboxField",
+    ]);
+  }
+
   /** Brightspace Bar's bounded number/auth/KMSI polling loop. */
   private async handleMFA(page: Page): Promise<void> {
     if (!this.config.baseUrl) {
@@ -201,6 +208,7 @@ export class PurdueSSOFlow {
     let announced: string | null = null;
     try {
       while (Date.now() < deadline) {
+        if (await this.duoMfa.handle(page)) challenged = true;
         if (await this.submitMfaCode(page)) challenged = true;
         const number = await this.readNumberMatch(page);
         const challengeVisible = number !== null ||

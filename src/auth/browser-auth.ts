@@ -13,6 +13,7 @@ import { log } from "../utils/logger.js";
 import { createSSOFlow, UnsupportedAuthenticationError, MfaApprovalError } from "./sso-flow.js";
 import type { SSOFlow } from "./sso-flow.js";
 import type { RequestMfaCode } from "./sso-flow.js";
+import { isDuoPrompt } from "./duo-mfa.js";
 import { BrowserStateStore } from "./browser-state-store.js";
 import { acquireProcessLock } from "./auth-lock.js";
 import { AuthCooldown } from "./auth-cooldown.js";
@@ -284,7 +285,7 @@ export class BrowserAuth {
       log("INFO", "Saved session is active");
       return true;
     }
-    const pendingMfa = await this.isAnyOnScreen(page, SILENT_SSO.mfaChallenges);
+    const pendingMfa = await this.hasMfaChallenge(page);
     const credentialPrompt = await this.hasCredentialPrompt(page);
     const hasCredentials = this.ssoFlow.hasCredentials();
     if (!hasCredentials && !pendingMfa) {
@@ -369,7 +370,7 @@ export class BrowserAuth {
         log("INFO", "The identity provider requires an account login");
         return false;
       }
-      if (await this.isAnyOnScreen(page, SILENT_SSO.mfaChallenges)) {
+      if (await this.hasMfaChallenge(page)) {
         log("INFO", "The identity provider requires a login challenge");
         return false;
       }
@@ -403,6 +404,11 @@ export class BrowserAuth {
   private async hasCredentialPrompt(page: Page): Promise<boolean> {
     return await this.isAnyOnScreen(page, SILENT_SSO.emailFields) ||
       await this.isAnyOnScreen(page, SILENT_SSO.credentialFields);
+  }
+
+  /** One definition of the MFA pages the shared authentication loop supports. */
+  private async hasMfaChallenge(page: Page): Promise<boolean> {
+    return isDuoPrompt(page) || await this.isAnyOnScreen(page, SILENT_SSO.mfaChallenges);
   }
 
   /**

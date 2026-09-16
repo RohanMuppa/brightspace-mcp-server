@@ -303,6 +303,12 @@ describe("BrowserAuth.navigateAndLogin", () => {
     expect(ssoFlow.login).not.toHaveBeenCalled();
   });
 
+  it("passes a Duo Universal Prompt to the shared flow", async () => {
+    const { page } = makePage({ url: "https://api-123.duosecurity.com/frame/v4/auth" });
+    await expect(navigate(page)).resolves.toBe(false);
+    expect(ssoFlow.login).toHaveBeenCalledOnce();
+  });
+
   it("continues polling after the initial navigation times out", async () => {
     const { page } = makePage({
       url: `${BASE_URL}/d2l/lp/auth/login/samlLogin.d2l`,
