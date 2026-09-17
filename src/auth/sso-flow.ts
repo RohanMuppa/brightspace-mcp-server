@@ -8,6 +8,7 @@ import type { Page } from "playwright";
 import type { AppConfig } from "../types/index.js";
 import { PurdueSSOFlow } from "./purdue-sso.js";
 import { SunySSOFlow, isSunyBrightspace } from "./suny-sso.js";
+import { WesternSSOFlow, isWesternBrightspace } from "./western-sso.js";
 import { BrowserAuthError } from "../utils/errors.js";
 import { AUTH_COMMAND } from "../utils/commands.js";
 
@@ -58,6 +59,10 @@ export function createSSOFlow(config: AppConfig, requestMfaCode?: RequestMfaCode
 
   if (isSunyBrightspace(config.baseUrl)) {
     return new SunySSOFlow({ ...credentials, campus: config.campus });
+  }
+
+  if (isWesternBrightspace(config.baseUrl)) {
+    return new WesternSSOFlow(credentials);
   }
 
   return new PurdueSSOFlow(credentials);
