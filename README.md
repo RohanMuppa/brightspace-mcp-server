@@ -145,45 +145,4 @@ npm test          # vitest, must be green before you open a PR
 
 **Add a new tool:** Create a file in `src/tools/`, add the schema in `schemas.ts`, export it in `src/tools/index.ts`, and register it in `src/index.ts`. Use any existing tool as a template.
 
-**Run your own version:** You can also fork and run it independently. Clone it, build it, and point your AI client to the local `build/index.js` instead of using `npx`. No npm needed. Just know that forks don't receive updates from this repo automatically. If your changes could help others, consider opening a PR.
-
 Licensed under the MIT License.
-
-## Updates
-
-Automatic, in both places it matters.
-
-**The MCP server** is registered as `npx -y brightspace-mcp-server@latest`, so your AI client pulls the newest version every time it starts a session.
-
-**The auth CLI** updates itself too. If you installed globally with `npm install -g`, that copy stays at whatever version you installed it at because npm never revisits it. So when the CLI notices it is behind, it re-runs itself through `npx -y brightspace-mcp-server@latest auth` and you get the current code. You are not prompted and there is nothing to confirm.
-
-One caveat worth knowing: a re-exec runs the newest code, but it does not overwrite the old copy on disk. `npm ls -g` will still report the version you installed. To actually replace it:
-
-```bash
-npm install -g brightspace-mcp-server@latest
-npx clear-npx-cache
-```
-
-Then restart your AI client. The server and the CLI both check npm on startup, and the server re-checks every few hours. A version mismatch warning appears only when a command available in your current shell resolves to an outdated copy. Dormant installs under inactive Node versions and old npx cache entries are ignored.
-
-Set `D2L_NO_UPDATE_CHECK=1` to switch all of this off.
-
-## What's new in 3.0.0
-
-- Signing in is part of the first tool call. The separate `check_auth` tool is gone, and so is the step where the assistant had to ask about your login before it could answer anything. **This removes a tool, so any saved prompt that names `check_auth` needs updating.**
-- Starting the server makes no network requests. API versions are discovered by the first request that needs them, and a tenant that is briefly unreachable no longer stops the server from starting.
-- Concurrent tool calls on a cold session share one sign-in instead of racing, so you get one MFA prompt rather than several.
-- Failed sign-ins now explain themselves in the tool's answer: a locked keychain, a paused MFA cooldown, or a network outage each say what to do.
-- A missed MFA prompt pauses automatic sign-in for five minutes instead of four hours.
-- Authenticator-code MFA (Google Authenticator and similar) works, with the code entered in the terminal.
-- Every command the server prints is pinned to `@latest`, so following its own advice can never run a stale copy.
-
-## What's new in 2.0.0
-
-- Headless saved-credential login and terminal MFA, with silent session reuse across restarts.
-- Native secure credential storage and encrypted browser-state migration from v1.
-- Removed the one-hour browser-state cutoff and destructive profile recovery.
-- Process-level authentication coordination, failed-MFA cooldown, and transport errors that preserve your session.
-- Publishing waits for the test matrix on macOS, Windows, and Linux.
-  
-[Report a bug](https://github.com/rohanmuppa/brightspace-mcp-server/issues) · MIT · Copyright 2026 Rohan Muppa
