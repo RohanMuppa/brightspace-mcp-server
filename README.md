@@ -118,8 +118,6 @@ npx -y brightspace-mcp-server@latest auth
 | Discussions | "What are people saying in the final project thread?" · "Summarize the latest discussion posts" |
 | Planning | "Build me a study schedule based on my upcoming due dates" · "Which class needs the most attention right now?" |
 
-Assignment results cross-check the visible course table of contents and gradebook. This catches quizzes and other graded work that some Brightspace courses omit from their normal assignment or quiz listings.
-
 ## Contributing & Forking
 
 Want to add your school, build a new tool, or fix something? Fork the repo, make your changes, and open a pull request. If it gets merged, it ships to every user automatically.
