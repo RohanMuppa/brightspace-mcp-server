@@ -63,6 +63,13 @@ const SCHOOL_PRESETS: Record<string, SchoolPreset> = {
     campusPrompt: "Which SUNY campus are you at? (e.g. SUNY Poly)",
     usernameHint: "Most campuses want the full sign-in address, e.g. abc123@sunypoly.edu",
   },
+  western: {
+    name: "Western University",
+    baseUrl: "https://westernu.brightspace.com",
+    usernameLabel: "Western account username or full email",
+    mfaNote: "Approve the sign-in request from your MFA app.",
+    usernameHint: "Use your full sign-in address if your Western account requires it.",
+  },
 };
 
 // Parse --purdue, --osu, etc. from argv
