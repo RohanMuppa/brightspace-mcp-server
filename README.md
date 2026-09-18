@@ -120,15 +120,6 @@ npx -y brightspace-mcp-server@latest auth
 
 Assignment results cross-check the visible course table of contents and gradebook. This catches quizzes and other graded work that some Brightspace courses omit from their normal assignment or quiz listings.
 
-## Security
-
-- Your school URL and username live in `~/.brightspace-mcp/config.json`. Your password lives in the native credential store. macOS and Windows use `@napi-rs/keyring`; Linux uses `secret-tool` directly to require Secret Service without a temporary kernel-key fallback. Linux secrets travel through stdin, never command-line arguments.
-- Each account directory stores `session.json` for access tokens and `storage-state.encrypted.json` for cookies and browser storage. Both use AES-256-GCM with a random key held in the native credential store. The application never writes new plaintext password or browser-state snapshots. `D2L_SESSION_DIR` changes the local root of these account directories.
-- On Unix, session files are mode 0600 and their directory is mode 0700. Security also depends on your operating-system account: software running as you may be able to access the same credential store. Runtime memory and recoverable v1 files in Trash are outside the encrypted-file guarantee.
-- All traffic to Brightspace is HTTPS.
-- On startup the server asks the npm registry whether a newer version exists. When running through `npx`, it clears this package's own stale npx cache directories so the next start downloads the new version. It never installs anything itself. Set `D2L_NO_UPDATE_CHECK=1` to turn the check off.
-- Read only: this server never submits, posts, or changes anything in Brightspace.
-
 ## Contributing & Forking
 
 Want to add your school, build a new tool, or fix something? Fork the repo, make your changes, and open a pull request. If it gets merged, it ships to every user automatically.
