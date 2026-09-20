@@ -41,3 +41,12 @@ export function quizUrl(
 export function gradebookUrl(baseUrl: string, courseId: number): string {
   return `${trimBaseUrl(baseUrl)}/d2l/lms/grades/my_grades/main.d2l?ou=${courseId}`;
 }
+
+/** Link to the thread list of a discussion topic. */
+export function discussionUrl(
+  baseUrl: string,
+  courseId: number,
+  topicId: number
+): string {
+  return `${trimBaseUrl(baseUrl)}/d2l/lms/discussions/threadlist.d2l?ou=${courseId}&tId=${topicId}`;
+}

@@ -12,7 +12,7 @@ import {
 import { toolResponse, sanitizeError } from "./tool-helpers.js";
 import { log } from "../utils/logger.js";
 import { applyCourseFilter } from "../utils/course-filter.js";
-import { assignmentUrl, quizUrl } from "../utils/deep-links.js";
+import { assignmentUrl, quizUrl, discussionUrl } from "../utils/deep-links.js";
 import type { AppConfig } from "../types/index.js";
 
 interface DropboxFolder {
@@ -29,6 +29,18 @@ interface QuizReadData {
   EndDate: string | null;
   DueDate: string | null;
   IsActive: boolean;
+}
+
+interface DiscussionForum {
+  ForumId: number;
+  Name: string;
+}
+
+interface DiscussionTopic {
+  TopicId: number;
+  Name: string;
+  DueDate: string | null;
+  IsHidden: boolean;
 }
 
 interface EnrollmentItem {
@@ -53,7 +65,7 @@ interface CourseRef {
 }
 
 interface UpcomingItem {
-  type: "assignment" | "quiz";
+  type: "assignment" | "quiz" | "discussion";
   id: number;
   title: string;
   courseId: number;
@@ -115,18 +127,58 @@ async function resolveCourses(
 }
 
 /**
- * Collect every dated assignment and quiz for one course.
+ * Collect every graded, dated discussion topic for one course.
  *
- * Two API calls per course, no submissions or attempts: the due date lives on
- * the item itself, which is what makes this cheap enough to run across all
- * enrolled courses.
+ * Forums carry no due date themselves; it lives on each topic. A forum whose
+ * topics fail to load (e.g. no access) is skipped rather than failing the
+ * whole course, matching `getForumsOverview` in get-discussions.ts.
+ */
+async function fetchDiscussionDueTopics(
+  apiClient: D2LApiClient,
+  courseId: number
+): Promise<DiscussionTopic[]> {
+  const forums = await apiClient.get<{ Objects: DiscussionForum[] } | DiscussionForum[]>(
+    apiClient.le(courseId, "/discussions/forums/"),
+    { ttl: DEFAULT_CACHE_TTLS.assignments }
+  );
+
+  const topics: DiscussionTopic[] = [];
+  for (const forum of unwrapList<DiscussionForum>(forums)) {
+    try {
+      const forumTopics = await apiClient.get<
+        { Objects: DiscussionTopic[] } | DiscussionTopic[]
+      >(
+        apiClient.le(courseId, `/discussions/forums/${forum.ForumId}/topics/`),
+        { ttl: DEFAULT_CACHE_TTLS.assignments }
+      );
+      topics.push(...unwrapList<DiscussionTopic>(forumTopics));
+    } catch (error) {
+      log(
+        "DEBUG",
+        `get_upcoming_due_dates: failed to fetch topics for forum ${forum.ForumId} in course ${courseId}`,
+        error
+      );
+    }
+  }
+
+  return topics;
+}
+
+/**
+ * Collect every dated assignment, quiz, and graded discussion topic for one
+ * course.
+ *
+ * No submissions or attempts: the due date lives on the item itself, which is
+ * what makes this cheap enough to run across all enrolled courses. A
+ * discussion topic counts only when it has a DueDate — an ungraded chat forum
+ * has none and should not clutter the list.
  */
 async function fetchCourseDueItems(
   apiClient: D2LApiClient,
   baseUrl: string,
   course: CourseRef
 ): Promise<UpcomingItem[]> {
-  const [dropboxResult, quizResult] = await Promise.allSettled([
+  const [dropboxResult, quizResult, discussionResult] = await Promise.allSettled([
     apiClient.get<{ Objects: DropboxFolder[] } | DropboxFolder[]>(
       apiClient.le(course.id, "/dropbox/folders/"),
       { ttl: DEFAULT_CACHE_TTLS.assignments }
@@ -135,6 +187,7 @@ async function fetchCourseDueItems(
       apiClient.le(course.id, "/quizzes/"),
       { ttl: DEFAULT_CACHE_TTLS.assignments }
     ),
+    fetchDiscussionDueTopics(apiClient, course.id),
   ]);
 
   const items: UpcomingItem[] = [];
@@ -185,6 +238,27 @@ async function fetchCourseDueItems(
     log("DEBUG", `get_upcoming_due_dates: failed to fetch quizzes for course ${course.id}`, quizResult.reason);
   }
 
+  if (discussionResult.status === "fulfilled") {
+    for (const topic of discussionResult.value) {
+      if (topic.IsHidden === true) continue;
+      if (!topic.DueDate) continue;
+
+      items.push({
+        type: "discussion",
+        id: topic.TopicId,
+        title: topic.Name,
+        courseId: course.id,
+        courseName: course.name,
+        dueDate: topic.DueDate,
+        startDate: null,
+        endDate: null,
+        url: discussionUrl(baseUrl, course.id, topic.TopicId),
+      });
+    }
+  } else {
+    log("DEBUG", `get_upcoming_due_dates: failed to fetch discussions for course ${course.id}`, discussionResult.reason);
+  }
+
   return items;
 }
 
@@ -201,7 +275,7 @@ export function registerGetUpcomingDueDates(
     {
       title: "Get Upcoming Due Dates",
       description:
-        "Fetch upcoming due dates across all your courses, derived from the due dates on assignments (dropbox folders) and quizzes themselves. Use this when the user asks about deadlines, what's due, upcoming work, or what they need to do this week.",
+        "Fetch upcoming due dates across all your courses, derived from the due dates on assignments (dropbox folders), quizzes, and graded discussion topics themselves. Use this when the user asks about deadlines, what's due, upcoming work, or what they need to do this week.",
       inputSchema: GetUpcomingDueDatesSchema,
     },
     async (args: any) => {
