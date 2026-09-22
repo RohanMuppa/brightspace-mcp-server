@@ -82,7 +82,7 @@ describe("AuthRunner", () => {
     expect(spawn).toHaveBeenCalledTimes(2);
   });
 
-  it.each([[2, "busy"], [3, "cooldown"], [4, "unsupported"], [5, "secureStorage"], [6, "transport"], [1, "failed"]])(
+  it.each([[2, "busy"], [3, "cooldown"], [4, "unsupported"], [5, "secureStorage"], [6, "transport"], [1, "failed"], [7, "mfaPending"]])(
     "preserves child exit %s as a %s error", async (code, kind) => {
       const result = new AuthRunner().run();
       const failure = expect(result).rejects.toMatchObject({ kind });
@@ -90,6 +90,23 @@ describe("AuthRunner", () => {
       await failure;
     },
   );
+
+  it("parses the MFA_NUMBER stdout marker into the mfaPending error, not the logs", async () => {
+    const result = new AuthRunner().run();
+    const failure = expect(result).rejects.toMatchObject({ kind: "mfaPending", numberMatch: "47" });
+    child.stdout.write("some progress line\n");
+    child.stdout.write("MFA_NUMBER:47\n");
+    child.emit("close", 7);
+    await failure;
+  });
+
+  it("never treats a malformed marker as structured data", async () => {
+    const result = new AuthRunner().run();
+    const failure = expect(result).rejects.toMatchObject({ kind: "mfaPending", numberMatch: undefined });
+    child.stdout.write("MFA_NUMBER:not-a-number\n");
+    child.emit("close", 7);
+    await failure;
+  });
 
   it("allows five minutes of MFA plus preflight before timing out", async () => {
     const result = new AuthRunner().run();

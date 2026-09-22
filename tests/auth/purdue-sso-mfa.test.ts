@@ -159,6 +159,15 @@ describe("Purdue MFA loop ported from Brightspace Bar", () => {
     await expect(handleMFA(page)).rejects.toBeInstanceOf(MfaApprovalError);
   });
 
+  it("carries the last announced number-match digits on a timed-out challenge", async () => {
+    captureWarnings();
+    const { page } = makeMfaPage([
+      { number: "18", challenge: true },
+      { number: "73", challenge: true },
+    ]);
+    await expect(handleMFA(page)).rejects.toMatchObject({ numberMatch: "73" });
+  });
+
   it("classifies a timeout with no challenge as unsupported instead of failed MFA", async () => {
     const { page } = makeMfaPage([{}]);
     await expect(handleMFA(page)).rejects.toBeInstanceOf(UnsupportedAuthenticationError);

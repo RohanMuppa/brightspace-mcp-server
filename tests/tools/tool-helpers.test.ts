@@ -71,6 +71,7 @@ describe("sanitizeError", () => {
     ["transport", "could not be reached to sign in"],
     ["timeout", "did not finish in time"],
     ["failed", "did not complete"],
+    ["mfaPending", "was not completed in time"],
   ];
 
   it.each(expectedGuidance)("explains a %s sign-in failure", (kind, expected) => {
@@ -78,6 +79,15 @@ describe("sanitizeError", () => {
 
     expect(result.isError).toBe(true);
     expect(textOf(result)).toContain(expected);
+  });
+
+  // The digits are the whole point of this error, and they only ever reach
+  // here via AuthProcessError.numberMatch (a stdout marker already validated
+  // to \d{1,3} in auth-runner.ts) — never via the free-form message.
+  it("surfaces the number-match digits for a pending MFA approval", () => {
+    const result = sanitizeError(new AuthProcessError("mfaPending", "internal detail", "47"));
+
+    expect(textOf(result)).toContain("enter 47");
   });
 
   it("never repeats the raw failure text back to the caller", () => {
