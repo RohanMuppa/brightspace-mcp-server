@@ -24,9 +24,16 @@ export class UnsupportedAuthenticationError extends BrowserAuthError {
 
 export class MfaApprovalError extends BrowserAuthError {
   readonly code = "AUTH_MFA_FAILED";
-  constructor(cause?: Error) {
+  /**
+   * The Entra number-match digits shown when the timeout hit, if any were
+   * seen. Already validated to 1-3 digits at the point it was scraped
+   * (see purdue-sso.ts readNumberMatch) — safe to surface verbatim.
+   */
+  readonly numberMatch?: string;
+  constructor(cause?: Error, numberMatch?: string) {
     super(`MFA approval failed or timed out after 5 minutes. Run ${AUTH_COMMAND} to retry.`, "mfa_approval", cause);
     this.name = "MfaApprovalError";
+    this.numberMatch = numberMatch;
   }
 }
 

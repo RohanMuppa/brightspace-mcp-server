@@ -231,10 +231,10 @@ export class PurdueSSOFlow {
       }
     } catch (error) {
       if (error instanceof BrowserAuthError) throw error;
-      if (challenged) throw new MfaApprovalError(error as Error);
+      if (challenged) throw new MfaApprovalError(error as Error, announced ?? undefined);
       throw new UnsupportedAuthenticationError("Automatic sign-in stopped before a supported MFA challenge completed.", error as Error);
     }
-    if (challenged) throw new MfaApprovalError();
+    if (challenged) throw new MfaApprovalError(undefined, announced ?? undefined);
     throw new UnsupportedAuthenticationError("Sign-in did not reach a supported MFA challenge or Brightspace within 5 minutes.");
   }
 

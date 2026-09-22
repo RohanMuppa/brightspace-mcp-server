@@ -21,10 +21,28 @@ import { AUTH_COMMAND } from "../utils/commands.js";
 const AUTH_TIMEOUT_MS = 8 * 60 * 1000;
 const KILL_GRACE_MS = 5000;
 
-export type AuthFailureKind = "busy" | "cooldown" | "unsupported" | "secureStorage" | "transport" | "timeout" | "failed";
+/**
+ * The only line auth-cli.ts is allowed to hand back as structured data.
+ * Deliberately strict (1-3 digits, whole line) so this can never become a
+ * channel for arbitrary child-process text to reach a tool response —
+ * anything that doesn't match this exactly is just another log line.
+ */
+const MFA_NUMBER_MARKER = /^MFA_NUMBER:(\d{1,3})$/;
+
+export type AuthFailureKind = "busy" | "cooldown" | "unsupported" | "secureStorage" | "transport" | "timeout" | "failed" | "mfaPending";
 
 export class AuthProcessError extends AuthError {
-  constructor(public readonly kind: AuthFailureKind, message: string) {
+  constructor(
+    public readonly kind: AuthFailureKind,
+    message: string,
+    /**
+     * Entra number-match digits, when the failure is "mfaPending". Crossed
+     * the child process boundary as a strictly-matched stdout marker (see
+     * MFA_NUMBER_MARKER below) — already bounded to 1-3 digits at the point
+     * it was scraped from the page, so it is safe to surface verbatim.
+     */
+    public readonly numberMatch?: string,
+  ) {
     super(message);
     this.name = "AuthProcessError";
   }
@@ -154,6 +172,7 @@ export class AuthRunner {
 
       let timedOut = false;
       let settled = false;
+      let numberMatch: string | undefined;
       let killTimer: ReturnType<typeof setTimeout> | undefined;
       const kill = (signal: NodeJS.Signals) => {
         try {
@@ -201,7 +220,11 @@ export class AuthRunner {
       });
       // Piped and drained rather than ignored: a full stdout pipe would
       // block the child mid-login.
-      forwardLines(child.stdout, (line) => log("DEBUG", line));
+      forwardLines(child.stdout, (line) => {
+        const match = MFA_NUMBER_MARKER.exec(line);
+        if (match) numberMatch = match[1];
+        else log("DEBUG", line);
+      });
 
       child.on("error", (error) => {
         if (settled) return;
@@ -225,10 +248,13 @@ export class AuthRunner {
             4: ["unsupported", "This identity provider cannot complete headless authentication. See the authentication logs."],
             5: ["secureStorage", "The native credential store is unavailable or locked. Unlock it and retry."],
             6: ["transport", "Brightspace authentication is temporarily unavailable because of a network or server failure. Your saved session was preserved. Try again later."],
+            7: numberMatch
+              ? ["mfaPending", `Open Microsoft Authenticator and enter ${numberMatch} within 5 minutes, then try again.`]
+              : ["mfaPending", "A Microsoft Authenticator approval was not completed in time. Try again."],
           };
           const [kind, message] = failures[code ?? -1] ?? ["failed", `Authentication failed. Run ${AUTH_COMMAND} to try again.`];
           kill("SIGKILL");
-          finish(new AuthProcessError(kind, message));
+          finish(new AuthProcessError(kind, message, kind === "mfaPending" ? numberMatch : undefined));
         }
       });
     });

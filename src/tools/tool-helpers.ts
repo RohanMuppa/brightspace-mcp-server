@@ -87,7 +87,23 @@ const AUTH_FAILURE_GUIDANCE: Record<AuthFailureKind, string> = {
   failed:
     `The sign-in did not complete. Run \`${AUTH_COMMAND}\` in a terminal to see why, ` +
     "or `brightspace-setup` if your saved school or username is wrong.",
+  mfaPending:
+    "A Microsoft Authenticator approval was not completed in time. Try again.",
 };
+
+/**
+ * mfaPending is the one kind whose guidance is partly dynamic: `numberMatch`
+ * on AuthProcessError, unlike its `message`, is populated only from a
+ * strictly `/^\d{1,3}$/`-matched marker the child process printed (see
+ * auth-runner.ts MFA_NUMBER_MARKER) — a bounded, pre-validated value, not
+ * arbitrary child output, so it is safe to interpolate here.
+ */
+function authFailureMessage(error: AuthProcessError): string {
+  if (error.kind === "mfaPending" && error.numberMatch) {
+    return `Open Microsoft Authenticator and enter ${error.numberMatch} within 5 minutes, then run this again.`;
+  }
+  return AUTH_FAILURE_GUIDANCE[error.kind];
+}
 
 /**
  * What to tell someone when a download fails.
@@ -127,7 +143,7 @@ export function sanitizeError(error: unknown): CallToolResult {
   // carries guidance that the generic branches below would throw away.
   if (error instanceof AuthProcessError) {
     return errorResponse(
-      `Could not sign in to Brightspace automatically. ${AUTH_FAILURE_GUIDANCE[error.kind]}`
+      `Could not sign in to Brightspace automatically. ${authFailureMessage(error)}`
     );
   }
 
