@@ -110,7 +110,7 @@ These twelve are the whole surface. An available-update notice, when there is on
 
 Quiz attempt counts are unavailable to students on the Purdue tenant: `/quizzes/{id}/attempts/` answers 403. Those quizzes carry `attemptsAvailable: false` with null counts rather than a fabricated zero.
 
-Assignments, quizzes, and due dates each carry a `url` field that deep-links into Brightspace. `get_assignments` also returns `gradeOnly` items for gradebook columns that match no assignment or quiz, such as a proctored exam. `get_upcoming_due_dates` reads `DueDate` from assignments and `DueDate ?? EndDate` from quizzes rather than the calendar feed.
+Assignments, quizzes, and due dates each carry a `url` field that deep-links into Brightspace. `get_assignments` also returns `gradeOnly` items for gradebook columns that match no assignment or quiz, such as a proctored exam. `get_upcoming_due_dates` reads `DueDate` from assignments, `DueDate ?? EndDate` from quizzes, and `DueDate` from discussion topics (`type: "discussion"`) rather than the calendar feed. A topic with no `DueDate` is an ungraded forum and is excluded.
 
 ## Codebase map
 

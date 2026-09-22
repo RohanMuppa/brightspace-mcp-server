@@ -116,7 +116,7 @@ npx -y brightspace-mcp-server@latest auth
 | Course content | "Find the midterm review slides" · "Download every PDF from Module 5" |
 | Roster | "Who are the TAs for ECE 264?" · "Get me my instructor's email" |
 | Discussions | "What are people saying in the final project thread?" · "Summarize the latest discussion posts" |
-| Planning | "Build me a study schedule based on my upcoming due dates" · "Which class needs the most attention right now?" |
+| Planning | "Build me a study schedule based on my upcoming due dates" · "Which class needs the most attention right now?" — pulls from assignments, quizzes, and graded discussion topics (any topic with a due date) |
 
 ## Contributing & Forking
 

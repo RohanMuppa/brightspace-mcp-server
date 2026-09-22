@@ -269,6 +269,87 @@ describe("get_upcoming_due_dates", () => {
 
     await call({ daysAhead: 7 });
     expect(requested.filter((p) => /submissions|feedback|attempts/.test(p))).toEqual([]);
-    expect(requested.filter((p) => p.includes(`/${COURSE_A.Id}/`))).toHaveLength(2);
+    expect(requested.filter((p) => p.includes(`/${COURSE_A.Id}/`))).toHaveLength(3);
+  });
+
+  it("includes a graded discussion topic with a due date (issue #36)", async () => {
+    const { call } = setup((path) => {
+      if (path.includes("/enrollments/")) return enrollments(COURSE_A);
+      if (path.includes("/discussions/forums/") && path.endsWith("/topics/")) {
+        return [
+          { TopicId: 501, Name: "Reading response #1", DueDate: daysFromNow(3), IsHidden: false },
+        ];
+      }
+      if (path.includes("/discussions/forums/")) {
+        return [{ ForumId: 9, Name: "Reading Responses" }];
+      }
+      return [];
+    });
+
+    const items = parse(await call({ daysAhead: 7 }));
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      type: "discussion",
+      id: 501,
+      title: "Reading response #1",
+      courseId: 101,
+      courseName: "CS 180",
+    });
+    expect(items[0].url).toBe(
+      `${BASE}/d2l/lms/discussions/threadlist.d2l?ou=101&tId=501`
+    );
+  });
+
+  it("excludes discussion topics with no due date, and hidden ones", async () => {
+    const { call } = setup((path) => {
+      if (path.includes("/enrollments/")) return enrollments(COURSE_A);
+      if (path.includes("/discussions/forums/") && path.endsWith("/topics/")) {
+        return [
+          { TopicId: 1, Name: "Undated chat", DueDate: null, IsHidden: false },
+          { TopicId: 2, Name: "Hidden graded", DueDate: daysFromNow(1), IsHidden: true },
+        ];
+      }
+      if (path.includes("/discussions/forums/")) {
+        return [{ ForumId: 9, Name: "General" }];
+      }
+      return [];
+    });
+
+    expect(parse(await call({ daysAhead: 7 }))).toEqual([]);
+  });
+
+  it("keeps other sources when the discussions fetch fails", async () => {
+    const { call } = setup((path) => {
+      if (path.includes("/enrollments/")) return enrollments(COURSE_A);
+      if (path.includes("/discussions/forums/")) throw new Error("network error");
+      if (path.includes("/dropbox/folders/")) {
+        return [{ Id: 1, Name: "HW", DueDate: daysFromNow(1), IsHidden: false }];
+      }
+      return [];
+    });
+
+    const items = parse(await call({ daysAhead: 7 }));
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ type: "assignment", title: "HW" });
+  });
+
+  it("keeps other forums when one forum's topics fail to load", async () => {
+    const { call } = setup((path) => {
+      if (path.includes("/enrollments/")) return enrollments(COURSE_A);
+      if (path.includes("/discussions/forums/9/topics/")) throw forbidden();
+      if (path.includes("/discussions/forums/10/topics/")) {
+        return [{ TopicId: 20, Name: "Reading response #2", DueDate: daysFromNow(2), IsHidden: false }];
+      }
+      if (path.includes("/discussions/forums/")) {
+        return [
+          { ForumId: 9, Name: "No access" },
+          { ForumId: 10, Name: "Reading Responses" },
+        ];
+      }
+      return [];
+    });
+
+    const items = parse(await call({ daysAhead: 7 }));
+    expect(items.map((i) => i.title)).toEqual(["Reading response #2"]);
   });
 });

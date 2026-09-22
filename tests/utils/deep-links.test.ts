@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { assignmentUrl, quizUrl } from "../../src/utils/deep-links.js";
+import { assignmentUrl, quizUrl, discussionUrl } from "../../src/utils/deep-links.js";
 
 const BASE = "https://brightspace.example.edu";
 
@@ -16,12 +16,21 @@ describe("deep-links", () => {
     );
   });
 
+  it("builds the discussion thread list url", () => {
+    expect(discussionUrl(BASE, 12345, 42)).toBe(
+      "https://brightspace.example.edu/d2l/lms/discussions/threadlist.d2l?ou=12345&tId=42"
+    );
+  });
+
   it("strips a trailing slash from baseUrl", () => {
     expect(assignmentUrl(`${BASE}/`, 1, 2)).toBe(
       "https://brightspace.example.edu/d2l/lms/dropbox/user/folder_submit_files.d2l?db=2&grpid=0&ou=1"
     );
     expect(quizUrl(`${BASE}/`, 1, 2)).toBe(
       "https://brightspace.example.edu/d2l/lms/quizzing/user/quiz_summary.d2l?qi=2&ou=1"
+    );
+    expect(discussionUrl(`${BASE}/`, 1, 2)).toBe(
+      "https://brightspace.example.edu/d2l/lms/discussions/threadlist.d2l?ou=1&tId=2"
     );
   });
 });
