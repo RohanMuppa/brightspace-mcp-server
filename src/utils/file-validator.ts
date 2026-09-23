@@ -43,6 +43,21 @@ const CFB_EXTENSION_MIMES: Record<string, string> = {
 };
 
 /**
+ * The same dead-allowlist-entry problem as CFB, one format over.
+ *
+ * file-type has no SVG detector: an SVG carrying the usual `<?xml ...?>`
+ * prolog is reported as application/xml, which is not in the allowlist, so
+ * every ordinary .svg download failed and the image/svg+xml entry below was
+ * unreachable. Reconcile against the declared extension exactly as CFB does --
+ * that admits only the format the allowlist already intended and still refuses
+ * every other flavour of XML.
+ */
+const XML_MIME = "application/xml";
+const XML_EXTENSION_MIMES: Record<string, string> = {
+  ".svg": "image/svg+xml",
+};
+
+/**
  * Maximum file size for downloads (50 MB).
  * Prevents memory exhaustion from malicious large file requests.
  */
@@ -140,11 +155,28 @@ export async function validateFileType(
   allowedTypes: string[] = ALLOWED_MIME_TYPES,
   filename?: string
 ): Promise<{ mime: string; ext: string }> {
+  // An empty body is not a text file. It reaches here when a fetch was
+  // truncated or the server answered with nothing, and the UTF-8 fallback
+  // below would otherwise wave it through as text/plain and write a zero-byte
+  // file to disk under whatever name the download was given.
+  if (buffer.length === 0) {
+    throw new DownloadError("undetectableType", "File is empty (0 bytes)");
+  }
+
   // Try magic byte detection first
   const fileTypeFromBuffer = await getFileTypeFromBuffer();
   const detected = await fileTypeFromBuffer(buffer);
 
   if (detected) {
+    if (detected.mime === XML_MIME) {
+      const ext = filename ? path.extname(filename).toLowerCase() : "";
+      const resolved = XML_EXTENSION_MIMES[ext];
+      if (resolved && allowedTypes.includes(resolved)) {
+        return { mime: resolved, ext: ext.slice(1) };
+      }
+      // Anything else falls through to the allowlist check, which refuses
+      // application/xml the way it always has.
+    }
     if (detected.mime === CFB_MIME) {
       const ext = filename ? path.extname(filename).toLowerCase() : "";
       const resolved = CFB_EXTENSION_MIMES[ext];
@@ -181,10 +213,18 @@ export async function validateFileType(
       const noBom =
         decoded.charCodeAt(0) === 0xfeff ? decoded.slice(1) : decoded;
       const head = noBom.trimStart().toLowerCase();
-      const isHtml =
-        head.startsWith("<!doctype html") || head.startsWith("<html");
-      const mime = isHtml ? "text/html" : "text/plain";
-      const ext = isHtml ? "html" : "txt";
+      let mime = "text/plain";
+      let ext = "txt";
+      if (head.startsWith("<!doctype html") || head.startsWith("<html")) {
+        mime = "text/html";
+        ext = "html";
+      } else if (head.startsWith("<svg") || head.startsWith("<!doctype svg")) {
+        // An SVG without the XML prolog reaches the fallback instead of being
+        // detected. Naming it text/plain told the caller the wrong type for a
+        // file the allowlist has an entry for.
+        mime = "image/svg+xml";
+        ext = "svg";
+      }
 
       if (allowedTypes.includes(mime)) {
         return { mime, ext };
@@ -217,17 +257,47 @@ export function validateContentId(id: unknown): number {
 }
 
 /**
- * Validate URL starts with expected D2L base URL.
+ * Validate a URL belongs to the expected D2L origin.
  * Prevents SSRF attacks via user-controlled URLs.
+ *
+ * A plain string prefix test is not enough: "https://purdue.brightspace.com"
+ * is a prefix of "https://purdue.brightspace.com.attacker.example/steal", so
+ * an attacker registering a hostname that starts with the school's own passes
+ * it. Compare parsed origins instead, and require any expected path prefix to
+ * end on a "/" so /d2lXXX cannot satisfy a prefix of /d2l.
  *
  * @param url - URL to validate
  * @param expectedBaseUrl - Expected D2L base URL (e.g., "https://purdue.brightspace.com")
  * @throws Error if URL doesn't match expected base
  */
 export function validateBaseUrl(url: string, expectedBaseUrl: string): void {
-  if (!url.startsWith(expectedBaseUrl)) {
+  const reject = (): never => {
     throw new Error(
       `URL must start with ${expectedBaseUrl}, got: ${url.substring(0, 50)}...`
     );
+  };
+
+  let target: URL;
+  let expected: URL;
+  try {
+    target = new URL(url);
+    expected = new URL(expectedBaseUrl);
+  } catch {
+    return reject();
+  }
+
+  // Opaque origins serialize to "null", so two unrelated file: or data: URLs
+  // would compare equal. Only a real, comparable origin counts.
+  if (target.origin === "null" || target.origin !== expected.origin) {
+    return reject();
+  }
+
+  const basePath = expected.pathname.replace(/\/+$/, "");
+  if (
+    basePath &&
+    target.pathname !== basePath &&
+    !target.pathname.startsWith(`${basePath}/`)
+  ) {
+    return reject();
   }
 }
