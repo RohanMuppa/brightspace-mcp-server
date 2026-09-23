@@ -77,6 +77,28 @@ describe("SessionStore", () => {
     expect(await new SessionStore(dir, { backend }).load()).toEqual(testToken);
   });
 
+  it("refuses a version 1 session planted after native key storage is in use", async () => {
+    await store.save(testToken);
+    // Anything able to write the session directory can forge a version 1
+    // record: its key is scrypt over the local account name and a salt it
+    // writes itself. Only the native key proves the credential store was
+    // reachable, so a version 1 file appearing afterwards is a downgrade.
+    const planted = await writeLegacySession(dir);
+    await expect(store.load()).rejects.toThrow("not trusted");
+    await expect(store.saveIfCurrent({ ...testToken, accessToken: "forged" }, testToken)).rejects.toThrow("not trusted");
+    expect(await fs.readFile(path.join(dir, "session.json"), "utf8")).toBe(planted);
+    expect(backend.writes).toBe(1);
+  });
+
+  it("still upgrades a version 1 session in a directory that has no key yet", async () => {
+    // A key belonging to another account directory must not be mistaken for
+    // this one's completed upgrade.
+    await new SessionStore(path.join(dir, "other-account"), { backend }).save(testToken);
+    await writeLegacySession(dir);
+    expect(await store.load()).toEqual(testToken);
+    expect(JSON.parse(await fs.readFile(path.join(dir, "session.json"), "utf8")).version).toBe(2);
+  });
+
   it("preserves legacy ciphertext when native key storage fails", async () => {
     const saved = await writeLegacySession(dir);
     backend.setPassword = async () => { throw new NativeCredentialStoreError(); };

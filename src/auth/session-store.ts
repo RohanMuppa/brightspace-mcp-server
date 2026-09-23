@@ -11,7 +11,7 @@ import * as os from "node:os";
 import type { TokenData, SessionFile } from "../types/index.js";
 import { SessionStoreError } from "../utils/errors.js";
 import { acquireProcessLock, AuthenticationInProgressError } from "./auth-lock.js";
-import { NativeCredentialStoreError } from "./credential-store.js";
+import { hasSessionEncryptionKey, NativeCredentialStoreError } from "./credential-store.js";
 import { decrypt, readEncryptedRecord, saveEncryptedRecord, trashFile, type EncryptedRecord, type SecureStoreOptions } from "./encrypted-store.js";
 
 const DEFAULT_SESSION_DIR = path.join(os.homedir(), ".d2l-session");
@@ -104,9 +104,25 @@ export class SessionStore {
     return token;
   }
 
+  /**
+   * A version 1 record is sealed with scrypt over the local account name and
+   * an on-disk salt: material every local process already has, so the record
+   * proves nothing about who wrote it. It is worth trusting only during the
+   * one-time upgrade, which by definition happens before this directory owns
+   * a native key. Once the key exists the upgrade has already run, and a
+   * version 1 file can only have been planted by something that could write
+   * the session directory but could not reach the credential store. Refuse it
+   * rather than let it replace the authenticated session.
+   */
+  private async assertLegacyUpgradePending(): Promise<void> {
+    if (!await hasSessionEncryptionKey(this.sessionDir, this.options.backend)) return;
+    throw new SessionStoreError("An old unauthenticated session file appeared after this installation was already using native key storage. It was not trusted and was left in place. Sign in again to replace it.");
+  }
+
   private async loadUnlocked(): Promise<TokenData | null> {
     const record = await this.readFile();
     if (!record) return null;
+    if (record.version === 1) await this.assertLegacyUpgradePending();
     const token = await this.decode(record);
     if (record.version === 1) await this.saveUnlocked(token);
     return token;
@@ -118,6 +134,9 @@ export class SessionStore {
   }
 
   private storeError(action: string, error: unknown): never {
+    // A store error already carries the specific reason and the way out of it;
+    // wrapping it again would bury both behind the generic sentence below.
+    if (error instanceof SessionStoreError) throw error;
     if (error instanceof NativeCredentialStoreError || error instanceof AuthenticationInProgressError) throw error;
     throw new SessionStoreError(`Failed to ${action} session. Existing session data was preserved.`, error instanceof Error ? error : new Error(String(error)));
   }
