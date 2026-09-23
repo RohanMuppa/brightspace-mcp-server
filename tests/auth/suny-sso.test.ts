@@ -40,6 +40,7 @@ function makePage(url: string, options: Array<[string, string]> | null = CAMPUS_
 
 const selectCampus = (flow: SunySSOFlow, page: unknown): Promise<void> =>
   (flow as any).selectCampus(page);
+const defaultFlowOf = (flow: SunySSOFlow): PurdueSSOFlow => (flow as any).defaultFlow;
 const startSamlLogin = (flow: SunySSOFlow, page: unknown): Promise<void> =>
   (flow as any).startSamlLogin(page);
 
@@ -121,6 +122,40 @@ describe("SunySSOFlow.selectCampus", () => {
     await expect(selectCampus(flow, page)).rejects.toThrow("did not match SUNY");
 
     expect(page.selectOption).not.toHaveBeenCalled();
+  });
+
+  // selectCampus builds precise, actionable errors — the live campus list is
+  // read off SUNY's own dropdown so it can never go stale. login()'s blanket
+  // catch used to rewrite them into one generic sentence, so the only path a
+  // user actually takes threw away the list they need to configure.
+  it("keeps the campus list on the error a signed-in user actually sees", async () => {
+    const page = makePage(IDM_URL);
+    const flow = new SunySSOFlow({ campus: "Nowhere University" });
+
+    await expect(flow.login(page as never)).rejects.toThrow("Albany, Purchase, SUNY Poly");
+  });
+
+  it("keeps the missing-campus instruction on the error a user actually sees", async () => {
+    const page = makePage(IDM_URL);
+
+    await expect(new SunySSOFlow({}).login(page as never)).rejects.toThrow("No SUNY campus configured");
+  });
+
+  it("still explains an unrecognized campus-selection failure", async () => {
+    const page = makePage(IDM_URL);
+    page.$$eval.mockRejectedValueOnce(new Error("Execution context was destroyed"));
+
+    await expect(new SunySSOFlow({ campus: "Albany" }).login(page as never))
+      .rejects.toThrow("SUNY campus selection could not complete automatically");
+  });
+
+  it("hands a cleared campus page to the shared sign-in flow", async () => {
+    const page = makePage(IDM_URL);
+    const flow = new SunySSOFlow({ campus: "Albany" });
+    const login = vi.spyOn(defaultFlowOf(flow), "login").mockResolvedValue(true);
+
+    await expect(flow.login(page as never)).resolves.toBe(true);
+    expect(login).toHaveBeenCalledOnce();
   });
 
   it("skips the dropdown entirely away from SUNY's identity provider", async () => {
