@@ -307,6 +307,56 @@ describe("D2LApiClient", () => {
       expect(mockFetch).toHaveBeenCalledTimes(2); // No new fetch
     });
 
+    it("refetches for a caller whose TTL is shorter than the entry's age", async () => {
+      vi.useFakeTimers();
+      try {
+        const client = new D2LApiClient({
+          baseUrl: "https://purdue.brightspace.com",
+          tokenManager: mockTokenManager,
+        });
+
+        mockFetch.mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          json: async () => [
+            { ProductCode: "lp", LatestVersion: "1.56" },
+            { ProductCode: "le", LatestVersion: "1.91" },
+          ],
+        });
+        await client.initialize();
+        await mockTokenManager.setToken(createMockToken());
+
+        // Two tools read this same path under two different TTLs: the forum
+        // list is 30 minutes of course content to get_discussions and 10
+        // minutes of due dates to get_upcoming_due_dates.
+        const path = "/d2l/api/le/1.91/123456/discussions/forums/";
+        mockFetch.mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          json: async () => [{ ForumId: 1 }],
+        });
+        mockFetch.mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          json: async () => [{ ForumId: 2 }],
+        });
+
+        expect(await client.get(path, { ttl: 1_800_000 })).toEqual([{ ForumId: 1 }]);
+
+        // Fifteen minutes later the entry is alive but older than ten minutes.
+        await vi.advanceTimersByTimeAsync(900_000);
+
+        expect(await client.get(path, { ttl: 600_000 })).toEqual([{ ForumId: 2 }]);
+        expect(mockFetch).toHaveBeenCalledTimes(3); // 1 init + 2 API calls
+
+        // The longer-TTL caller is served the refreshed value, not the stale one.
+        expect(await client.get(path, { ttl: 1_800_000 })).toEqual([{ ForumId: 2 }]);
+        expect(mockFetch).toHaveBeenCalledTimes(3);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it("should not cache when ttl not specified", async () => {
       const client = new D2LApiClient({
         baseUrl: "https://purdue.brightspace.com",
