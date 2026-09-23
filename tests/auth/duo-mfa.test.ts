@@ -184,6 +184,20 @@ describe("DuoMfaHandler", () => {
     expect(click).toHaveBeenCalledOnce();
   });
 
+  it("never types a passcode into a page that left Duo while the prompt waited", async () => {
+    const { page, state, fill, press } = makePage({ passcode: true });
+    // The prompt blocks on stdin; Duo expires and the browser moves on.
+    const requestMfaCode = vi.fn(async () => {
+      state.url = "https://login.microsoftonline.com/common/oauth2/authorize";
+      return "123456";
+    });
+
+    await expect(new DuoMfaHandler({ requestMfaCode }).handle(page as never))
+      .rejects.toThrow(/Duo prompt closed/);
+    expect(fill).not.toHaveBeenCalled();
+    expect(press).not.toHaveBeenCalled();
+  });
+
   it("directs non-interactive passcode entry to the auth CLI", async () => {
     const { page } = makePage({ passcode: true });
     await expect(new DuoMfaHandler({}).handle(page as never)).rejects.toThrow(`Run \`${AUTH_COMMAND}\``);

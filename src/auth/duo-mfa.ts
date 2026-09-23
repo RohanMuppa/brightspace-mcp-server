@@ -139,6 +139,13 @@ export class DuoMfaHandler {
     this.passcodeSubmitted = true;
     const code = await this.options.requestMfaCode();
     if (!/^\d{6,8}$/.test(code)) throw new UnsupportedAuthenticationError("The MFA code must contain 6-8 digits.");
+    // That prompt blocks on a person for as long as they take to find the
+    // code, and Duo expires its prompt and redirects on its own schedule. A
+    // passcode is a credential: confirm it is still Duo's page receiving it
+    // rather than whatever the browser moved on to.
+    if (!this.isChallenge(page)) {
+      throw new UnsupportedAuthenticationError(`The Duo prompt closed before the passcode was entered. Run \`${AUTH_COMMAND}\` to retry.`);
+    }
     await input.fill(code);
     const verify = page.getByRole("button", { name: /verify/i }).first();
     if (await verify.isVisible().catch(() => false)) await verify.click();
