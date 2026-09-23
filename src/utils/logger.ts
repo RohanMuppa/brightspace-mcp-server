@@ -25,6 +25,10 @@ export function setLogLevel(level: LogLevel): void {
  *
  * Deliberately no blanket uppercase or base32 rule: it would eat course codes
  * like ECE264, which are exactly what a useful log line contains.
+ *
+ * Order matters: the JSON-shaped rules run before the free-text ones, so a
+ * serialized object is redacted by key and the looser rules never see the
+ * value they would otherwise re-match across the quoting.
  */
 function redact(value: string): string {
   // JSON web tokens, wherever they appear
@@ -37,15 +41,34 @@ function redact(value: string): string {
     /Bearer\s+([A-Za-z0-9._~+/=-]{8})[A-Za-z0-9._~+/=-]*/g,
     "Bearer $1...REDACTED"
   );
-  // Redact cookie: prefixed tokens
-  value = value.replace(
-    /cookie:([^\s]{8})[^\s]*/g,
-    "cookie:$1...REDACTED"
-  );
-  // JSON-serialized header fields: {"Authorization":"..."}, {"Cookie":"..."}
+  // JSON-serialized header fields: {"Authorization":"..."}, {"Cookie":"..."}.
+  // Runs before the raw-header rule below so a serialized object is redacted
+  // as JSON and the raw-header rule cannot then chew through the quoting.
   value = value.replace(
     /("(?:authorization|cookie|set-cookie)"\s*:\s*")[^"]*(")/gi,
     "$1...REDACTED$2"
+  );
+  // JSON-serialized secret fields: {"password":"..."}, {"accessToken":"..."},
+  // {"refresh_token":"..."}, {"xsrfToken":"..."}. Only string values match, so
+  // a numeric field like "tokenExpiry": 1750000000 is left readable.
+  value = value.replace(
+    /("[^"]*(?:password|passwd|secret|token|credential|api[_-]?key)[^"]*"\s*:\s*")[^"]*(")/gi,
+    "$1...REDACTED$2"
+  );
+  // Raw header lines: "Cookie: d2lSessionVal=..." / "Set-Cookie: ...".
+  // The whole remainder of the line goes, because a cookie header carries
+  // every cookie for the host, not just the first pair. Case-insensitive and
+  // tolerant of the space HTTP actually puts after the colon -- without both,
+  // this rule only ever fired on a form no real header takes.
+  value = value.replace(
+    /(^|[\s{[(,;])((?:set-)?cookie)\s*:[ \t]*([^\r\n]+)/gi,
+    (_match, prefix: string, name: string, secret: string) =>
+      `${prefix}${name}: ${secret.slice(0, 8)}...REDACTED`
+  );
+  // password=... / secret=... in a query string, form body, or free text.
+  value = value.replace(
+    /\b(password|passwd|secret|api[_-]?key|access[_-]?token|refresh[_-]?token)\b(\s*[=:]\s*)(?:"[^"]*"|'[^']*'|[^\s&;,"']+)/gi,
+    (_match, key: string, separator: string) => `${key}${separator}...REDACTED`
   );
   // Credentials embedded in a URL: scheme://user:pass@host
   value = value.replace(
