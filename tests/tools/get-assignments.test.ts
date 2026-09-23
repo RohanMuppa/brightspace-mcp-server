@@ -328,3 +328,112 @@ describe("fetchCourseAssignments quiz mapping", () => {
     expect(quiz.attemptWarning).toBe("WARNING: Only 1 attempt remaining");
   });
 });
+
+/**
+ * The all-courses path reads the enrollment list itself. myenrollments is
+ * bookmark-paged and its isActive filter is server-side, so the list has to be
+ * followed to its last page and queried according to the configured
+ * activeOnly policy — the same two rules get_my_courses already follows.
+ */
+
+import { registerGetAssignments } from "../../src/tools/get-assignments.js";
+import type { AppConfig } from "../../src/types/index.js";
+
+const COURSE_A = { Id: 101, Name: "CS 180", Code: "cs180" };
+const COURSE_B = { Id: 202, Name: "MA 261", Code: "ma261" };
+
+const enrollmentItem = (c: typeof COURSE_A, isActive = true) => ({
+  OrgUnit: c,
+  Access: { ClasslistRoleName: "Student", IsActive: isActive, LastAccessed: null },
+});
+
+function allCoursesConfig(activeOnly: boolean): AppConfig {
+  return {
+    baseUrl: BASE,
+    sessionDir: "/tmp/nope",
+    tokenTtl: 3600,
+    headless: true,
+    courseFilter: { activeOnly },
+  } as AppConfig;
+}
+
+/** Registers the tool over a responder and records every requested path. */
+function setupTool(respond: (path: string) => unknown, config: AppConfig) {
+  const requested: string[] = [];
+  const apiClient = {
+    lp: (p: string) => `/d2l/api/lp/1.0${p}`,
+    le: (orgUnitId: number, p: string) => `/d2l/api/le/1.0/${orgUnitId}${p}`,
+    get: vi.fn(async (path: string) => {
+      requested.push(path);
+      return respond(path);
+    }),
+  };
+
+  let handler: (args: unknown) => Promise<any>;
+  const server = {
+    registerTool: (_n: string, _m: unknown, fn: (args: unknown) => Promise<any>) => {
+      handler = fn;
+    },
+  };
+
+  registerGetAssignments(server as any, apiClient as any, config);
+  return { call: (args: unknown) => handler!(args), requested };
+}
+
+/** One dropbox folder per course, named after it; everything else is empty. */
+const courseWork = (path: string): unknown => {
+  const match = path.match(/\/le\/1\.0\/(\d+)\/dropbox\/folders\/$/);
+  if (match) {
+    return [{ Id: Number(match[1]), Name: `HW ${match[1]}`, DueDate: null, IsHidden: false, GroupTypeId: null }];
+  }
+  if (path.endsWith("/quizzes/") || path.endsWith("/grades/")) return [];
+  if (path.endsWith("/content/toc")) return { Modules: [] };
+  throw notFound();
+};
+
+const body = (result: any) => JSON.parse(result.content[0].text);
+
+describe("get_assignments across all courses", () => {
+  it("follows the enrollment bookmark chain instead of stopping at page one", async () => {
+    const { call, requested } = setupTool((path) => {
+      if (path.includes("/enrollments/")) {
+        return path.includes("bookmark=")
+          ? { Items: [enrollmentItem(COURSE_B)], PagingInfo: { HasMoreItems: false } }
+          : { Items: [enrollmentItem(COURSE_A)], PagingInfo: { HasMoreItems: true, Bookmark: "page-2" } };
+      }
+      return courseWork(path);
+    }, allCoursesConfig(true));
+
+    const { courses } = body(await call({}));
+    expect(courses.map((c: any) => c.courseId)).toEqual([COURSE_A.Id, COURSE_B.Id]);
+    expect(requested.filter((p) => p.includes("/enrollments/"))).toHaveLength(2);
+  });
+
+  it("drops isActive=true from the query when activeOnly is off", async () => {
+    const { call, requested } = setupTool((path) => {
+      if (path.includes("/enrollments/")) {
+        // D2L filters server-side, so isActive=true really does hide COURSE_B.
+        return {
+          Items: path.includes("isActive=true")
+            ? [enrollmentItem(COURSE_A)]
+            : [enrollmentItem(COURSE_A), enrollmentItem(COURSE_B, false)],
+        };
+      }
+      return courseWork(path);
+    }, allCoursesConfig(false));
+
+    const { courses } = body(await call({}));
+    expect(requested[0]).not.toContain("isActive=true");
+    expect(courses.map((c: any) => c.courseId)).toEqual([COURSE_A.Id, COURSE_B.Id]);
+  });
+
+  it("still asks only for active enrollments under the default policy", async () => {
+    const { call, requested } = setupTool((path) => {
+      if (path.includes("/enrollments/")) return { Items: [enrollmentItem(COURSE_A)] };
+      return courseWork(path);
+    }, allCoursesConfig(true));
+
+    await call({});
+    expect(requested[0]).toContain("isActive=true");
+  });
+});

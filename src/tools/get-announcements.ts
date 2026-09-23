@@ -6,6 +6,7 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { D2LApiClient, DEFAULT_CACHE_TTLS } from "../api/index.js";
+import { fetchAllItems } from "../api/paginate.js";
 import {
   GetAnnouncementsSchema,
 } from "./schemas.js";
@@ -42,14 +43,6 @@ interface EnrollmentItem {
     IsActive: boolean;
     CanAccess?: boolean;
     LastAccessed: string | null;
-  };
-}
-
-interface EnrollmentResponse {
-  Items: EnrollmentItem[];
-  PagingInfo?: {
-    HasMoreItems: boolean;
-    Bookmark?: string;
   };
 }
 
@@ -168,18 +161,26 @@ export function registerGetAnnouncements(
         }
 
         // All courses case
-        // First, fetch enrolled courses
+        // First, fetch enrolled courses. isActive=true is the configured
+        // policy, not a constant: with activeOnly off the user asked to see
+        // past courses, and the server would otherwise drop them before
+        // applyCourseFilter ever saw them.
         const enrollmentPath = apiClient.lp(
-          "/enrollments/myenrollments/?orgUnitTypeId=3&isActive=true"
+          `/enrollments/myenrollments/?orgUnitTypeId=3${
+            config.courseFilter.activeOnly ? "&isActive=true" : ""
+          }`
         );
-        const enrollmentResponse = await apiClient.get<EnrollmentResponse>(
+        // myenrollments is bookmark-paged; reading only the first page hides
+        // every course past it, and with it every announcement they carry.
+        const enrollmentItems = await fetchAllItems<EnrollmentItem>(
+          apiClient,
           enrollmentPath,
           { ttl: DEFAULT_CACHE_TTLS.enrollments }
         );
 
         // Apply course filter
         const filteredEnrollments = applyCourseFilter(
-          enrollmentResponse.Items.map(item => ({
+          enrollmentItems.map(item => ({
             id: item.OrgUnit.Id,
             name: item.OrgUnit.Name,
             code: item.OrgUnit.Code,
@@ -238,7 +239,7 @@ export function registerGetAnnouncements(
 
         log(
           "INFO",
-          `get_announcements: Retrieved ${announcements.length} announcements (out of ${allAnnouncements.length} total across ${enrollmentResponse.Items.length} courses)`
+          `get_announcements: Retrieved ${announcements.length} announcements (out of ${allAnnouncements.length} total across ${enrollmentItems.length} courses)`
         );
         return toolResponse(
           modifiedSince
