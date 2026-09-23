@@ -283,3 +283,92 @@ describe("get_course_content modifiedSince (#34)", () => {
     expect(result.content[0].text).toMatch(/ISO 8601/);
   });
 });
+
+/**
+ * /content/root/ already embeds each module's immediate children in Structure.
+ * When the dedicated /structure/ call fails — a locked module, a momentary
+ * 403 — the children were dropped on the floor and the module was reported as
+ * empty. Under a typeFilter the module disappeared from the tree entirely,
+ * because inclusion is decided by whether it has matching children.
+ */
+
+const FILE_TOPIC = {
+  Id: 7,
+  Title: "Lecture 1 slides",
+  ShortTitle: null,
+  Type: 1,
+  TopicType: 1,
+  Description: null,
+  ModuleStartDate: null,
+  ModuleEndDate: null,
+  ModuleDueDate: null,
+  IsHidden: false,
+  IsLocked: false,
+  LastModifiedDate: null,
+};
+
+const MODULE_WITH_EMBEDDED_STRUCTURE = {
+  ...SELF_REFERENCING_MODULE,
+  Id: 2,
+  Title: "Week 1",
+  Structure: [FILE_TOPIC],
+};
+
+/** Root answers with one module; its /structure/ call always fails. */
+function setupBrokenStructure(rootModule: unknown) {
+  const apiClient = {
+    le: (orgUnitId: number, p: string) => `/d2l/api/le/1.0/${orgUnitId}${p}`,
+    get: vi.fn(async (path: string) => {
+      if (path.endsWith("/content/userprogress/")) return [];
+      if (path.includes("/structure/")) {
+        throw Object.assign(new Error("Forbidden"), { status: 403 });
+      }
+      return [rootModule];
+    }),
+  };
+
+  let handler: (args: unknown) => Promise<any>;
+  const server = {
+    registerTool: (_n: string, _m: unknown, fn: (args: unknown) => Promise<any>) => {
+      handler = fn;
+    },
+  };
+
+  registerGetCourseContent(server as any, apiClient as any);
+  return { call: (args: unknown) => handler!(args) };
+}
+
+describe("get_course_content embedded structure fallback", () => {
+  it("keeps the children the root listing already carried when /structure/ fails", async () => {
+    const { call } = setupBrokenStructure(MODULE_WITH_EMBEDDED_STRUCTURE);
+
+    const body = JSON.parse((await call({ courseId: COURSE_ID })).content[0].text);
+
+    expect(body.topicCount).toBe(1);
+    expect(body.contentTree[0].children[0]).toMatchObject({
+      type: "topic",
+      topicType: "file",
+      title: "Lecture 1 slides",
+    });
+  });
+
+  it("does not drop the module under a typeFilter when /structure/ fails", async () => {
+    const { call } = setupBrokenStructure(MODULE_WITH_EMBEDDED_STRUCTURE);
+
+    const body = JSON.parse(
+      (await call({ courseId: COURSE_ID, typeFilter: "file" })).content[0].text
+    );
+
+    expect(body.moduleCount).toBe(1);
+    expect(body.topicCount).toBe(1);
+  });
+
+  it("still reports an empty module as empty when nothing was embedded", async () => {
+    const { call } = setupBrokenStructure(SELF_REFERENCING_MODULE);
+
+    const body = JSON.parse((await call({ courseId: COURSE_ID })).content[0].text);
+
+    expect(body.moduleCount).toBe(1);
+    expect(body.contentTree[0].children).toEqual([]);
+  });
+});
