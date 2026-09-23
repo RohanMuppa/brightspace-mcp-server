@@ -11,11 +11,14 @@ import * as fsSync from "node:fs";
 /**
  * Write a file so that a reader never sees a half-written one.
  *
- * The content is staged to a sibling temp file and then renamed over the
- * target. Rename is atomic on the same filesystem, so a crash, a signal, or
+ * The content is staged to a sibling temp file, flushed, and then renamed over
+ * the target. Rename is atomic on the same filesystem, so a crash, a signal, or
  * a second writer mid-way leaves either the old file or the new one, never a
  * truncated mix. The session store and the config store both hold secrets
  * and are both written by more than one process, which is why they use this.
+ *
+ * A staging write that fails takes its temp file with it: the names are random,
+ * so an orphan is never reused and would sit next to the secret it half-wrote.
  *
  * On Windows a rename can fail transiently while antivirus or an indexer
  * holds the target open, so those errors are retried a few times.
@@ -54,13 +57,23 @@ export async function writeFileAtomic(
   } = options;
 
   const tmp = tempPathFor(target);
-  await fs.writeFile(tmp, data, mode === undefined ? {} : { mode });
-  // writeFile's mode is subject to the umask; chmod is not.
-  if (mode !== undefined && process.platform !== "win32") {
-    await fs.chmod(tmp, mode);
-  }
 
   try {
+    const handle = await fs.open(tmp, "wx", mode);
+    try {
+      await handle.writeFile(data);
+      // open's mode is subject to the umask; chmod is not.
+      if (mode !== undefined && process.platform !== "win32") {
+        await handle.chmod(mode);
+      }
+      // Flush before the rename. A rename that reaches disk ahead of the bytes
+      // it points at leaves a truncated file, which is the one outcome this
+      // module exists to rule out.
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+
     for (let attempt = 1; ; attempt++) {
       try {
         await renameImpl(tmp, target);
@@ -84,12 +97,19 @@ export function writeFileAtomicSync(
 ): void {
   const { mode } = options;
   const tmp = tempPathFor(target);
-  fsSync.writeFileSync(tmp, data, mode === undefined ? {} : { mode });
-  if (mode !== undefined && process.platform !== "win32") {
-    fsSync.chmodSync(tmp, mode);
-  }
 
   try {
+    const fd = fsSync.openSync(tmp, "wx", mode);
+    try {
+      fsSync.writeFileSync(fd, data);
+      if (mode !== undefined && process.platform !== "win32") {
+        fsSync.fchmodSync(fd, mode);
+      }
+      fsSync.fsyncSync(fd);
+    } finally {
+      fsSync.closeSync(fd);
+    }
+
     for (let attempt = 1; ; attempt++) {
       try {
         fsSync.renameSync(tmp, target);
@@ -101,7 +121,12 @@ export function writeFileAtomicSync(
       }
     }
   } catch (error) {
-    fsSync.rmSync(tmp, { force: true });
+    // Cleanup must not replace the failure the caller needs to see.
+    try {
+      fsSync.rmSync(tmp, { force: true });
+    } catch {
+      // The temp file outliving a failed write is the lesser problem.
+    }
     throw error;
   }
 }
