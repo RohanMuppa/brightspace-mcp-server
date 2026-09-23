@@ -36,6 +36,8 @@ export const GetMyGradesSchema = z.object({
 export const GetAnnouncementsSchema = z.object({
   courseId: z.coerce.number().int().positive().optional().describe("Course ID to get announcements for. If omitted, returns recent announcements across all courses."),
   count: z.coerce.number().int().min(1).max(50).default(10).describe("Maximum number of announcements to return"),
+  modifiedSince: z.string().datetime({ offset: true, message: "modifiedSince must be an ISO 8601 datetime, e.g. 2026-01-15T00:00:00Z" }).optional()
+    .describe("Only return announcements last modified at or after this ISO 8601 datetime (e.g. 2026-01-15T00:00:00Z). Announcements with no modified timestamp are always included. When set, the response reports how many announcements were filtered out."),
 });
 
 export const GetAssignmentsSchema = z.object({
@@ -52,6 +54,8 @@ export const GetCourseContentSchema = z.object({
     .describe("Case-insensitive substring match on module titles. Only returns modules whose title contains this string (e.g. 'Labs', 'Staff', 'Homeworks'). Children of matching modules are included in full."),
   maxDepth: z.coerce.number().int().min(1).max(10).optional()
     .describe("Limit recursive depth of the content tree. Depth 1 returns top-level modules with direct children only. Useful for getting a table of contents without all nested content."),
+  modifiedSince: z.string().datetime({ offset: true, message: "modifiedSince must be an ISO 8601 datetime, e.g. 2026-01-15T00:00:00Z" }).optional()
+    .describe("Only return topics last modified at or after this ISO 8601 datetime (e.g. 2026-01-15T00:00:00Z), plus any module that contains a matching topic. Topics with no modified timestamp are always included. When set, the response reports how many topics were filtered out."),
 });
 
 export const GetClasslistEmailsSchema = z.object({

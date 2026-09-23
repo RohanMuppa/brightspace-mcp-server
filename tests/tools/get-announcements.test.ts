@@ -256,4 +256,89 @@ describe("get_announcements", () => {
       expect(capped.map((i) => i.title)).toEqual(["A newest", "B middle"]);
     });
   });
+
+  describe("modifiedSince (#34)", () => {
+    const CUTOFF = "2026-09-15T00:00:00.000Z";
+
+    it("emits lastModified on every announcement", async () => {
+      const { call } = setup(
+        oneCourse([
+          news({ Id: 1, Title: "A", CreatedDate: "2026-09-01T00:00:00.000Z", StartDate: "2026-09-01T00:00:00.000Z", LastModifiedDate: "2026-09-10T00:00:00.000Z", IsPublished: true }),
+        ])
+      );
+
+      const items = parse(await call({ courseId: COURSE_A.Id }));
+      expect(items[0].lastModified).toBe("2026-09-10T00:00:00.000Z");
+    });
+
+    it("returns a bare array, unchanged, when modifiedSince is omitted", async () => {
+      const { call } = setup(
+        oneCourse([
+          news({ Id: 1, Title: "A", CreatedDate: "2026-09-01T00:00:00.000Z", StartDate: "2026-09-01T00:00:00.000Z", IsPublished: true }),
+        ])
+      );
+
+      const result = await call({ courseId: COURSE_A.Id });
+      const body = JSON.parse(result.content[0].text);
+      expect(Array.isArray(body)).toBe(true);
+    });
+
+    it("filters out announcements modified before the cutoff, on the single-course path", async () => {
+      const { call } = setup(
+        oneCourse([
+          news({ Id: 1, Title: "New", CreatedDate: "2026-09-01T00:00:00.000Z", StartDate: "2026-09-01T00:00:00.000Z", LastModifiedDate: "2026-09-20T00:00:00.000Z", IsPublished: true }),
+          news({ Id: 2, Title: "Old", CreatedDate: "2026-09-02T00:00:00.000Z", StartDate: "2026-09-02T00:00:00.000Z", LastModifiedDate: "2026-01-01T00:00:00.000Z", IsPublished: true }),
+        ])
+      );
+
+      const result = await call({ courseId: COURSE_A.Id, modifiedSince: CUTOFF });
+      const body = JSON.parse(result.content[0].text);
+
+      expect(body.announcements.map((a: any) => a.title)).toEqual(["New"]);
+      expect(body.modifiedSince).toBe(CUTOFF);
+      expect(body.returned).toBe(1);
+      expect(body.filteredOut).toBe(1);
+    });
+
+    it("filters across courses on the all-courses path", async () => {
+      const { call } = setup(
+        manyCourses({
+          [COURSE_A.Id]: [
+            news({ Id: 1, Title: "A new", CreatedDate: "2026-09-01T00:00:00.000Z", StartDate: "2026-09-01T00:00:00.000Z", LastModifiedDate: "2026-09-20T00:00:00.000Z", IsPublished: true }),
+          ],
+          [COURSE_B.Id]: [
+            news({ Id: 2, Title: "B old", CreatedDate: "2026-09-01T00:00:00.000Z", StartDate: "2026-09-01T00:00:00.000Z", LastModifiedDate: "2026-01-01T00:00:00.000Z", IsPublished: true }),
+          ],
+        })
+      );
+
+      const result = await call({ modifiedSince: CUTOFF });
+      const body = JSON.parse(result.content[0].text);
+
+      expect(body.announcements.map((a: any) => a.title)).toEqual(["A new"]);
+      expect(body.filteredOut).toBe(1);
+    });
+
+    it("keeps an announcement with no LastModifiedDate rather than dropping it", async () => {
+      const { call } = setup(
+        oneCourse([
+          news({ Id: 1, Title: "No timestamp", CreatedDate: "2026-09-01T00:00:00.000Z", StartDate: "2026-09-01T00:00:00.000Z", LastModifiedDate: null as any, IsPublished: true }),
+        ])
+      );
+
+      const result = await call({ courseId: COURSE_A.Id, modifiedSince: CUTOFF });
+      const body = JSON.parse(result.content[0].text);
+      expect(body.announcements.map((a: any) => a.title)).toEqual(["No timestamp"]);
+      expect(body.filteredOut).toBe(0);
+    });
+
+    it("rejects a malformed modifiedSince with a validation error naming the expected format", async () => {
+      const { call } = setup(oneCourse([]));
+      const result = await call({ courseId: COURSE_A.Id, modifiedSince: "yesterday" });
+
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toMatch(/modifiedSince/);
+      expect(result.content[0].text).toMatch(/ISO 8601/);
+    });
+  });
 });

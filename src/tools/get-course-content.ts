@@ -9,6 +9,7 @@ import { D2LApiClient, DEFAULT_CACHE_TTLS } from "../api/index.js";
 import { GetCourseContentSchema } from "./schemas.js";
 import { toolResponse, sanitizeError } from "./tool-helpers.js";
 import { convertHtmlToMarkdown } from "../utils/html-converter.js";
+import { matchesModifiedSince } from "../utils/modified-since.js";
 import { log } from "../utils/logger.js";
 
 // D2L Content API response type
@@ -123,6 +124,7 @@ async function buildContentTree(
           dueDate: item.ModuleDueDate ?? null,
           isHidden: item.IsHidden,
           isLocked: item.IsLocked,
+          lastModified: item.LastModifiedDate ?? null,
           children: processedChildren,
         });
       }
@@ -145,6 +147,7 @@ async function buildContentTree(
         isHidden: item.IsHidden,
         isLocked: item.IsLocked,
         dueDate: item.DueDate ?? null,
+        lastModified: item.LastModifiedDate ?? null,
         isCompleted: topicProgress?.IsRead ?? false,
         completedDate: topicProgress?.DateCompleted ?? null,
       };
@@ -169,6 +172,32 @@ async function buildContentTree(
   }
 
   return tree;
+}
+
+/**
+ * Filter a content tree to items modified at or after cutoff.
+ *
+ * A module is kept when its own timestamp matches OR any descendant matched
+ * (even with zero matching children after recursion) — a matched topic with
+ * no surrounding module would be a result with no context, which is the
+ * failure mode #34 called out.
+ */
+function filterTreeByModifiedSince(tree: any[], cutoff: Date): any[] {
+  const result: any[] = [];
+  for (const item of tree) {
+    if (item.type === 'topic') {
+      if (matchesModifiedSince(item.lastModified, cutoff)) {
+        result.push(item);
+      }
+    } else if (item.type === 'module') {
+      const filteredChildren = filterTreeByModifiedSince(item.children ?? [], cutoff);
+      const moduleMatches = matchesModifiedSince(item.lastModified, cutoff);
+      if (moduleMatches || filteredChildren.length > 0) {
+        result.push({ ...item, children: filteredChildren });
+      }
+    }
+  }
+  return result;
 }
 
 /**
@@ -222,7 +251,7 @@ export function registerGetCourseContent(
         log("DEBUG", "get_course_content tool called", { args });
 
         // Parse and validate input
-        const { courseId, typeFilter = 'all', moduleTitle, maxDepth } = GetCourseContentSchema.parse(args);
+        const { courseId, typeFilter = 'all', moduleTitle, maxDepth, modifiedSince } = GetCourseContentSchema.parse(args);
 
         // Fetch root modules
         let rootModules = await apiClient.get<ContentObject[]>(
@@ -259,7 +288,7 @@ export function registerGetCourseContent(
         }
 
         // Recursively build content tree
-        const contentTree = await buildContentTree(
+        let contentTree = await buildContentTree(
           apiClient,
           courseId,
           rootModules,
@@ -267,6 +296,17 @@ export function registerGetCourseContent(
           typeFilter,
           maxDepth
         );
+
+        // Apply modifiedSince filter, if requested, after the tree is built:
+        // a module's own timestamp may not change when a child topic does, so
+        // filtering has to see the whole tree to know which modules to keep.
+        let filteredOut = 0;
+        if (modifiedSince) {
+          const topicCountBeforeFilter = countTopics(contentTree);
+          const cutoff = new Date(modifiedSince);
+          contentTree = filterTreeByModifiedSince(contentTree, cutoff);
+          filteredOut = topicCountBeforeFilter - countTopics(contentTree);
+        }
 
         const topicCount = countTopics(contentTree);
         const moduleCount = countModules(contentTree);
@@ -279,6 +319,7 @@ export function registerGetCourseContent(
           contentTree,
           topicCount,
           moduleCount,
+          ...(modifiedSince ? { modifiedSince, returned: topicCount, filteredOut } : {}),
         });
       } catch (error) {
         return sanitizeError(error);
