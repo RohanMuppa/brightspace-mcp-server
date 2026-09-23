@@ -13,12 +13,15 @@ interface PageOptions {
   passwordDelayMs?: number;
   missing?: "email" | "next" | "password" | "submit";
   detachAfterNext?: boolean;
+  /** How many leading Next clicks Microsoft leaves on the email step. */
+  nextLandsAfter?: number;
 }
 
 /** Render each Entra stage independently, including a delayed password field. */
 function makePage(options: PageOptions = {}) {
   let phase: "email" | "password" | "done" = "email";
   let sinceNext = 0;
+  let nextClicks = 0;
   const actions: string[] = [];
   const email = {
     isVisible: vi.fn(async () => phase === "email" && options.missing !== "email"),
@@ -32,7 +35,8 @@ function makePage(options: PageOptions = {}) {
     isVisible: vi.fn(async () => phase === "email" && options.missing !== "next"),
     click: vi.fn(async () => {
       actions.push("next");
-      phase = "password";
+      nextClicks += 1;
+      if (nextClicks > (options.nextLandsAfter ?? 0)) phase = "password";
       if (options.detachAfterNext) throw new Error("Element detached after navigation");
     }),
   };
@@ -96,6 +100,31 @@ describe("PurdueSSOFlow credential choreography ported from Brightspace Bar", ()
     expect(form.actions).toEqual(["email", "next"]);
     expect(form.email.fill).toHaveBeenCalledWith("student@purdue.edu");
 
+    await enterCredentials(flow, form.page);
+    expect(form.actions).toEqual(["email", "next", "password", "submit"]);
+  });
+
+  // clickWhenReady swallows a click error on purpose, because Entra usually
+  // detaches the button once it has navigated. When it has NOT navigated, the
+  // account hint was never accepted and the email field is still on screen.
+  // Trusting the latch there burns the whole 30-second password timeout on a
+  // page still asking for a username, and blames a missing password field.
+  it("re-submits the account name when Microsoft kept the email step on screen", async () => {
+    const form = makePage({ nextLandsAfter: 1 });
+    const flow = new PurdueSSOFlow({ username: USERNAME, password: PASSWORD });
+
+    await expect(flow.identifyAccount(form.page as never)).resolves.toBe(true);
+    expect(form.actions).toEqual(["email", "next"]);
+
+    await enterCredentials(flow, form.page);
+    expect(form.actions).toEqual(["email", "next", "email", "next", "password", "submit"]);
+  });
+
+  it("does not re-submit the account name once the email step is gone", async () => {
+    const form = makePage({ passwordDelayMs: 500 });
+    const flow = new PurdueSSOFlow({ username: USERNAME, password: PASSWORD });
+
+    await expect(flow.identifyAccount(form.page as never)).resolves.toBe(true);
     await enterCredentials(flow, form.page);
     expect(form.actions).toEqual(["email", "next", "password", "submit"]);
   });

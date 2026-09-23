@@ -138,7 +138,16 @@ export class PurdueSSOFlow {
     if (!this.config.password) throw new BrowserAuthError("Password is required for SSO login", "credentials");
 
     log("INFO", "Entering credentials");
-    if (!this.accountHintSubmitted) {
+    // A submitted account hint only counts once Microsoft has actually left the
+    // email step. It keeps that field on screen whenever it rejects the hint,
+    // and clickWhenReady swallows a click that never landed on purpose (Entra
+    // normally detaches the button after navigating), so identifyAccount can
+    // report a success the page never granted. Skipping the email step there
+    // spends the whole password timeout on a page still asking for a username
+    // and then blames a missing password field.
+    const hintAccepted = this.accountHintSubmitted && !await this.anyVisible(page, EMAIL_SELECTORS);
+    this.accountHintSubmitted = false;
+    if (!hintAccepted) {
       const email = signInName(this.config.username, this.config.baseUrl);
       if (!await this.fillWhenReady(page, EMAIL_SELECTORS, email)) {
         throw new UnsupportedAuthenticationError("The Microsoft email field did not appear. Automatic sign-in cannot continue.");
@@ -147,7 +156,6 @@ export class PurdueSSOFlow {
         throw new UnsupportedAuthenticationError("The Microsoft email submit button did not appear. Automatic sign-in cannot continue.");
       }
     }
-    this.accountHintSubmitted = false;
     if (!await this.fillWhenReady(page, PASSWORD_SELECTORS, this.config.password)) {
       throw new UnsupportedAuthenticationError("The Microsoft password field did not appear. Automatic sign-in cannot continue.");
     }
