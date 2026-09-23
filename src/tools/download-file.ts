@@ -9,12 +9,10 @@ import { D2LApiClient } from "../api/index.js";
 import { DownloadFileSchema } from "./schemas.js";
 import { toolResponse, sanitizeError, errorResponse } from "./tool-helpers.js";
 import { log } from "../utils/logger.js";
-import {
-  validateDownloadPath,
-  validateFileType,
-  validateContentId,
-  MAX_FILE_SIZE,
-} from "../utils/file-validator.js";
+// Path containment and magic-byte checks belong to secureDownload, which both
+// download paths below go through; importing them here only made it look as
+// though this file validated anything itself.
+import { validateContentId, MAX_FILE_SIZE } from "../utils/file-validator.js";
 import { secureDownload } from "../utils/download-helpers.js";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -249,13 +247,29 @@ async function downloadSubmissionFile(
     );
   }
 
-  // Find the file in the submission
-  const submission = submissions[0];
-  const file = submission.Files.find((f) => f.FileId === fileId);
+  // Find the file across every submission.
+  //
+  // A resubmitted assignment answers with one entry per submission, each with
+  // its own Files. Reading submissions[0] alone reported "not found" for a file
+  // the same response had just returned, and the download URL below needs the
+  // id of the submission the file actually belongs to, not the first one's.
+  // Files is absent on a submission with no attachments, so it is not assumed.
+  let submission: DropboxSubmission | undefined;
+  let file: DropboxSubmission["Files"][number] | undefined;
 
-  if (!file) {
+  for (const candidate of submissions) {
+    const match = (candidate.Files ?? []).find((f) => f.FileId === fileId);
+    if (match) {
+      submission = candidate;
+      file = match;
+      break;
+    }
+  }
+
+  if (!submission || !file) {
+    const available = submissions.flatMap((s) => s.Files ?? []);
     return errorResponse(
-      `File ID ${fileId} not found in submission. Available files: ${submission.Files.map((f) => `${f.FileName} (ID: ${f.FileId})`).join(", ")}`
+      `File ID ${fileId} not found in submission. Available files: ${available.map((f) => `${f.FileName} (ID: ${f.FileId})`).join(", ")}`
     );
   }
 
