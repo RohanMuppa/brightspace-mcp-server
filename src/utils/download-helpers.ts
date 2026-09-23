@@ -90,17 +90,23 @@ export async function secureDownload(options: {
   }
   log("DEBUG", `secureDownload: file size ${size} bytes (within limit)`);
 
-  // Validate file type via magic bytes
-  // The filename decides which legacy Office format a CFB container is.
-  const { mime } = await validateFileType(data, allowedTypes, filename);
-  log("DEBUG", `secureDownload: file type validated as ${mime}`);
-
-  // Validate download path (prevent path traversal)
+  // Validate download path (prevent path traversal) and keep the name it
+  // sanitized. validateDownloadPath used to be called for its throw alone while
+  // the write below still used the raw filename, so a Brightspace-supplied
+  // "../../name.pdf" resolved cleanly through validation and was then written
+  // two directories above targetDir. Everything past this point — type
+  // detection included — uses the name the file actually gets on disk.
   const validatedPath = validateDownloadPath(targetDir, filename);
+  const safeFilename = path.basename(validatedPath);
   log("DEBUG", `secureDownload: path validated as ${validatedPath}`);
 
+  // Validate file type via magic bytes
+  // The filename decides which legacy Office format a CFB container is.
+  const { mime } = await validateFileType(data, allowedTypes, safeFilename);
+  log("DEBUG", `secureDownload: file type validated as ${mime}`);
+
   // Resolve filename conflicts
-  const resolvedFilename = await resolveFilenameConflict(targetDir, filename);
+  const resolvedFilename = await resolveFilenameConflict(targetDir, safeFilename);
   const finalPath = path.join(targetDir, resolvedFilename);
   log("DEBUG", `secureDownload: resolved filename to ${resolvedFilename}`);
 
