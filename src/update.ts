@@ -8,8 +8,8 @@
  */
 
 import { execSync } from "node:child_process";
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { readFileSync, realpathSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import dotenv from "dotenv";
 
@@ -42,18 +42,47 @@ function getVersion(): string {
   return pkg.version || "unknown";
 }
 
-function main(): void {
+/** Compare two directories as the filesystem sees them. */
+export function samePath(a: string, b: string): boolean {
+  const canonical = (p: string) => {
+    let full = resolve(p);
+    try {
+      full = realpathSync(full);
+    } catch {
+      // A path that cannot be resolved is compared as written.
+    }
+    return process.platform === "win32" ? full.toLowerCase() : full;
+  };
+  return canonical(a) === canonical(b);
+}
+
+export function main(): void {
   console.log("");
   console.log(bold("=== Brightspace MCP Server — Update ==="));
   console.log("");
 
   // Check if we're in a git repo
+  let toplevel: string;
   try {
-    run("git rev-parse --is-inside-work-tree", { silent: true });
+    toplevel = run("git rev-parse --show-toplevel", { silent: true });
   } catch {
     console.error(red("Error: Not a git repository. Cannot update."));
     console.error("Make sure you cloned this project with git.");
     process.exit(1);
+    return;
+  }
+
+  // Git answers for the nearest enclosing repository, which for an installed
+  // copy under node_modules is the *user's own* project. Fetching and pulling
+  // origin/main there would rewrite a repository that has nothing to do with
+  // this package, so only a checkout that is itself the repository root is
+  // updated.
+  if (!samePath(toplevel, projectRoot)) {
+    console.error(red("Error: This copy is not a git checkout of brightspace-mcp-server."));
+    console.error(`  It lives in ${projectRoot}, inside the repository at ${toplevel}.`);
+    console.error("  Update an installed copy with npm instead; this command is for a git clone.");
+    process.exit(1);
+    return;
   }
 
   // Show current version
@@ -138,4 +167,9 @@ function main(): void {
   console.log("");
 }
 
-main();
+// `npm run update` runs this file directly. VITEST is set only by the test
+// runner, which imports the module to exercise main() against a stubbed git;
+// no user environment sets it.
+if (!process.env.VITEST) {
+  main();
+}
