@@ -35,6 +35,7 @@ interface QuizReadData {
 interface DiscussionForum {
   ForumId: number;
   Name: string;
+  IsHidden: boolean;
 }
 
 interface DiscussionTopic {
@@ -134,9 +135,11 @@ async function resolveCourses(
 /**
  * Collect every graded, dated discussion topic for one course.
  *
- * Forums carry no due date themselves; it lives on each topic. A forum whose
- * topics fail to load (e.g. no access) is skipped rather than failing the
- * whole course, matching `getForumsOverview` in get-discussions.ts.
+ * Forums carry no due date themselves; it lives on each topic. A hidden forum
+ * hides everything inside it, however visible its topics claim to be, so it is
+ * skipped without asking for its topics at all. A forum whose topics fail to
+ * load (e.g. no access) is skipped rather than failing the whole course,
+ * matching `getForumsOverview` in get-discussions.ts.
  */
 async function fetchDiscussionDueTopics(
   apiClient: D2LApiClient,
@@ -149,6 +152,8 @@ async function fetchDiscussionDueTopics(
 
   const topics: DiscussionTopic[] = [];
   for (const forum of unwrapList<DiscussionForum>(forums)) {
+    if (forum.IsHidden === true) continue;
+
     try {
       const forumTopics = await apiClient.get<
         { Objects: DiscussionTopic[] } | DiscussionTopic[]

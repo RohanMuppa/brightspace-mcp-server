@@ -333,6 +333,28 @@ describe("get_upcoming_due_dates", () => {
     expect(items[0]).toMatchObject({ type: "assignment", title: "HW" });
   });
 
+  it("excludes every topic inside a hidden forum, however visible the topic", async () => {
+    const { call } = setup((path) => {
+      if (path.includes("/enrollments/")) return enrollments(COURSE_A);
+      if (path.includes("/discussions/forums/9/topics/")) {
+        return [{ TopicId: 55, Name: "Unreleased draft", DueDate: daysFromNow(2), IsHidden: false }];
+      }
+      if (path.includes("/discussions/forums/10/topics/")) {
+        return [{ TopicId: 56, Name: "Reading response #3", DueDate: daysFromNow(2), IsHidden: false }];
+      }
+      if (path.includes("/discussions/forums/")) {
+        return [
+          { ForumId: 9, Name: "Instructor drafts", IsHidden: true },
+          { ForumId: 10, Name: "Reading Responses", IsHidden: false },
+        ];
+      }
+      return [];
+    });
+
+    const items = parse(await call({ daysAhead: 7 }));
+    expect(items.map((i) => i.title)).toEqual(["Reading response #3"]);
+  });
+
   it("keeps other forums when one forum's topics fail to load", async () => {
     const { call } = setup((path) => {
       if (path.includes("/enrollments/")) return enrollments(COURSE_A);
