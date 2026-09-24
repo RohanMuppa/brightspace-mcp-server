@@ -130,3 +130,5 @@ export const GetRosterSchema = z.object({
   limit: z.coerce.number().int().positive().max(1000).default(100)
     .describe("Maximum users to return. Default 100. The response reports the true total and whether it was truncated."),
 });
+
+export const GetServerInfoSchema = z.object({});

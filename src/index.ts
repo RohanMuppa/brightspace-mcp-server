@@ -31,6 +31,7 @@ import {
   registerGetSyllabus,
   registerGetDiscussions,
   registerGetVideoTranscript,
+  registerGetServerInfo,
 } from "./tools/index.js";
 import { AUTH_COMMAND } from "./utils/commands.js";
 
@@ -140,13 +141,14 @@ if (subcommand === 'setup') {
       registerGetSyllabus(server, apiClient);
       registerGetDiscussions(server, apiClient);
       registerGetVideoTranscript(server, apiClient);
-      log("DEBUG", "MCP tools registered (13 tools)");
+      registerGetServerInfo(server, config, PKG_VERSION);
+      log("DEBUG", "MCP tools registered (14 tools)");
 
       // Connect stdio transport
       const transport = new StdioServerTransport();
       await server.connect(transport);
 
-      log("INFO", "Brightspace MCP Server by Rohan Muppa — running on stdio (13 tools registered)");
+      log("INFO", "Brightspace MCP Server by Rohan Muppa — running on stdio (14 tools registered)");
       log("INFO", "Setup: see README.md for MCP client configuration (Claude Desktop, ChatGPT Desktop, Cursor, etc.)");
     } catch (error) {
       log("ERROR", "MCP Server failed to start", error);
