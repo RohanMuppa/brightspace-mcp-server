@@ -105,8 +105,11 @@ Registered in `src/tools/index.ts`, schemas in `src/tools/schemas.ts`:
 | `get_classlist_emails` | Emails of classmates and instructors |
 | `download_file` | Download a file attachment (PDF, slides, etc.) to disk |
 | `get_assignment_files` | Read the files attached to an assignment (spec, rubric, starter workbook) and return their text |
+| `get_video_transcript` | Transcript of a video embedded in course content (Kaltura, YouTube), with timestamps |
 
-These twelve are the whole surface. An available-update notice, when there is one, rides along as a second text block on the first successful result.
+These thirteen are the whole surface. An available-update notice, when there is one, rides along as a second text block on the first successful result.
+
+`get_video_transcript` takes courseId+topicId (from `get_course_content`) or a direct videoUrl, and pages long transcripts via offset/maxChars the same way `get_assignment_files` pages extracted text. It supports Kaltura (e.g. Purdue's BoilerCast) via an anonymous widget session against the Kaltura API — no Brightspace session is needed or used — and YouTube via its public timedtext endpoint. Panopto, YuJa, Echo360, and Vimeo are detected but not yet implemented: the tool names the platform and says so rather than returning an empty result. A video with no caption track also returns `hasTranscript: false` with an explanation, not an error.
 
 Quiz attempt counts are unavailable to students on the Purdue tenant: `/quizzes/{id}/attempts/` answers 403. Those quizzes carry `attemptsAvailable: false` with null counts rather than a fabricated zero.
 
