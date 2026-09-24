@@ -118,20 +118,5 @@ npx -y brightspace-mcp-server@latest auth
 | Discussions | "What are people saying in the final project thread?" · "Summarize the latest discussion posts" |
 | Planning | "Build me a study schedule based on my upcoming due dates" · "Which class needs the most attention right now?" — pulls from assignments, quizzes, and graded discussion topics (any topic with a due date) |
 
-## Contributing & Forking
-
-Want to add your school, build a new tool, or fix something? Fork the repo, make your changes, and open a pull request. If it gets merged, it ships to every user automatically.
-
-```bash
-git clone https://github.com/RohanMuppa/brightspace-mcp-server.git
-cd brightspace-mcp-server
-npm install
-npm run dev       # tsc in watch mode
-npm test          # vitest, must be green before you open a PR
-```
-
-**Add your school:** Add a preset to `SCHOOL_PRESETS` in `src/setup.ts`. If your school's login flow is different, add a handler in `src/auth/`.
-
-**Add a new tool:** Create a file in `src/tools/`, add the schema in `schemas.ts`, export it in `src/tools/index.ts`, and register it in `src/index.ts`. Use any existing tool as a template.
 
 Licensed under the MIT License.
