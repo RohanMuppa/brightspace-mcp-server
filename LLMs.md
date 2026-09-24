@@ -106,8 +106,9 @@ Registered in `src/tools/index.ts`, schemas in `src/tools/schemas.ts`:
 | `download_file` | Download a file attachment (PDF, slides, etc.) to disk |
 | `get_assignment_files` | Read the files attached to an assignment (spec, rubric, starter workbook) and return their text |
 | `get_video_transcript` | Transcript of a video embedded in course content (Kaltura, YouTube), with timestamps |
+| `get_server_info` | Running version, Node runtime, platform, config and session paths, school URL, and whether a credential is stored — no network call, no secrets |
 
-These thirteen are the whole surface. An available-update notice, when there is one, rides along as a second text block on the first successful result.
+These fourteen are the whole surface. An available-update notice, when there is one, rides along as a second text block on the first successful result.
 
 `get_video_transcript` takes courseId+topicId (from `get_course_content`) or a direct videoUrl, and pages long transcripts via offset/maxChars the same way `get_assignment_files` pages extracted text. It supports Kaltura (e.g. Purdue's BoilerCast) via an anonymous widget session against the Kaltura API — no Brightspace session is needed or used — and YouTube via its public timedtext endpoint. Panopto, YuJa, Echo360, and Vimeo are detected but not yet implemented: the tool names the platform and says so rather than returning an empty result. A video with no caption track also returns `hasTranscript: false` with an explanation, not an error.
 
