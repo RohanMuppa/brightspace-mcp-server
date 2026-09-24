@@ -87,7 +87,7 @@ export function registerGetSyllabus(
 
         // Convert description HTML to markdown
         const description = overview?.Description?.Html
-          ? convertHtmlToMarkdown(overview.Description.Html)
+          ? convertHtmlToMarkdown(overview.Description.Html).markdown
           : null;
 
         // Always attempt to fetch the attachment so we can extract PDF text

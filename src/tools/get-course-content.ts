@@ -121,9 +121,9 @@ async function buildContentTree(
           id: item.Id,
           title: item.Title,
           description: item.Description?.Text ?? null,
-          dueDate: item.ModuleDueDate ?? null,
-          isHidden: item.IsHidden,
-          isLocked: item.IsLocked,
+          ...(item.ModuleDueDate ? { dueDate: item.ModuleDueDate } : {}),
+          ...(item.IsHidden ? { isHidden: item.IsHidden } : {}),
+          ...(item.IsLocked ? { isLocked: item.IsLocked } : {}),
           lastModified: item.LastModifiedDate ?? null,
           children: processedChildren,
         });
@@ -144,12 +144,12 @@ async function buildContentTree(
         topicType,
         id: item.Id,
         title: item.Title,
-        isHidden: item.IsHidden,
-        isLocked: item.IsLocked,
-        dueDate: item.DueDate ?? null,
+        ...(item.IsHidden ? { isHidden: item.IsHidden } : {}),
+        ...(item.IsLocked ? { isLocked: item.IsLocked } : {}),
+        ...(item.DueDate ? { dueDate: item.DueDate } : {}),
         lastModified: item.LastModifiedDate ?? null,
         isCompleted: topicProgress?.IsRead ?? false,
-        completedDate: topicProgress?.DateCompleted ?? null,
+        ...(topicProgress?.DateCompleted ? { completedDate: topicProgress.DateCompleted } : {}),
       };
 
       // Add type-specific content
@@ -164,7 +164,7 @@ async function buildContentTree(
 
       // HTML content — include body converted to markdown
       if (item.Description?.Html) {
-        topic.content = convertHtmlToMarkdown(item.Description.Html);
+        topic.content = convertHtmlToMarkdown(item.Description.Html).markdown;
       }
 
       tree.push(topic);

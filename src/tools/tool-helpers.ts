@@ -31,7 +31,7 @@ export function toolResponse(data: unknown): CallToolResult {
   const content: CallToolResult["content"] = [
     {
       type: "text",
-      text: JSON.stringify(data, null, 2),
+      text: JSON.stringify(data),
     },
   ];
 

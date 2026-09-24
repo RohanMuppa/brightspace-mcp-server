@@ -151,8 +151,6 @@ describe("get_announcements", () => {
         "2026-09-07T09:00:00.000Z",
         "2026-09-06T09:00:00.000Z",
       ]);
-      // CreatedDate alone would have put the Saturday item first.
-      expect(items[0].createdDate).toBe("2026-09-04T09:00:00.000Z");
     });
 
     it("falls back to CreatedDate when an item has no StartDate", async () => {
@@ -194,6 +192,19 @@ describe("get_announcements", () => {
       const items = parse(await call({ courseId: COURSE_A.Id }));
       expect(items.map((i) => i.title)).toEqual(["First posted", "Second posted"]);
     });
+  });
+
+  it("omits createdDate and startDate, keeping only the effective date", async () => {
+    const { call } = setup(
+      oneCourse([
+        news({ Id: 1, Title: "Posted", CreatedDate: "2026-09-01T00:00:00.000Z", StartDate: "2026-09-02T00:00:00.000Z", IsPublished: true }),
+      ])
+    );
+
+    const items = parse(await call({ courseId: COURSE_A.Id }));
+    expect(items[0]).not.toHaveProperty("createdDate");
+    expect(items[0]).not.toHaveProperty("startDate");
+    expect(items[0].date).toBe("2026-09-02T00:00:00.000Z");
   });
 
   it("applies the count slice after filtering and sorting", async () => {

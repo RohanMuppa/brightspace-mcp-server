@@ -4,16 +4,24 @@
  * Licensed under MIT — see LICENSE file for details.
  */
 
-import TurndownService from "turndown";
+import { createRequire } from "node:module";
+import type TurndownServiceType from "turndown";
 
-/**
- * Singleton TurndownService instance configured for converting D2L HTML to markdown.
- * Uses ATX-style headings (###) and fenced code blocks (```).
- */
-const turndownService = new TurndownService({
-  headingStyle: "atx",
-  codeBlockStyle: "fenced",
-});
+// turndown is CJS and costs ~50ms to import; defer it to first use via
+// createRequire so callers keep a synchronous API instead of turning async.
+const require = createRequire(import.meta.url);
+let turndownService: TurndownServiceType | undefined;
+
+function getTurndownService(): TurndownServiceType {
+  if (!turndownService) {
+    const TurndownService: typeof TurndownServiceType = require("turndown");
+    turndownService = new TurndownService({
+      headingStyle: "atx",
+      codeBlockStyle: "fenced",
+    });
+  }
+  return turndownService;
+}
 
 /**
  * Convert D2L HTML content to clean markdown.
@@ -31,7 +39,7 @@ export function convertHtmlToMarkdown(
   }
 
   try {
-    const markdown = turndownService.turndown(html);
+    const markdown = getTurndownService().turndown(html);
     return { markdown, html };
   } catch (error) {
     // If conversion fails, fallback to raw HTML

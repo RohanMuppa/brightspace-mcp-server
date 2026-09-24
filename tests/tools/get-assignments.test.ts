@@ -48,6 +48,15 @@ describe("fetchCourseAssignments", () => {
     expect(assignments).toHaveLength(2);
     expect(assignments.every((a) => a.url === null)).toBe(true);
   });
+
+  it("emits instructions as a plain markdown string, not {markdown, html}", async () => {
+    const assignments = await fetchCourseAssignments(makeApiClient() as any, COURSE_ID);
+    const [dropbox, quiz] = assignments;
+
+    // Neither fixture supplies HTML instructions, so both fall back to "".
+    expect(dropbox.instructions).toBe("");
+    expect(quiz.instructions).toBe("");
+  });
 });
 
 /**
@@ -213,7 +222,7 @@ describe("fetchCourseAssignments quiz mapping", () => {
 
     const [quiz] = quizzesOf(await fetchCourseAssignments(apiClient as any, COURSE_ID));
 
-    expect(quiz.instructions.markdown).toContain("**chapter 3**");
+    expect(quiz.instructions).toContain("**chapter 3**");
   });
 
   it("still reads instructions from a flat Description", async () => {
@@ -233,7 +242,7 @@ describe("fetchCourseAssignments quiz mapping", () => {
 
     const [quiz] = quizzesOf(await fetchCourseAssignments(apiClient as any, COURSE_ID));
 
-    expect(quiz.instructions.markdown).toContain("**chapter 3**");
+    expect(quiz.instructions).toContain("**chapter 3**");
   });
 
   it("maps SubmissionTimeLimit onto timeLimit", async () => {

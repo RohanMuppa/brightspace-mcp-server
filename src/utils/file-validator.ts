@@ -5,7 +5,6 @@
  */
 
 import path from "node:path";
-import { fileTypeFromBuffer } from "file-type";
 import sanitizeFilename from "sanitize-filename";
 import { DownloadError } from "./download-errors.js";
 
@@ -22,6 +21,16 @@ import { DownloadError } from "./download-errors.js";
  * extension instead, which admits the formats the allowlist already intended
  * and still refuses everything else.
  */
+// file-type v21 is ESM-only and costs ~50ms; defer the import to first use
+// since validateFileType is already async.
+let fileTypeFromBufferPromise: Promise<typeof import("file-type").fileTypeFromBuffer> | undefined;
+function getFileTypeFromBuffer() {
+  if (!fileTypeFromBufferPromise) {
+    fileTypeFromBufferPromise = import("file-type").then((m) => m.fileTypeFromBuffer);
+  }
+  return fileTypeFromBufferPromise;
+}
+
 const CFB_MIME = "application/x-cfb";
 const CFB_EXTENSION_MIMES: Record<string, string> = {
   ".doc": "application/msword",
@@ -132,6 +141,7 @@ export async function validateFileType(
   filename?: string
 ): Promise<{ mime: string; ext: string }> {
   // Try magic byte detection first
+  const fileTypeFromBuffer = await getFileTypeFromBuffer();
   const detected = await fileTypeFromBuffer(buffer);
 
   if (detected) {

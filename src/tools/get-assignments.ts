@@ -329,8 +329,8 @@ export async function fetchCourseAssignments(
         name: folder.Name,
         url: baseUrl ? assignmentUrl(baseUrl, courseId, folder.Id) : null,
         instructions: folder.CustomInstructions?.Html
-          ? convertHtmlToMarkdown(folder.CustomInstructions.Html)
-          : { markdown: "", html: "" },
+          ? convertHtmlToMarkdown(folder.CustomInstructions.Html).markdown
+          : "",
         dueDate: folder.DueDate,
         points: folder.Assessment?.ScoreDenominator ?? null,
         isGroup: folder.GroupTypeId !== null,
@@ -360,7 +360,7 @@ export async function fetchCourseAssignments(
           ? {
               score: feedback.Score,
               feedback: feedback.Feedback?.Html
-                ? convertHtmlToMarkdown(feedback.Feedback.Html)
+                ? convertHtmlToMarkdown(feedback.Feedback.Html).markdown
                 : null,
             }
           : null,
@@ -462,8 +462,8 @@ export async function fetchCourseAssignments(
         name: quiz.Name,
         url: baseUrl ? quizUrl(baseUrl, courseId, quiz.QuizId) : null,
         instructions: descriptionHtml
-          ? convertHtmlToMarkdown(descriptionHtml)
-          : { markdown: "", html: "" },
+          ? convertHtmlToMarkdown(descriptionHtml).markdown
+          : "",
         dueDate: quiz.DueDate,
         startDate: quiz.StartDate,
         endDate: quiz.EndDate,

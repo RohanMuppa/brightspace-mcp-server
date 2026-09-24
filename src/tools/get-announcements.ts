@@ -107,8 +107,6 @@ export function mapNewsItem(item: NewsItem) {
     title: item.Title,
     body: item.Body?.Text ?? "",
     createdBy: item.CreatedBy?.DisplayName ?? "Unknown",
-    createdDate: item.CreatedDate,
-    startDate: item.StartDate,
     date: effectiveDate(item),
     isPinned: item.IsPinned,
     lastModified: item.LastModifiedDate ?? null,

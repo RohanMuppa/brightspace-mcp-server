@@ -44,6 +44,89 @@ function setup() {
   return { call: (args: unknown) => handler!(args), requested };
 }
 
+/**
+ * The tree used to emit isHidden, isLocked, dueDate, and completedDate on
+ * every node even when false/null, padding every response with fields that
+ * carry no information. They should appear only when they say something.
+ */
+describe("get_course_content sparse flags", () => {
+  function setupWithRoot(rootItems: unknown[], progress: unknown[] = []) {
+    const apiClient = {
+      le: (orgUnitId: number, p: string) => `/d2l/api/le/1.0/${orgUnitId}${p}`,
+      get: vi.fn(async (path: string) => {
+        if (path.endsWith("/content/userprogress/")) return progress;
+        if (path.endsWith("/content/root/")) return rootItems;
+        return [];
+      }),
+    };
+
+    let handler: (args: unknown) => Promise<any>;
+    const server = {
+      registerTool: (_n: string, _m: unknown, fn: (args: unknown) => Promise<any>) => {
+        handler = fn;
+      },
+    };
+
+    registerGetCourseContent(server as any, apiClient as any);
+    return (args: unknown) => handler!(args);
+  }
+
+  it("omits isHidden, isLocked, dueDate, and completedDate when they carry no signal", async () => {
+    const call = setupWithRoot([
+      {
+        Id: 5,
+        Title: "Syllabus",
+        ShortTitle: null,
+        Type: 1,
+        TopicType: 1,
+        Description: null,
+        IsHidden: false,
+        IsLocked: false,
+        DueDate: null,
+        LastModifiedDate: null,
+      },
+    ]);
+
+    const result = await call({ courseId: COURSE_ID });
+    const body = JSON.parse(result.content[0].text);
+    const topic = body.contentTree[0];
+
+    expect(topic).not.toHaveProperty("isHidden");
+    expect(topic).not.toHaveProperty("isLocked");
+    expect(topic).not.toHaveProperty("dueDate");
+    expect(topic).not.toHaveProperty("completedDate");
+  });
+
+  it("keeps isHidden, isLocked, dueDate, and completedDate when true/set", async () => {
+    const call = setupWithRoot(
+      [
+        {
+          Id: 6,
+          Title: "Locked reading",
+          ShortTitle: null,
+          Type: 1,
+          TopicType: 1,
+          Description: null,
+          IsHidden: true,
+          IsLocked: true,
+          DueDate: "2026-10-01T00:00:00.000Z",
+          LastModifiedDate: null,
+        },
+      ],
+      [{ UserId: 1, ContentObjectId: 6, IsRead: true, DateCompleted: "2026-09-20T00:00:00.000Z" }]
+    );
+
+    const result = await call({ courseId: COURSE_ID });
+    const body = JSON.parse(result.content[0].text);
+    const topic = body.contentTree[0];
+
+    expect(topic.isHidden).toBe(true);
+    expect(topic.isLocked).toBe(true);
+    expect(topic.dueDate).toBe("2026-10-01T00:00:00.000Z");
+    expect(topic.completedDate).toBe("2026-09-20T00:00:00.000Z");
+  });
+});
+
 describe("get_course_content recursion cap", () => {
   it("terminates on a self-referencing module structure", async () => {
     const { call, requested } = setup();

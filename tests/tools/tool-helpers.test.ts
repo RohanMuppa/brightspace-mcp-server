@@ -27,9 +27,9 @@ describe("toolResponse", () => {
     vi.clearAllMocks();
   });
 
-  it("returns the payload as pretty JSON", () => {
+  it("returns the payload as compact JSON", () => {
     expect(toolResponse({ courses: [1, 2] }).content).toEqual([
-      { type: "text", text: '{\n  "courses": [\n    1,\n    2\n  ]\n}' },
+      { type: "text", text: '{"courses":[1,2]}' },
     ]);
   });
 
