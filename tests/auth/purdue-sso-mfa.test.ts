@@ -72,8 +72,12 @@ describe("Purdue MFA loop ported from Brightspace Bar", () => {
     vi.restoreAllMocks();
   });
 
-  const handleMFA = (page: unknown, requestMfaCode?: () => Promise<string>): Promise<void> =>
-    (new PurdueSSOFlow({ baseUrl: BASE_URL, requestMfaCode }) as any).handleMFA(page);
+  const handleMFA = (
+    page: unknown,
+    requestMfaCode?: () => Promise<string>,
+    onMfaChallenge?: (number: string | null) => void,
+  ): Promise<void> =>
+    (new PurdueSSOFlow({ baseUrl: BASE_URL, requestMfaCode, onMfaChallenge }) as any).handleMFA(page);
 
   it("logs a number once per change and stops only at verified Brightspace home", async () => {
     const lines = captureWarnings();
@@ -88,6 +92,33 @@ describe("Purdue MFA loop ported from Brightspace Bar", () => {
     expect(numbers).toHaveLength(2);
     expect(numbers[0]).toContain("Number match: 42.");
     expect(numbers[1]).toContain("Number match: 73.");
+  });
+
+  it("reports onMfaChallenge once when a number is already visible on the first poll", async () => {
+    const onMfaChallenge = vi.fn();
+    const { page } = makeMfaPage([
+      { number: "42", challenge: true },
+      { number: "42", challenge: true },
+      { number: "73", challenge: true },
+      { url: `${BASE_URL}/d2l/home`, cookie: true, d2l: true },
+    ]);
+    await handleMFA(page, undefined, onMfaChallenge);
+    expect(onMfaChallenge).toHaveBeenCalledTimes(1);
+    expect(onMfaChallenge).toHaveBeenCalledWith("42");
+  });
+
+  it("reports onMfaChallenge with null first, then once more when a number later appears", async () => {
+    const onMfaChallenge = vi.fn();
+    const { page } = makeMfaPage([
+      { challenge: true },
+      { challenge: true },
+      { number: "73", challenge: true },
+      { url: `${BASE_URL}/d2l/home`, cookie: true, d2l: true },
+    ]);
+    await handleMFA(page, undefined, onMfaChallenge);
+    expect(onMfaChallenge).toHaveBeenCalledTimes(2);
+    expect(onMfaChallenge).toHaveBeenNthCalledWith(1, null);
+    expect(onMfaChallenge).toHaveBeenNthCalledWith(2, "73");
   });
 
   it("clicks Yes only on a proven stay-signed-in page", async () => {

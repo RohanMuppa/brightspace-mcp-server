@@ -40,6 +40,15 @@ interface PurdueSSOConfig {
   baseUrl?: string;
   headless?: boolean;
   requestMfaCode?: RequestMfaCode;
+  /**
+   * Fired once per login as soon as an MFA challenge is visible: with the
+   * number-match digits when one is already on screen, otherwise null. If a
+   * number later appears after a null firing, this fires once more with it —
+   * that is the only case it fires twice. Lets a caller (AuthRunner) answer
+   * the user immediately instead of blocking for the whole 5-minute approval
+   * wait, even on tenants that never show a number.
+   */
+  onMfaChallenge?: (number: string | null) => void;
 }
 
 /** Microsoft expects Purdue's full sign-in name, while setup also accepts a career account. */
@@ -214,6 +223,8 @@ export class PurdueSSOFlow {
     const deadline = Date.now() + MFA_TIMEOUT_MS;
     let challenged = false;
     let announced: string | null = null;
+    /** True once onMfaChallenge has been told about this login, number or not. */
+    let announcedToCaller = false;
     try {
       while (Date.now() < deadline) {
         if (await this.duoMfa.handle(page)) challenged = true;
@@ -225,10 +236,16 @@ export class PurdueSSOFlow {
         if (challengeVisible && !challenged) {
           challenged = true;
           log("WARN", "Waiting up to 5 minutes for Microsoft MFA approval on your device.");
+          this.config.onMfaChallenge?.(number);
+          if (number) announcedToCaller = true;
         }
         if (number && number !== announced) {
           announced = number;
           log("WARN", `Number match: ${number}. Enter it in Microsoft Authenticator.`);
+          if (!announcedToCaller) {
+            announcedToCaller = true;
+            this.config.onMfaChallenge?.(number);
+          }
         }
         if (await this.isAuthenticated(page)) {
           log("INFO", "Login successful - verified Brightspace home");

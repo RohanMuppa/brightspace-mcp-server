@@ -13,6 +13,8 @@ import { BrowserAuthError } from "../utils/errors.js";
 import { AUTH_COMMAND } from "../utils/commands.js";
 
 export type RequestMfaCode = () => Promise<string>;
+/** See PurdueSSOConfig.onMfaChallenge in purdue-sso.ts for the firing contract. */
+export type OnMfaChallenge = (number: string | null) => void;
 
 export class UnsupportedAuthenticationError extends BrowserAuthError {
   readonly code = "AUTH_UNSUPPORTED";
@@ -55,13 +57,14 @@ export interface SSOFlow {
  * else uses the default flow, which already covers the common Shibboleth,
  * CAS, and Microsoft Entra forms.
  */
-export function createSSOFlow(config: AppConfig, requestMfaCode?: RequestMfaCode): SSOFlow {
+export function createSSOFlow(config: AppConfig, requestMfaCode?: RequestMfaCode, onMfaChallenge?: OnMfaChallenge): SSOFlow {
   const credentials = {
     username: config.username,
     password: config.password,
     baseUrl: config.baseUrl,
     headless: config.headless,
     requestMfaCode,
+    onMfaChallenge,
   };
 
   if (isSunyBrightspace(config.baseUrl)) {

@@ -70,11 +70,11 @@ const AUTH_FAILURE_GUIDANCE: Record<AuthFailureKind, string> = {
   busy: "A sign-in is already running in another process. Let it finish, then try again.",
   cooldown:
     "Automatic sign-in is paused because an MFA prompt went unanswered. " +
-    `Run \`${AUTH_COMMAND}\` in a terminal to retry now and see the number to enter.`,
+    `Run \`${AUTH_COMMAND}\` in a terminal (from your home folder) to retry now and see the number to enter.`,
   unsupported:
     "This login needs something your AI client cannot supply, usually a code from an "
     + "authenticator app. " +
-    `Run \`${AUTH_COMMAND}\` in a terminal and sign in there.`,
+    `Run \`${AUTH_COMMAND}\` in a terminal (from your home folder) and sign in there.`,
   secureStorage:
     "The operating system credential store is locked or unavailable, so the saved " +
     "password could not be read. Unlock your keychain or keyring, then try again.",
@@ -83,12 +83,13 @@ const AUTH_FAILURE_GUIDANCE: Record<AuthFailureKind, string> = {
     "Check your connection and try again in a few minutes.",
   timeout:
     "The sign-in did not finish in time, usually a missed MFA prompt. " +
-    `Run \`${AUTH_COMMAND}\` in a terminal to complete it with the number visible.`,
+    `Run \`${AUTH_COMMAND}\` in a terminal (from your home folder) to complete it with the number visible.`,
   failed:
-    `The sign-in did not complete. Run \`${AUTH_COMMAND}\` in a terminal to see why, ` +
+    `The sign-in did not complete. Run \`${AUTH_COMMAND}\` in a terminal (from your home folder) to see why, ` +
     "or `brightspace-setup` if your saved school or username is wrong.",
   mfaPending:
-    "A Microsoft Authenticator approval was not completed in time. Try again.",
+    "Approve the sign-in request on your phone (Microsoft Authenticator or Duo), " +
+    "then call this tool again — the sign-in is finishing in the background.",
 };
 
 /**
@@ -100,7 +101,8 @@ const AUTH_FAILURE_GUIDANCE: Record<AuthFailureKind, string> = {
  */
 function authFailureMessage(error: AuthProcessError): string {
   if (error.kind === "mfaPending" && error.numberMatch) {
-    return `Open Microsoft Authenticator and enter ${error.numberMatch} within 5 minutes, then run this again.`;
+    return `Open Microsoft Authenticator and enter ${error.numberMatch} within 5 minutes, ` +
+      "then call this tool again — the sign-in is finishing in the background.";
   }
   return AUTH_FAILURE_GUIDANCE[error.kind];
 }

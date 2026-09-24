@@ -16,18 +16,39 @@ import { AUTH_COMMAND } from "../utils/commands.js";
  * Timeout for the auth process. It has to outlast the child's own MFA wait,
  * which is five minutes: a person has to find their phone, unlock it, and read
  * a number off the screen. A shorter parent budget would kill the child in the
- * middle of a sign-in the user was still completing.
+ * middle of a sign-in the user was still completing. run() itself usually
+ * returns long before this fires — the moment the child reports an MFA
+ * challenge — but this timer keeps bounding the background child regardless.
  */
 const AUTH_TIMEOUT_MS = 8 * 60 * 1000;
 const KILL_GRACE_MS = 5000;
 
 /**
- * The only line auth-cli.ts is allowed to hand back as structured data.
- * Deliberately strict (1-3 digits, whole line) so this can never become a
- * channel for arbitrary child-process text to reach a tool response —
- * anything that doesn't match this exactly is just another log line.
+ * How long a caller that joins a background child already reported as
+ * mfaPending waits for it before re-answering with the same challenge.
+ * Long enough for an already-approved login to finish its next ~2s poll and
+ * mint a token; short enough that a not-yet-approved one still answers
+ * within this tool call instead of blocking for the rest of the 5-minute
+ * approval window.
+ */
+const JOIN_GRACE_MS = 5000;
+
+/**
+ * The only two lines auth-cli.ts is allowed to hand back as structured data.
+ * Deliberately strict (whole line, 1-3 digits or the literal word) so this
+ * can never become a channel for arbitrary child-process text to reach a
+ * tool response — anything that doesn't match exactly is just another log
+ * line.
  */
 const MFA_NUMBER_MARKER = /^MFA_NUMBER:(\d{1,3})$/;
+const MFA_PENDING_MARKER = /^MFA_PENDING$/;
+
+/** The mfaPending kind and message, with or without number-match digits. */
+function mfaPendingFailure(numberMatch: string | undefined): [AuthFailureKind, string] {
+  return numberMatch
+    ? ["mfaPending", `Open Microsoft Authenticator and enter ${numberMatch} within 5 minutes, then try again.`]
+    : ["mfaPending", "An MFA approval was not completed in time. Try again."];
+}
 
 export type AuthFailureKind = "busy" | "cooldown" | "unsupported" | "secureStorage" | "transport" | "timeout" | "failed" | "mfaPending";
 
@@ -107,6 +128,12 @@ function forwardLines(
  *
  * The child inherits the parent's resolved environment and working directory,
  * so both processes read the same account configuration and .env file.
+ *
+ * run() settles as soon as the child reports an MFA challenge (with or
+ * without a number to display) rather than waiting for the child to exit —
+ * a tool call must not block for the whole approval window. The child keeps
+ * running in the background; a later run() call joins that background child
+ * instead of spawning a second one.
  */
 export class AuthRunner {
   /**
@@ -120,6 +147,22 @@ export class AuthRunner {
    * caller await the same login and read the same outcome.
    */
   private inFlight: Promise<boolean> | null = null;
+  /**
+   * The child from a login that answered its caller early (an MFA challenge
+   * was reported) and is still running in the background. Set for the
+   * duration of every spawned child, not just the early-answer case, so a
+   * caller who joins after the answer already exists resolves immediately.
+   */
+  private childDone: Promise<boolean> | null = null;
+  /**
+   * The last MFA challenge the current background child reported, if any.
+   * Set the moment a marker settles a caller early, cleared alongside
+   * childDone. Lets a later joiner re-answer immediately instead of
+   * discovering the challenge is stale only after blocking on childDone.
+   */
+  private pendingChallenge: { numberMatch?: string } | null = null;
+  /** Resolves on the next marker from the current child; null between children. */
+  private challengeSignal: Promise<void> | null = null;
   private readonly scriptPath: string;
   private readonly timeoutMs: number;
   private readonly onProgress?: (line: string) => void;
@@ -142,6 +185,15 @@ export class AuthRunner {
       return this.inFlight;
     }
 
+    // A caller that answered early is gone, but its child can still be
+    // running in the background (waiting on the user's phone). Join it
+    // instead of spawning a second child, which would only hit the
+    // cross-process lock and return "busy".
+    if (this.childDone) {
+      log("DEBUG", "Joining the background sign-in still running from an earlier call");
+      return this.joinBackgroundChild(this.childDone);
+    }
+
     // The latch is released by the flow that owns it, as it settles, so a
     // failed login is never replayed: the tool call after a declined MFA
     // prompt starts a fresh attempt rather than inheriting the stale
@@ -154,7 +206,57 @@ export class AuthRunner {
     return flow;
   }
 
-  /** One child process, start to finish. */
+  /**
+   * Join a background child from an earlier early-answered call instead of
+   * spawning a new one. A joiner must not simply await childDone: that
+   * blocks for whatever is left of the 5-minute approval window, exactly the
+   * problem run() otherwise fixes, since the caller usually retries right
+   * after reading "call this tool again" and well before actually approving.
+   *
+   * If no challenge has been reported yet (the child hasn't reached MFA),
+   * wait for one — or for the child to finish on its own. Once a challenge
+   * is known, race the child against a short grace window: fast enough for
+   * an already-approved login to land, short enough to re-answer with the
+   * same challenge rather than block.
+   */
+  private async joinBackgroundChild(childDone: Promise<boolean>): Promise<boolean> {
+    if (!this.pendingChallenge && this.challengeSignal) {
+      await Promise.race([childDone.catch(() => {}), this.challengeSignal]);
+    }
+
+    const challenge = this.pendingChallenge;
+    if (!challenge) return childDone;
+
+    return new Promise<boolean>((resolve, reject) => {
+      let settled = false;
+      const graceTimer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        reject(new AuthProcessError(...mfaPendingFailure(challenge.numberMatch), challenge.numberMatch));
+      }, JOIN_GRACE_MS);
+      graceTimer.unref?.();
+      childDone.then(
+        (value) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(graceTimer);
+          resolve(value);
+        },
+        (error) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(graceTimer);
+          reject(error);
+        },
+      );
+    });
+  }
+
+  /**
+   * One child process, start to finish. The returned promise can settle
+   * before the child actually exits (see the stdout handler below); the
+   * child's real completion is tracked separately on this.childDone.
+   */
   private async spawnAuth(): Promise<boolean> {
     log("INFO", "Auto-launching brightspace-auth...");
 
@@ -171,7 +273,14 @@ export class AuthRunner {
       );
 
       let timedOut = false;
-      let settled = false;
+      // Whether the caller-facing promise above (resolve/reject) has
+      // settled. Distinct from childFinished: an early MFA answer settles
+      // this while the child keeps running.
+      let callerSettled = false;
+      // Whether the child has actually finished (exited, timed out, or
+      // failed to start) and teardown has run. Guards every handler below
+      // against double cleanup.
+      let childFinished = false;
       let numberMatch: string | undefined;
       let killTimer: ReturnType<typeof setTimeout> | undefined;
       const kill = (signal: NodeJS.Signals) => {
@@ -196,21 +305,78 @@ export class AuthRunner {
       };
       const onExit = () => kill("SIGTERM");
       process.once("exit", onExit);
-      const finish = (error?: AuthProcessError) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        if (killTimer) clearTimeout(killTimer);
-        process.off("exit", onExit);
+
+      const settleCaller = (error?: AuthProcessError) => {
+        if (callerSettled) return;
+        callerSettled = true;
         if (error) reject(error);
         else resolve(true);
       };
+
+      // Tracks the child to its real end, independent of an early caller
+      // answer. Exposed as this.childDone so the next run() call can join
+      // it. A dummy catch keeps an unapproved background failure from
+      // becoming an unhandled rejection when nobody ever joins it; it does
+      // not stop a later `await this.childDone` from seeing the rejection.
+      let resolveChildDone!: (value: boolean) => void;
+      let rejectChildDone!: (reason?: unknown) => void;
+      const completion = new Promise<boolean>((res, rej) => {
+        resolveChildDone = res;
+        rejectChildDone = rej;
+      });
+      const trackedCompletion = completion.finally(() => {
+        if (this.childDone === trackedCompletion) {
+          this.childDone = null;
+          this.pendingChallenge = null;
+          this.challengeSignal = null;
+        }
+      });
+      trackedCompletion.catch(() => { /* see comment above */ });
+      this.childDone = trackedCompletion;
+      this.pendingChallenge = null;
+      let resolveChallengeSignal!: () => void;
+      this.challengeSignal = new Promise<void>((res) => { resolveChallengeSignal = res; });
+
+      // Records the challenge (number or not) and wakes a joiner waiting in
+      // joinBackgroundChild. Idempotent on the "already known" question, but
+      // a later number still overwrites a numberless pendingChallenge so a
+      // fresh joiner sees it — see MFA_PENDING_MARKER's own comment.
+      const publishChallenge = (matched: string | undefined) => {
+        const firstChallenge = this.pendingChallenge === null;
+        if (firstChallenge || matched) {
+          this.pendingChallenge = { numberMatch: matched ?? this.pendingChallenge?.numberMatch };
+        }
+        if (firstChallenge) resolveChallengeSignal();
+        if (!callerSettled) {
+          settleCaller(new AuthProcessError(...mfaPendingFailure(this.pendingChallenge?.numberMatch), this.pendingChallenge?.numberMatch));
+        }
+      };
+
+      // Runs once the child is actually done. Settles the caller too, if an
+      // early answer had not already done so; otherwise this is just the
+      // background sign-in finishing, which only childDone's joiner sees.
+      const finishChild = (error?: AuthProcessError) => {
+        if (childFinished) return;
+        childFinished = true;
+        clearTimeout(timer);
+        if (killTimer) clearTimeout(killTimer);
+        process.off("exit", onExit);
+        const answeredEarly = callerSettled;
+        settleCaller(error);
+        if (answeredEarly) {
+          if (error) log("WARN", `Background sign-in finished with ${error.kind}: ${error.message}`);
+          else log("INFO", "Background sign-in completed successfully after an early MFA response");
+        }
+        if (error) rejectChildDone(error);
+        else resolveChildDone(true);
+      };
+
       const timer = setTimeout(() => {
         timedOut = true;
         kill("SIGTERM");
         killTimer = setTimeout(() => {
           kill("SIGKILL");
-          finish(new AuthProcessError("timeout", `Authentication timed out. Run ${AUTH_COMMAND} to try again.`));
+          finishChild(new AuthProcessError("timeout", `Authentication timed out. Run ${AUTH_COMMAND} to try again.`));
         }, KILL_GRACE_MS);
       }, this.timeoutMs);
 
@@ -219,28 +385,35 @@ export class AuthRunner {
         try { this.onProgress?.(line); } catch { /* Logging must not interrupt authentication. */ }
       });
       // Piped and drained rather than ignored: a full stdout pipe would
-      // block the child mid-login.
+      // block the child mid-login. The first marker settles the caller
+      // immediately, without killing the child — see the class doc comment.
       forwardLines(child.stdout, (line) => {
-        const match = MFA_NUMBER_MARKER.exec(line);
-        if (match) numberMatch = match[1];
-        else log("DEBUG", line);
+        const numberMarker = MFA_NUMBER_MARKER.exec(line);
+        if (numberMarker) {
+          numberMatch = numberMarker[1];
+          publishChallenge(numberMatch);
+        } else if (MFA_PENDING_MARKER.test(line)) {
+          publishChallenge(undefined);
+        } else {
+          log("DEBUG", line);
+        }
       });
 
       child.on("error", (error) => {
-        if (settled) return;
+        if (childFinished) return;
         log("ERROR", "Auto-auth process failed", error.message);
         kill("SIGKILL");
-        finish(new AuthProcessError("failed", `Could not start authentication. Run ${AUTH_COMMAND} for details.`));
+        finishChild(new AuthProcessError("failed", `Could not start authentication. Run ${AUTH_COMMAND} for details.`));
       });
 
       child.on("close", (code) => {
-        if (settled) return;
+        if (childFinished) return;
         if (timedOut) {
           kill("SIGKILL");
-          finish(new AuthProcessError("timeout", `Authentication timed out. Run ${AUTH_COMMAND} to try again.`));
+          finishChild(new AuthProcessError("timeout", `Authentication timed out. Run ${AUTH_COMMAND} to try again.`));
         } else if (code === 0) {
           log("INFO", "Auto-auth completed successfully");
-          finish();
+          finishChild();
         } else {
           const failures: Record<number, [AuthFailureKind, string]> = {
             2: ["busy", "Authentication already in progress in another process. Complete that attempt, then retry."],
@@ -248,13 +421,11 @@ export class AuthRunner {
             4: ["unsupported", "This identity provider cannot complete headless authentication. See the authentication logs."],
             5: ["secureStorage", "The native credential store is unavailable or locked. Unlock it and retry."],
             6: ["transport", "Brightspace authentication is temporarily unavailable because of a network or server failure. Your saved session was preserved. Try again later."],
-            7: numberMatch
-              ? ["mfaPending", `Open Microsoft Authenticator and enter ${numberMatch} within 5 minutes, then try again.`]
-              : ["mfaPending", "A Microsoft Authenticator approval was not completed in time. Try again."],
+            7: mfaPendingFailure(numberMatch),
           };
           const [kind, message] = failures[code ?? -1] ?? ["failed", `Authentication failed. Run ${AUTH_COMMAND} to try again.`];
           kill("SIGKILL");
-          finish(new AuthProcessError(kind, message, kind === "mfaPending" ? numberMatch : undefined));
+          finishChild(new AuthProcessError(kind, message, kind === "mfaPending" ? numberMatch : undefined));
         }
       });
     });

@@ -71,7 +71,7 @@ describe("sanitizeError", () => {
     ["transport", "could not be reached to sign in"],
     ["timeout", "did not finish in time"],
     ["failed", "did not complete"],
-    ["mfaPending", "was not completed in time"],
+    ["mfaPending", "Approve the sign-in request"],
   ];
 
   it.each(expectedGuidance)("explains a %s sign-in failure", (kind, expected) => {

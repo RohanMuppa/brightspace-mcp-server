@@ -171,6 +171,30 @@ describe("DuoMfaHandler", () => {
     expect(lines.filter(line => line.includes("Duo verification code"))).toHaveLength(0);
   });
 
+  it("reports onMfaChallenge with the verified-push code once", async () => {
+    const onMfaChallenge = vi.fn();
+    const { page } = makePage({ verificationCode: "1234" });
+    const handler = new DuoMfaHandler({ onMfaChallenge });
+
+    await handler.handle(page as never);
+    await handler.handle(page as never);
+
+    expect(onMfaChallenge).toHaveBeenCalledTimes(1);
+    expect(onMfaChallenge).toHaveBeenCalledWith("1234");
+  });
+
+  it("reports onMfaChallenge with null for a plain push, with nothing more to say later", async () => {
+    const onMfaChallenge = vi.fn();
+    const { page } = makePage({});
+    const handler = new DuoMfaHandler({ onMfaChallenge });
+
+    await handler.handle(page as never);
+    await handler.handle(page as never);
+
+    expect(onMfaChallenge).toHaveBeenCalledTimes(1);
+    expect(onMfaChallenge).toHaveBeenCalledWith(null);
+  });
+
   it("submits a passcode once through the terminal callback", async () => {
     const requestMfaCode = vi.fn(async () => "123456");
     const { page, fill, click } = makePage({ passcode: true });

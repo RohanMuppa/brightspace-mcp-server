@@ -101,7 +101,9 @@ If you miss an MFA request, automatic browser authentication pauses for five min
 npx -y brightspace-mcp-server@latest auth
 ```
 
-**MFA at Purdue** commonly uses Microsoft Authenticator number matching: enter the terminal-displayed number on your phone. Google Authenticator and other one-time-code apps work too, with no setting to change: run the auth command above in a terminal and it prompts for the code when your provider asks for one. Pick the visible-browser option during setup only if your identity provider needs interaction the server cannot drive. The MCP also sends authentication progress as logging notifications to clients that display them. Some desktop clients hide server logs, so use the terminal command above for interactive MFA.
+Run it from your home folder. On macOS, a terminal that lacks Files and Folders permission (the terminal panel inside Claude Desktop, or a fresh editor terminal) cannot start `npx` from inside Documents, Desktop, or Downloads — it fails with `EPERM: process.cwd failed … uv_cwd` before the server runs. The same applies if your AI client launches the server with one of those folders as its working directory; grant the app access under System Settings → Privacy & Security → Files and Folders, or start the server elsewhere.
+
+**MFA at Purdue** commonly uses Microsoft Authenticator number matching (some schools use Duo instead). When a sign-in needs it, the tool call itself returns quickly with the number to enter, rather than sitting silent for up to five minutes — approve it on your phone, then call the tool again; sign-in finishes in the background in the meantime. Google Authenticator and other one-time-code apps work too, with no setting to change: run the auth command above in a terminal and it prompts for the code when your provider asks for one. Pick the visible-browser option during setup only if your identity provider needs interaction the server cannot drive. The MCP also sends authentication progress as logging notifications to clients that display them, useful if you don't see the number in the tool response for some reason.
 
 ## What You Can Ask About
 

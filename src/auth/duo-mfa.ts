@@ -39,6 +39,8 @@ const PROMPT_SCOPE_SELECTORS = [
 interface DuoMfaOptions {
   headless?: boolean;
   requestMfaCode?: RequestMfaCode;
+  /** See PurdueSSOConfig.onMfaChallenge — same one-shot-plus-late-number contract. */
+  onMfaChallenge?: (number: string | null) => void;
 }
 
 /** The digits on a visible element, or null when it is absent or not digits. */
@@ -63,6 +65,8 @@ export class DuoMfaHandler {
   private approvalAnnounced = false;
   private verificationCodeAnnounced: string | null = null;
   private passcodeSubmitted = false;
+  /** True once onMfaChallenge has been told about this login, code or not. */
+  private announcedToCaller = false;
 
   constructor(private readonly options: DuoMfaOptions) {}
 
@@ -74,15 +78,22 @@ export class DuoMfaHandler {
   async handle(page: Page): Promise<boolean> {
     if (!this.isChallenge(page)) return false;
 
+    const verificationCode = await this.readVerificationCode(page);
+
     if (!this.approvalAnnounced) {
       this.approvalAnnounced = true;
       log("WARN", "Waiting up to 5 minutes for Duo MFA approval on your device.");
+      this.options.onMfaChallenge?.(verificationCode);
+      if (verificationCode) this.announcedToCaller = true;
     }
 
-    const verificationCode = await this.readVerificationCode(page);
     if (verificationCode && verificationCode !== this.verificationCodeAnnounced) {
       this.verificationCodeAnnounced = verificationCode;
       log("WARN", `Duo verification code: ${verificationCode}. Enter it in Duo Mobile.`);
+      if (!this.announcedToCaller) {
+        this.announcedToCaller = true;
+        this.options.onMfaChallenge?.(verificationCode);
+      }
     }
 
     await this.submitPasscode(page);

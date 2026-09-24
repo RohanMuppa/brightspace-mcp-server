@@ -62,7 +62,14 @@ async function main(): Promise<void> {
       tokenTtl: config.tokenTtl,
     });
     const codePrompt = config.headless && !automatic && process.stdin.isTTY ? requestMfaCode : undefined;
-    await new BrowserAuth(config, codePrompt).authenticate({
+    // In automatic mode, tell the parent (AuthRunner) about an MFA challenge
+    // the moment it appears, so a blocked tool call can answer within
+    // seconds instead of waiting out the whole approval window. Stdout only
+    // — the parent parses stdout for structured markers, never stderr.
+    const onMfaChallenge = automatic
+      ? (number: string | null) => console.log(number ? `MFA_NUMBER:${number}` : "MFA_PENDING")
+      : undefined;
+    await new BrowserAuth(config, { requestMfaCode: codePrompt, onMfaChallenge }).authenticate({
       automatic,
       onAuthenticated: async (token) => {
         await tokenManager.setToken(token);

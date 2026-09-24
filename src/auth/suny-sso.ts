@@ -8,7 +8,7 @@ import type { Page } from "playwright";
 import { PurdueSSOFlow } from "./purdue-sso.js";
 import { log } from "../utils/logger.js";
 import { UnsupportedAuthenticationError } from "./sso-flow.js";
-import type { RequestMfaCode } from "./sso-flow.js";
+import type { RequestMfaCode, OnMfaChallenge } from "./sso-flow.js";
 import { BrowserAuthError } from "../utils/errors.js";
 
 /** SUNY campuses share one Brightspace tenant behind one Shibboleth IdP. */
@@ -28,6 +28,7 @@ interface SunySSOConfig {
   campus?: string;
   headless?: boolean;
   requestMfaCode?: RequestMfaCode;
+  onMfaChallenge?: OnMfaChallenge;
 }
 
 interface CampusOption {
@@ -77,6 +78,7 @@ export class SunySSOFlow {
       baseUrl: `https://${SUNY_BRIGHTSPACE_HOST}`,
       headless: config.headless,
       requestMfaCode: config.requestMfaCode,
+      onMfaChallenge: config.onMfaChallenge,
     });
   }
 

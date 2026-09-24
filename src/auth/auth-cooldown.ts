@@ -21,7 +21,7 @@ export class AuthenticationCooldownError extends Error {
     const minutes = Math.max(1, Math.ceil((retryAt - Date.now()) / 60000));
     super(
       `The last sign-in prompt was not approved, so automatic sign-in is paused for ${minutes} more minute${minutes === 1 ? "" : "s"}. ` +
-      `To sign in right now, run this in a terminal: ${AUTH_COMMAND}`
+      `To sign in right now, run this in a terminal from your home folder: ${AUTH_COMMAND}`
     );
     this.name = "AuthenticationCooldownError";
   }

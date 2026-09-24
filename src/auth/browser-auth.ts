@@ -12,7 +12,7 @@ import { BrowserAuthError } from "../utils/errors.js";
 import { log } from "../utils/logger.js";
 import { createSSOFlow, UnsupportedAuthenticationError, MfaApprovalError } from "./sso-flow.js";
 import type { SSOFlow } from "./sso-flow.js";
-import type { RequestMfaCode } from "./sso-flow.js";
+import type { RequestMfaCode, OnMfaChallenge } from "./sso-flow.js";
 import { isDuoPrompt } from "./duo-mfa.js";
 import { BrowserStateStore } from "./browser-state-store.js";
 import { acquireProcessLock } from "./auth-lock.js";
@@ -48,15 +48,21 @@ export interface AuthenticateOptions {
   onAuthenticated?: (token: TokenData) => Promise<void>;
 }
 
+export interface BrowserAuthOptions {
+  requestMfaCode?: RequestMfaCode;
+  /** See PurdueSSOConfig.onMfaChallenge — fired early so a caller can answer without blocking on the full MFA wait. */
+  onMfaChallenge?: OnMfaChallenge;
+}
+
 export class BrowserAuth {
   private config: AppConfig;
   private ssoFlow: SSOFlow;
   private readonly stateStore: BrowserStateStore;
   private readonly cooldown: AuthCooldown;
 
-  constructor(config: AppConfig, requestMfaCode?: RequestMfaCode) {
+  constructor(config: AppConfig, options: BrowserAuthOptions = {}) {
     this.config = config;
-    this.ssoFlow = createSSOFlow(config, requestMfaCode);
+    this.ssoFlow = createSSOFlow(config, options.requestMfaCode, options.onMfaChallenge);
     this.stateStore = new BrowserStateStore(config.sessionDir);
     this.cooldown = new AuthCooldown(config.sessionDir);
   }

@@ -108,6 +108,139 @@ describe("AuthRunner", () => {
     await failure;
   });
 
+  it("settles run() early on the MFA_NUMBER marker without killing or timing out the child", async () => {
+    const result = new AuthRunner().run();
+    const failure = expect(result).rejects.toMatchObject({ kind: "mfaPending", numberMatch: "47" });
+    child.stdout.write("MFA_NUMBER:47\n");
+    await failure;
+
+    expect(kill).not.toHaveBeenCalled();
+    expect(child.kill).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBeGreaterThan(0);
+  });
+
+  it("settles run() early on the number-less MFA_PENDING marker", async () => {
+    const result = new AuthRunner().run();
+    const failure = expect(result).rejects.toMatchObject({ kind: "mfaPending", numberMatch: undefined });
+    child.stdout.write("MFA_PENDING\n");
+    await failure;
+
+    expect(kill).not.toHaveBeenCalled();
+    expect(child.kill).not.toHaveBeenCalled();
+  });
+
+  it("joins the background child after an early MFA_NUMBER answer instead of spawning again", async () => {
+    const first = new AuthRunner();
+    const firstResult = first.run();
+    const firstFailure = expect(firstResult).rejects.toMatchObject({ kind: "mfaPending", numberMatch: "47" });
+    child.stdout.write("MFA_NUMBER:47\n");
+    await firstFailure;
+
+    const second = first.run();
+    child.emit("close", 0);
+
+    expect(await second).toBe(true);
+    expect(spawn).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects a joined background child that later closes with a pending MFA exit code", async () => {
+    const runner = new AuthRunner();
+    const firstResult = runner.run();
+    const firstFailure = expect(firstResult).rejects.toMatchObject({ kind: "mfaPending", numberMatch: "47" });
+    child.stdout.write("MFA_NUMBER:47\n");
+    await firstFailure;
+
+    const second = runner.run();
+    const secondFailure = expect(second).rejects.toMatchObject({ kind: "mfaPending" });
+    child.emit("close", 7);
+    await secondFailure;
+    expect(spawn).toHaveBeenCalledTimes(1);
+  });
+
+  it("still kills a background child on the 8-minute timeout after an early MFA answer", async () => {
+    const runner = new AuthRunner();
+    const firstResult = runner.run();
+    const firstFailure = expect(firstResult).rejects.toMatchObject({ kind: "mfaPending", numberMatch: "47" });
+    child.stdout.write("MFA_NUMBER:47\n");
+    await firstFailure;
+
+    // Advance past the 8-minute parent timeout firing (SIGTERM already sent)
+    // but before its 5s kill-grace elapses, then join: the child's real
+    // timeout settles sooner than this joiner's own 5s grace window, so it
+    // should observe "timeout" directly rather than a re-answered mfaPending.
+    await vi.advanceTimersByTimeAsync(8 * 60000 + 3000);
+    if (process.platform !== "win32") expect(kill).toHaveBeenCalledWith(-child.pid, "SIGTERM");
+    const joined = runner.run();
+    const joinedFailure = expect(joined).rejects.toMatchObject({ kind: "timeout" });
+    await vi.advanceTimersByTimeAsync(2000); // the remaining 2s of the 5s kill grace
+    await joinedFailure;
+    if (process.platform !== "win32") expect(kill).toHaveBeenCalledWith(-child.pid, "SIGKILL");
+  });
+
+  it("re-answers a joiner with the same challenge after a grace window if the child is still running", async () => {
+    const runner = new AuthRunner();
+    const first = runner.run();
+    const firstFailure = expect(first).rejects.toMatchObject({ kind: "mfaPending", numberMatch: "47" });
+    child.stdout.write("MFA_NUMBER:47\n");
+    await firstFailure;
+
+    const second = runner.run();
+    const secondFailure = expect(second).rejects.toMatchObject({ kind: "mfaPending", numberMatch: "47" });
+    await vi.advanceTimersByTimeAsync(5000);
+    await secondFailure;
+
+    expect(spawn).toHaveBeenCalledTimes(1);
+    expect(kill).not.toHaveBeenCalled();
+    expect(child.kill).not.toHaveBeenCalled();
+  });
+
+  it("resolves a joiner early when the background child closes within the grace window", async () => {
+    const runner = new AuthRunner();
+    const first = runner.run();
+    const firstFailure = expect(first).rejects.toMatchObject({ kind: "mfaPending", numberMatch: "47" });
+    child.stdout.write("MFA_NUMBER:47\n");
+    await firstFailure;
+
+    const second = runner.run();
+    await vi.advanceTimersByTimeAsync(2000);
+    child.emit("close", 0);
+
+    expect(await second).toBe(true);
+    expect(spawn).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects a caller that joined before any marker as soon as one arrives, without waiting for close", async () => {
+    const runner = new AuthRunner();
+    const first = runner.run();
+    const second = runner.run(); // joins the same in-flight login before any marker
+    const firstFailure = expect(first).rejects.toMatchObject({ kind: "mfaPending", numberMatch: "47" });
+    const secondFailure = expect(second).rejects.toMatchObject({ kind: "mfaPending", numberMatch: "47" });
+    child.stdout.write("MFA_NUMBER:47\n");
+    await Promise.all([firstFailure, secondFailure]);
+
+    expect(spawn).toHaveBeenCalledTimes(1);
+    expect(child.kill).not.toHaveBeenCalled();
+  });
+
+  it("spawns a fresh child once the background child from an early answer has closed", async () => {
+    const runner = new AuthRunner();
+    const firstResult = runner.run();
+    const firstFailure = expect(firstResult).rejects.toMatchObject({ kind: "mfaPending", numberMatch: "47" });
+    child.stdout.write("MFA_NUMBER:47\n");
+    await firstFailure;
+
+    const second = runner.run();
+    child.emit("close", 0);
+    expect(await second).toBe(true);
+
+    child = mockChild();
+    vi.mocked(spawn).mockReturnValue(child as never);
+    const third = runner.run();
+    child.emit("close", 0);
+    expect(await third).toBe(true);
+    expect(spawn).toHaveBeenCalledTimes(2);
+  });
+
   it("allows five minutes of MFA plus preflight before timing out", async () => {
     const result = new AuthRunner().run();
     await vi.advanceTimersByTimeAsync(6 * 60000);
