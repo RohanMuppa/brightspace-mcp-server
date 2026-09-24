@@ -56,6 +56,22 @@ describe("TTLCache", () => {
     expect(cache.get("key1")).toBeUndefined();
   });
 
+  it("reports how long ago an entry was written", () => {
+    cache.set("key1", "value1", 1_800_000);
+    expect(cache.ageOf("key1")).toBe(0);
+    expect(cache.ageOf("nonexistent")).toBeUndefined();
+
+    vi.advanceTimersByTime(900_000);
+
+    // Still live under its own 30 minute TTL, but half an hour of course
+    // content is fifteen minutes of due dates to a caller that asked for less.
+    expect(cache.has("key1")).toBe(true);
+    expect(cache.ageOf("key1")).toBe(900_000);
+
+    cache.set("key1", "value2", 1_800_000);
+    expect(cache.ageOf("key1")).toBe(0);
+  });
+
   it("should delete entry and clear timer", () => {
     cache.set("key1", "value1", 5000);
     expect(cache.has("key1")).toBe(true);

@@ -1,9 +1,29 @@
 import { describe, it, expect, vi } from "vitest";
 import { randomUUID } from "node:crypto";
-import { assertNativeCredentialStoreAvailable, getStoredPassword, setStoredPassword, NativeCredentialStoreError, nativeCredentialBackend } from "../../src/auth/credential-store.js";
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
+import * as os from "node:os";
+import { assertNativeCredentialStoreAvailable, getSessionEncryptionKey, getStoredPassword, hasSessionEncryptionKey, setStoredPassword, NativeCredentialStoreError, nativeCredentialBackend } from "../../src/auth/credential-store.js";
 import { MemoryCredentialBackend } from "./secure-store-fixtures.js";
 
 describe("Credential store", () => {
+  it("answers native key presence per directory and never guesses when the store is unreachable", async () => {
+    const backend = new MemoryCredentialBackend();
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "key-presence-test-"));
+    try {
+      const mine = path.join(root, "mine");
+      const other = path.join(root, "other");
+      await fs.mkdir(other, { recursive: true });
+      await getSessionEncryptionKey(mine, backend);
+      expect(await hasSessionEncryptionKey(mine, backend)).toBe(true);
+      expect(await hasSessionEncryptionKey(other, backend)).toBe(false);
+      backend.getPassword = async () => { throw new NativeCredentialStoreError(); };
+      await expect(hasSessionEncryptionKey(mine, backend)).rejects.toBeInstanceOf(NativeCredentialStoreError);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("separates credentials by tenant and username while normalizing URL origins", async () => {
     const backend = new MemoryCredentialBackend();
     await setStoredPassword("https://school.example/", "alice", "dummy-password", backend);

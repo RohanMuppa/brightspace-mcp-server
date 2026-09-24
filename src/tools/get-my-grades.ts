@@ -6,6 +6,7 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { D2LApiClient, DEFAULT_CACHE_TTLS } from "../api/index.js";
+import { fetchAllItems } from "../api/paginate.js";
 import {
   GetMyGradesSchema,
 } from "./schemas.js";
@@ -39,14 +40,6 @@ interface EnrollmentItem {
     IsActive: boolean;
     CanAccess?: boolean;
     LastAccessed: string | null;
-  };
-}
-
-interface EnrollmentResponse {
-  Items: EnrollmentItem[];
-  PagingInfo?: {
-    HasMoreItems: boolean;
-    Bookmark?: string;
   };
 }
 
@@ -97,18 +90,24 @@ export function registerGetMyGrades(
         }
 
         // All courses case
-        // First, fetch enrolled courses
+        // First, fetch enrolled courses. isActive=true has to track the
+        // configured policy rather than being pinned on: a user who set
+        // activeOnly:false is asking to see archived courses, and a query that
+        // withholds them leaves applyCourseFilter nothing to let through.
         const enrollmentPath = apiClient.lp(
-          "/enrollments/myenrollments/?orgUnitTypeId=3&isActive=true"
+          `/enrollments/myenrollments/?orgUnitTypeId=3${config.courseFilter.activeOnly ? "&isActive=true" : ""}`
         );
-        const enrollmentResponse = await apiClient.get<EnrollmentResponse>(
+        // Enrollments arrive one page at a time; follow the bookmark chain so a
+        // long enrollment history does not silently lose its later courses.
+        const enrollmentItems = await fetchAllItems<EnrollmentItem>(
+          apiClient,
           enrollmentPath,
           { ttl: DEFAULT_CACHE_TTLS.enrollments }
         );
 
         // Apply course filter
         const filteredEnrollments = applyCourseFilter(
-          enrollmentResponse.Items.map(item => ({
+          enrollmentItems.map(item => ({
             id: item.OrgUnit.Id,
             name: item.OrgUnit.Name,
             code: item.OrgUnit.Code,
@@ -169,7 +168,7 @@ export function registerGetMyGrades(
 
         log(
           "INFO",
-          `get_my_grades: Retrieved grades for ${courses.length} courses (out of ${enrollmentResponse.Items.length} enrolled)`
+          `get_my_grades: Retrieved grades for ${courses.length} courses (out of ${enrollmentItems.length} enrolled)`
         );
         return toolResponse({ courses });
       } catch (error) {

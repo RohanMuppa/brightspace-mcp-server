@@ -333,6 +333,28 @@ describe("get_upcoming_due_dates", () => {
     expect(items[0]).toMatchObject({ type: "assignment", title: "HW" });
   });
 
+  it("excludes every topic inside a hidden forum, however visible the topic", async () => {
+    const { call } = setup((path) => {
+      if (path.includes("/enrollments/")) return enrollments(COURSE_A);
+      if (path.includes("/discussions/forums/9/topics/")) {
+        return [{ TopicId: 55, Name: "Unreleased draft", DueDate: daysFromNow(2), IsHidden: false }];
+      }
+      if (path.includes("/discussions/forums/10/topics/")) {
+        return [{ TopicId: 56, Name: "Reading response #3", DueDate: daysFromNow(2), IsHidden: false }];
+      }
+      if (path.includes("/discussions/forums/")) {
+        return [
+          { ForumId: 9, Name: "Instructor drafts", IsHidden: true },
+          { ForumId: 10, Name: "Reading Responses", IsHidden: false },
+        ];
+      }
+      return [];
+    });
+
+    const items = parse(await call({ daysAhead: 7 }));
+    expect(items.map((i) => i.title)).toEqual(["Reading response #3"]);
+  });
+
   it("keeps other forums when one forum's topics fail to load", async () => {
     const { call } = setup((path) => {
       if (path.includes("/enrollments/")) return enrollments(COURSE_A);
@@ -351,5 +373,78 @@ describe("get_upcoming_due_dates", () => {
 
     const items = parse(await call({ daysAhead: 7 }));
     expect(items.map((i) => i.title)).toEqual(["Reading response #2"]);
+  });
+});
+
+/**
+ * The course list this tool walks comes from the same paged myenrollments
+ * endpoint get_my_courses reads. Reading only the first page silently drops
+ * every course after it, and every deadline in those courses with it.
+ */
+describe("get_upcoming_due_dates course resolution", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const enrollmentPage = (course: typeof COURSE_A, bookmark?: string) => ({
+    Items: [
+      {
+        OrgUnit: course,
+        Access: { ClasslistRoleName: "Student", IsActive: true, LastAccessed: null },
+      },
+    ],
+    PagingInfo: { HasMoreItems: bookmark !== undefined, Bookmark: bookmark ?? "" },
+  });
+
+  it("walks every page of enrollments", async () => {
+    const { call } = setup((path) => {
+      if (path.includes("/enrollments/")) {
+        return path.includes("bookmark=b1")
+          ? enrollmentPage(COURSE_B)
+          : enrollmentPage(COURSE_A, "b1");
+      }
+      if (path.includes(`/${COURSE_B.Id}/dropbox/`)) {
+        return [{ Id: 9, Name: "HW from the second page", DueDate: daysFromNow(1), IsHidden: false }];
+      }
+      return [];
+    });
+
+    const items = parse(await call({ daysAhead: 7 }));
+    expect(items.map((i) => i.title)).toEqual(["HW from the second page"]);
+  });
+
+  it("honours a configured activeOnly:false instead of forcing isActive=true", async () => {
+    const config = makeConfig();
+    config.courseFilter = { activeOnly: false };
+
+    // Stand in for the server: isActive=true in the query really does withhold
+    // the archived course, so a hardcoded filter loses it before any client
+    // side filter can be asked about it.
+    const { call, requested } = setup((path) => {
+      if (path.includes("/enrollments/")) {
+        if (path.includes("isActive=true")) return { Items: [] };
+        return {
+          Items: [
+            {
+              OrgUnit: COURSE_B,
+              Access: { ClasslistRoleName: "Student", IsActive: false, LastAccessed: null },
+            },
+          ],
+        };
+      }
+      if (path.includes("/dropbox/folders/")) {
+        return [{ Id: 1, Name: "Incomplete from last term", DueDate: daysFromNow(1), IsHidden: false }];
+      }
+      return [];
+    }, config);
+
+    const items = parse(await call({ daysAhead: 7 }));
+    expect(requested[0]).not.toContain("isActive=true");
+    expect(items.map((i) => i.title)).toEqual(["Incomplete from last term"]);
   });
 });

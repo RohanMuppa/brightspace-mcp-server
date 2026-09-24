@@ -97,14 +97,25 @@ async function buildContentTree(
       let processedChildren: any[] = [];
 
       if (currentDepth < depthLimit) {
-        let children: ContentObject[] = [];
+        // The parent listing already embeds this module's immediate children
+        // in Structure. The dedicated endpoint is still asked first because it
+        // is the authoritative copy, but a module whose structure call fails —
+        // or answers with something that is not an array — must fall back to
+        // what the parent already handed us. Falling through to an empty list
+        // made a locked or erroring module look like an empty one, and under a
+        // typeFilter it dropped the module from the tree with no trace.
+        let children: ContentObject[] | null = null;
         try {
           children = await apiClient.get<ContentObject[]>(
             apiClient.le(courseId, `/content/modules/${item.Id}/structure/`),
             { ttl: DEFAULT_CACHE_TTLS.courseContent }
           );
         } catch (e) {
-          log('DEBUG', `Failed to fetch children for module ${item.Id}: skipping`);
+          log('DEBUG', `Failed to fetch children for module ${item.Id}: falling back to the embedded structure`);
+        }
+
+        if (!Array.isArray(children)) {
+          children = Array.isArray(item.Structure) ? item.Structure : [];
         }
 
         processedChildren = await buildContentTree(

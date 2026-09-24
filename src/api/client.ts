@@ -201,9 +201,18 @@ export class D2LApiClient {
   async get<T>(path: string, options?: { ttl?: number }): Promise<T> {
     // Checked before the path is resolved, and keyed by the path as the caller
     // wrote it, so a cached read needs neither version discovery nor a token.
-    if (options?.ttl && this.cache.has(path)) {
-      log("DEBUG", `Cache hit: ${path}`);
-      return this.cache.get(path) as T;
+    //
+    // The entry has to be younger than this caller's own TTL, not merely
+    // still alive. One path can be written under two TTLs: the discussion
+    // forum list is thirty minutes of course content to get_discussions and
+    // ten minutes of due dates to get_upcoming_due_dates. Trusting the
+    // surviving entry served the longer caller's staleness to the shorter one.
+    if (options?.ttl) {
+      const age = this.cache.ageOf(path);
+      if (age !== undefined && age <= options.ttl) {
+        log("DEBUG", `Cache hit: ${path}`);
+        return this.cache.get(path) as T;
+      }
     }
 
     const resolved = await this.resolvePath(path);

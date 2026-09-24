@@ -53,11 +53,13 @@ function setup(respond: Responder, config: AppConfig = makeConfig()) {
   return { call: (args: unknown) => handler!(args), requested };
 }
 
+const enrollmentItem = (c: typeof COURSE_A, isActive = true) => ({
+  OrgUnit: c,
+  Access: { ClasslistRoleName: "Student", IsActive: isActive, LastAccessed: null },
+});
+
 const enrollments = (...courses: Array<typeof COURSE_A>) => ({
-  Items: courses.map((c) => ({
-    OrgUnit: c,
-    Access: { ClasslistRoleName: "Student", IsActive: true, LastAccessed: null },
-  })),
+  Items: courses.map((c) => enrollmentItem(c)),
 });
 
 const parse = (result: any): any[] => JSON.parse(result.content[0].text);
@@ -245,6 +247,82 @@ describe("get_announcements", () => {
       ]);
       expect(items[0]).toMatchObject({ courseId: COURSE_A.Id, courseName: COURSE_A.Name });
       expect(items[2]).toMatchObject({ courseId: COURSE_B.Id, date: "2026-09-02T00:00:00.000Z" });
+    });
+
+    /**
+     * myenrollments is bookmark-paged. Reading only the first page hides every
+     * course past it — on a real Purdue account 44 enrollments come back over
+     * several pages, so the later courses' announcements simply vanished.
+     */
+    it("follows the enrollment bookmark chain instead of stopping at page one", async () => {
+      const newsByCourse: Record<number, unknown[]> = {
+        [COURSE_A.Id]: [
+          news({ Id: 1, Title: "A post", CreatedDate: "2026-09-08T00:00:00.000Z", StartDate: null, IsPublished: true }),
+        ],
+        [COURSE_B.Id]: [
+          news({ Id: 2, Title: "B post", CreatedDate: "2026-09-03T00:00:00.000Z", StartDate: null, IsPublished: true }),
+        ],
+      };
+
+      const { call, requested } = setup((path) => {
+        if (path.includes("/enrollments/")) {
+          return path.includes("bookmark=")
+            ? { Items: [enrollmentItem(COURSE_B)], PagingInfo: { HasMoreItems: false } }
+            : {
+                Items: [enrollmentItem(COURSE_A)],
+                PagingInfo: { HasMoreItems: true, Bookmark: "page-2" },
+              };
+        }
+        const match = path.match(/\/le\/1\.0\/(\d+)\//);
+        return match ? newsByCourse[Number(match[1])] ?? [] : [];
+      });
+
+      const items = parse(await call({}));
+      expect(items.map((i) => i.title)).toEqual(["A post", "B post"]);
+      expect(requested.filter((p) => p.includes("/enrollments/"))).toHaveLength(2);
+    });
+
+    /**
+     * activeOnly is a configured policy, not a constant. With it off the user
+     * asked to see past courses; hard-coding isActive=true into the query made
+     * the server drop them before the filter ever saw them.
+     */
+    it("drops isActive=true from the query when activeOnly is off", async () => {
+      const respond: Responder = (path) => {
+        if (path.includes("/enrollments/")) {
+          // D2L filters server-side, so isActive=true really does hide COURSE_B.
+          const items = path.includes("isActive=true")
+            ? [enrollmentItem(COURSE_A)]
+            : [enrollmentItem(COURSE_A), enrollmentItem(COURSE_B, false)];
+          return { Items: items };
+        }
+        const match = path.match(/\/le\/1\.0\/(\d+)\//);
+        if (!match) return [];
+        return [
+          news({
+            Id: Number(match[1]),
+            Title: `post ${match[1]}`,
+            CreatedDate: "2026-09-01T00:00:00.000Z",
+            StartDate: null,
+            IsPublished: true,
+          }),
+        ];
+      };
+
+      const { call, requested } = setup(respond, {
+        ...makeConfig(),
+        courseFilter: { activeOnly: false },
+      } as AppConfig);
+
+      const items = parse(await call({}));
+      expect(requested[0]).not.toContain("isActive=true");
+      expect(items.map((i) => i.courseId).sort()).toEqual([COURSE_A.Id, COURSE_B.Id]);
+    });
+
+    it("still asks only for active enrollments under the default policy", async () => {
+      const { call, requested } = setup(manyCourses({ [COURSE_A.Id]: [] }));
+      await call({});
+      expect(requested[0]).toContain("isActive=true");
     });
 
     it("sorts an undated item last and honours count across courses", async () => {

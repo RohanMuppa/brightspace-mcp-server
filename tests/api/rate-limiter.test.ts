@@ -137,6 +137,49 @@ describe("TokenBucket", () => {
     expect(resolved).toBe(true);
   });
 
+  it("paces concurrent waiters instead of releasing them all on one refill", async () => {
+    const bucket = new TokenBucket(10, 2); // 2 tokens per second
+
+    const released: number[] = [];
+    const all = Promise.all(
+      Array.from({ length: 14 }, (_, i) =>
+        bucket.consume(1).then(() => {
+          released.push(i);
+        })
+      )
+    );
+
+    // The burst capacity goes out at once, and nothing more.
+    await vi.advanceTimersByTimeAsync(0);
+    expect(released).toHaveLength(10);
+
+    // One token accrues every 500ms, so one waiter is released every 500ms.
+    await vi.advanceTimersByTimeAsync(500);
+    expect(released).toHaveLength(11);
+
+    await vi.advanceTimersByTimeAsync(500);
+    expect(released).toHaveLength(12);
+
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(released).toHaveLength(14);
+
+    await all;
+    // Fourteen tokens taken, four accrued during the two seconds of waiting.
+    expect(bucket.availableTokens).toBe(0);
+  });
+
+  it("never reports a negative balance while waiters are still queued", async () => {
+    const bucket = new TokenBucket(2, 1);
+
+    await bucket.consume(2);
+    const pending = bucket.consume(2);
+
+    expect(bucket.availableTokens).toBe(0);
+
+    await vi.advanceTimersByTimeAsync(2000);
+    await pending;
+  });
+
   it("should handle partial token availability correctly", async () => {
     const bucket = new TokenBucket(10, 5); // 5 tokens per second
 

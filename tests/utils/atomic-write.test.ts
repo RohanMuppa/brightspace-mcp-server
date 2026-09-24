@@ -69,6 +69,26 @@ describe("writeFileAtomic", () => {
     expect(fsSync.existsSync(target)).toBe(false);
   });
 
+  it("cleans up the staged file when the write itself fails", async () => {
+    // A write that dies partway — ENOSPC, EIO — used to leave its temp file
+    // behind, and the names are random, so every failure orphaned another
+    // copy next to the config or session file it was staging.
+    const dir = await tmpDir();
+    const target = path.join(dir, "session.json");
+    async function* dyingSource() {
+      yield "half of an encrypted record";
+      throw Object.assign(new Error("no space left on device"), { code: "ENOSPC" });
+    }
+
+    await expect(
+      writeFileAtomic(target, dyingSource() as unknown as string, { mode: 0o600 })
+    ).rejects.toThrow("no space left on device");
+
+    const leftovers = (await fs.readdir(dir)).filter((n) => n.includes(".tmp-"));
+    expect(leftovers).toEqual([]);
+    expect(fsSync.existsSync(target)).toBe(false);
+  });
+
   it("does not retry a non-transient error", async () => {
     const dir = await tmpDir();
     const target = path.join(dir, "enoent.json");
@@ -90,5 +110,18 @@ describe("writeFileAtomicSync", () => {
     expect(fsSync.readFileSync(target, "utf-8")).toBe("{}\n");
     const leftovers = fsSync.readdirSync(dir).filter((n) => n.includes(".tmp-"));
     expect(leftovers).toEqual([]);
+  });
+
+  it("cleans up the staged file when the write itself fails", async () => {
+    const dir = await tmpDir();
+    const target = path.join(dir, "config.json");
+
+    expect(() =>
+      writeFileAtomicSync(target, { not: "writable" } as unknown as string, { mode: 0o600 })
+    ).toThrow();
+
+    const leftovers = fsSync.readdirSync(dir).filter((n) => n.includes(".tmp-"));
+    expect(leftovers).toEqual([]);
+    expect(fsSync.existsSync(target)).toBe(false);
   });
 });

@@ -7,8 +7,16 @@
 /**
  * Deep links into the Brightspace web UI.
  *
- * The templates were harvested from live Brightspace markup: they are the same
- * URLs the course pages themselves link to, so they open the item directly.
+ * The dropbox, quiz and gradebook templates were harvested from live
+ * Brightspace markup: they are the same URLs the course pages themselves link
+ * to, so they open the item directly.
+ *
+ * `discussionUrl` was NOT -- it was written from the shape of the others
+ * without live markup to check it against, and no one has confirmed it against
+ * a real tenant since. Treat it as unverified: if a student reports that a
+ * discussion link lands on the wrong page or a "not found", harvest the real
+ * URL from a course's own discussion list and fix the template here rather
+ * than assuming this one is right.
  */
 
 /** Drop trailing slashes so the templates below join cleanly. */
@@ -42,7 +50,13 @@ export function gradebookUrl(baseUrl: string, courseId: number): string {
   return `${trimBaseUrl(baseUrl)}/d2l/lms/grades/my_grades/main.d2l?ou=${courseId}`;
 }
 
-/** Link to the thread list of a discussion topic. */
+/**
+ * Link to the thread list of a discussion topic.
+ *
+ * Unverified against a live tenant -- see the note at the top of this file.
+ * The topic's forum id is available at every call site, so if the real
+ * template turns out to need one, it can be threaded through.
+ */
 export function discussionUrl(
   baseUrl: string,
   courseId: number,

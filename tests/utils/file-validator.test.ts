@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   validateFileType,
   validateDownloadPath,
+  validateBaseUrl,
 } from "../../src/utils/file-validator.js";
 import { DownloadError } from "../../src/utils/download-errors.js";
 
@@ -81,6 +82,101 @@ describe("validateFileType: legacy Office containers", () => {
     const error = await validateFileType(pdfBuffer(), ["image/png"]).catch((e) => e);
     expect(error).toBeInstanceOf(DownloadError);
     expect(error.kind).toBe("unsupportedType");
+  });
+});
+
+/**
+ * file-type has no SVG detector, so an SVG carrying the usual `<?xml ...?>`
+ * prolog -- which is what every drawing tool exports -- was reported as
+ * application/xml and refused, even though image/svg+xml has been in
+ * ALLOWED_MIME_TYPES all along. Same dead-allowlist-entry shape as issue #24's
+ * legacy Office containers, one format over.
+ */
+describe("validateFileType: SVG", () => {
+  const PROLOG_SVG = Buffer.from(
+    '<?xml version="1.0" encoding="UTF-8"?>\n<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10"/></svg>'
+  );
+  const BARE_SVG = Buffer.from(
+    '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10"/></svg>'
+  );
+
+  it("accepts an .svg that carries an XML prolog", async () => {
+    await expect(
+      validateFileType(PROLOG_SVG, undefined, "diagram.svg")
+    ).resolves.toMatchObject({ mime: "image/svg+xml", ext: "svg" });
+  });
+
+  it("accepts an .svg with no prolog and names it correctly", async () => {
+    // This one already downloaded, but as text/plain with a .txt extension,
+    // so the caller was told the wrong type for the bytes it just wrote.
+    await expect(
+      validateFileType(BARE_SVG, undefined, "diagram.svg")
+    ).resolves.toMatchObject({ mime: "image/svg+xml", ext: "svg" });
+  });
+
+  it("still refuses other XML, which the allowlist never admitted", async () => {
+    const error = await validateFileType(
+      Buffer.from('<?xml version="1.0"?><note><to>x</to></note>'),
+      undefined,
+      "data.xml"
+    ).catch((e) => e);
+    expect(error).toBeInstanceOf(DownloadError);
+    expect(error.detail).toBe("application/xml");
+  });
+
+  it("honours a narrower allowlist that excludes svg", async () => {
+    await expect(
+      validateFileType(BARE_SVG, ["application/pdf"], "diagram.svg")
+    ).rejects.toBeInstanceOf(DownloadError);
+  });
+});
+
+describe("validateFileType: empty body", () => {
+  it("refuses a zero-byte download instead of calling it text/plain", async () => {
+    // A truncated fetch or an empty error body used to validate as text/plain
+    // and be written to disk as a zero-byte file under the real name.
+    const error = await validateFileType(Buffer.alloc(0), undefined, "Syllabus.pdf").catch(
+      (e) => e
+    );
+    expect(error).toBeInstanceOf(DownloadError);
+    expect(error.kind).toBe("undetectableType");
+  });
+
+  it("still accepts a file that is only whitespace", async () => {
+    await expect(
+      validateFileType(Buffer.from("   \n"), undefined, "notes.txt")
+    ).resolves.toMatchObject({ mime: "text/plain" });
+  });
+});
+
+describe("validateBaseUrl", () => {
+  const BASE = "https://purdue.brightspace.com";
+
+  it("refuses a hostname that merely starts with the expected one", () => {
+    // startsWith() passed this: the attacker's host is a string prefix match.
+    expect(() =>
+      validateBaseUrl(`${BASE}.attacker.example/d2l/steal`, BASE)
+    ).toThrow();
+  });
+
+  it("refuses a different scheme, host, or port on the same name", () => {
+    expect(() => validateBaseUrl("http://purdue.brightspace.com/d2l", BASE)).toThrow();
+    expect(() => validateBaseUrl("https://purdue.brightspace.com:8443/d2l", BASE)).toThrow();
+    expect(() => validateBaseUrl("https://evil.example/d2l", BASE)).toThrow();
+  });
+
+  it("refuses a value that is not a URL at all", () => {
+    expect(() => validateBaseUrl("not a url", BASE)).toThrow();
+  });
+
+  it("accepts the expected origin", () => {
+    expect(() => validateBaseUrl(`${BASE}/d2l/api/lp/1.0/users/whoami`, BASE)).not.toThrow();
+    expect(() => validateBaseUrl(BASE, BASE)).not.toThrow();
+  });
+
+  it("requires a path prefix to end on a separator", () => {
+    expect(() => validateBaseUrl(`${BASE}/d2lXXX/evil`, `${BASE}/d2l`)).toThrow();
+    expect(() => validateBaseUrl(`${BASE}/d2l/home`, `${BASE}/d2l`)).not.toThrow();
   });
 });
 

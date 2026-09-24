@@ -19,6 +19,7 @@ import {
   loadConfigStore,
 } from "./utils/config-store.js";
 import { saveSecureConfig } from "./utils/secure-config.js";
+import { writeFileAtomicSync } from "./utils/atomic-write.js";
 import type { ConfigStoreData } from "./utils/config-store.js";
 import { AUTH_COMMAND } from "./utils/commands.js";
 import {
@@ -48,7 +49,7 @@ interface SchoolPreset {
   usernameHint?: string;
 }
 
-const SCHOOL_PRESETS: Record<string, SchoolPreset> = {
+export const SCHOOL_PRESETS: Record<string, SchoolPreset> = {
   purdue: {
     name: "Purdue University",
     baseUrl: "https://purdue.brightspace.com",
@@ -72,9 +73,20 @@ const SCHOOL_PRESETS: Record<string, SchoolPreset> = {
   },
 };
 
-// Parse --purdue, --osu, etc. from argv
-const schoolFlag = process.argv.find((a) => a.startsWith("--"))?.replace(/^--/, "").toLowerCase();
-const preset = schoolFlag ? SCHOOL_PRESETS[schoolFlag] : undefined;
+/**
+ * Pick the school preset named by `--purdue`, `--suny`, `--western`, etc.
+ *
+ * Own properties only: a bare index would make `--constructor` or
+ * `--__proto__` resolve to something off `Object.prototype` and hand the
+ * wizard an object with no `baseUrl`.
+ */
+export function presetForArgv(argv: string[] = process.argv): SchoolPreset | undefined {
+  const flag = argv.find((a) => a.startsWith("--"))?.replace(/^--/, "").toLowerCase();
+  if (!flag || !Object.prototype.hasOwnProperty.call(SCHOOL_PRESETS, flag)) return undefined;
+  return SCHOOL_PRESETS[flag];
+}
+
+const preset = presetForArgv();
 
 // ── Readline helpers ───────────────────────────────────────────────
 
@@ -234,29 +246,47 @@ function getCursorConfigPath(): string {
   return path.join(os.homedir(), ".cursor", "mcp.json");
 }
 
-function configureMcpClient(configPath: string): boolean {
-  let config: McpConfig = { mcpServers: {} };
+/**
+ * A JSON value we can safely merge a server entry into. An array passes
+ * `typeof x === "object"` but drops every added key when it is stringified
+ * again, so it has to be rejected alongside `null`.
+ */
+function isJsonObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+export function configureMcpClient(configPath: string): boolean {
+  let config: McpConfig = {};
 
   // Read existing config if present
   if (fs.existsSync(configPath)) {
+    let parsed: unknown;
+    let readable = true;
     try {
-      const raw = fs.readFileSync(configPath, "utf-8");
-      config = JSON.parse(raw) as McpConfig;
+      parsed = JSON.parse(fs.readFileSync(configPath, "utf-8"));
     } catch {
-      // If we can't parse, start fresh but warn
-      console.log(yellow("  Warning: existing config was invalid, creating new one."));
-      config = { mcpServers: {} };
+      readable = false;
+    }
+    if (isJsonObject(parsed)) {
+      config = parsed as McpConfig;
+    } else {
+      // Unparseable, or valid JSON that is not an object (null, an array, a
+      // bare string). Merging into it would either throw or silently discard
+      // the entry we just reported as written, so start fresh and say so.
+      console.log(yellow(`  Warning: existing config was ${readable ? "not a JSON object" : "invalid"}, creating new one.`));
+      config = {};
     }
   }
 
-  if (!config.mcpServers) {
-    config.mcpServers = {};
-  }
+  // Same reasoning for the servers map itself, which is hand-edited far more
+  // often than the file around it.
+  const servers: Record<string, unknown> = isJsonObject(config.mcpServers) ? config.mcpServers : {};
+  config.mcpServers = servers;
 
   // Add/update brightspace entry
   // On Windows, npx is a .cmd shim that must be invoked through cmd.exe
   const isWindows = process.platform === "win32";
-  config.mcpServers["brightspace"] = isWindows
+  servers["brightspace"] = isWindows
     ? {
         command: "cmd",
         args: ["/c", "npx", "-y", "brightspace-mcp-server@latest"],
@@ -272,8 +302,86 @@ function configureMcpClient(configPath: string): boolean {
     fs.mkdirSync(dir, { recursive: true });
   }
 
-  fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n");
+  // This file holds every MCP server the user has configured, not just ours.
+  // A plain write truncates it first, so a write that fails part way through
+  // (a full disk, an I/O error) would leave the user with no MCP servers at
+  // all. Staging and renaming leaves either the old file or the new one.
+  // The existing permissions are carried over, since the rename would
+  // otherwise replace them with the umask default.
+  let mode: number | undefined;
+  try {
+    if (fs.existsSync(configPath)) mode = fs.statSync(configPath).mode & 0o777;
+  } catch {
+    // Unreadable metadata is not a reason to skip the write.
+  }
+  writeFileAtomicSync(
+    configPath,
+    JSON.stringify(config, null, 2) + "\n",
+    mode === undefined ? {} : { mode },
+  );
   return true;
+}
+
+// ── Saved settings ─────────────────────────────────────────────────
+
+export interface WizardAnswers {
+  baseUrl: string;
+  username: string;
+  password: string;
+  headless: boolean;
+  campus?: string;
+}
+
+/** The settings already on disk, or null when there are none to read. */
+export function readExistingConfig(): ConfigStoreData | null {
+  try {
+    return configStoreExists() ? loadConfigStore() : null;
+  } catch {
+    // An unreadable config is replaced by the setup values.
+    return null;
+  }
+}
+
+function sameSchool(stored: string | undefined, chosen: string): boolean {
+  // A config that never recorded a school (environment-driven installs) is
+  // not a *different* school, so its settings are still ours to keep.
+  if (!stored) return true;
+  try {
+    return new URL(stored).origin === new URL(chosen).origin;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Merge the wizard's answers over the settings already saved.
+ *
+ * `saveConfigStore` replaces the whole file, and setup is the documented way
+ * to update a saved password — so it runs again on configurations that carry
+ * settings it never prompts for: the SUNY campus, course filters, a custom
+ * session directory or token TTL. Writing only the answers deleted all of
+ * them; most visibly, a SUNY user who reran plain `setup` lost the campus
+ * that lets sign-in skip the shared campus picker.
+ *
+ * Settings are carried only within one school, since course ids and the
+ * campus belong to a single tenant.
+ */
+export function buildConfigToSave(
+  existing: ConfigStoreData | null,
+  answers: WizardAnswers,
+): ConfigStoreData {
+  const carried = existing && sameSchool(existing.baseUrl, answers.baseUrl) ? existing : null;
+  const config: ConfigStoreData = {
+    ...carried,
+    baseUrl: answers.baseUrl,
+    username: answers.username,
+    // Always the freshly typed one: a carried v1 plaintext password would
+    // otherwise be the value written to the native store.
+    password: answers.password,
+    headless: answers.headless,
+  };
+  if (answers.campus) config.campus = answers.campus;
+  return config;
 }
 
 // ── Auth spawn ─────────────────────────────────────────────────────
@@ -431,15 +539,13 @@ async function main(): Promise<void> {
   console.log("");
 
   // ── Step 5: Save config ──────────────────────────────────────────
-  const config: ConfigStoreData = {
+  const config = buildConfigToSave(readExistingConfig(), {
     baseUrl,
     username,
     password,
     headless,
-  };
-  if (campus) {
-    config.campus = campus;
-  }
+    campus: campus || undefined,
+  });
 
   await saveSecureConfig(config);
   console.log(green("  Password saved in your operating system credential store."));
@@ -565,7 +671,13 @@ async function main(): Promise<void> {
   console.log("");
 }
 
-main().catch((err) => {
-  console.error("Setup failed:", err instanceof Error ? err.message : String(err));
-  process.exit(1);
-});
+// Both entry points — the `brightspace-setup` bin and `brightspace-mcp-server
+// setup`, which imports this module — start the wizard here. VITEST is set
+// only by the test runner, which imports the module for the helpers above and
+// must not open prompts on stdin; no user environment sets it.
+if (!process.env.VITEST) {
+  main().catch((err) => {
+    console.error("Setup failed:", err instanceof Error ? err.message : String(err));
+    process.exit(1);
+  });
+}

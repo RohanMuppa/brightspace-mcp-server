@@ -9,6 +9,7 @@ import { PurdueSSOFlow } from "./purdue-sso.js";
 import { log } from "../utils/logger.js";
 import { UnsupportedAuthenticationError } from "./sso-flow.js";
 import type { RequestMfaCode } from "./sso-flow.js";
+import { BrowserAuthError } from "../utils/errors.js";
 
 /** SUNY campuses share one Brightspace tenant behind one Shibboleth IdP. */
 const SUNY_BRIGHTSPACE_HOST = "mylearning.suny.edu";
@@ -97,6 +98,11 @@ export class SunySSOFlow {
       await this.startSamlLogin(page);
       await this.selectCampus(page);
     } catch (error) {
+      // selectCampus already names the cause and, for a mismatch, lists the
+      // campuses SUNY itself is offering. Re-wrapping those threw away the
+      // only list a user can act on, so pass an already-typed failure through
+      // and describe only the ones that arrive untyped.
+      if (error instanceof BrowserAuthError) throw error;
       throw new UnsupportedAuthenticationError("SUNY campus selection could not complete automatically. Run brightspace-mcp-server setup --suny and select a campus.", error as Error);
     }
     return this.defaultFlow.login(page);

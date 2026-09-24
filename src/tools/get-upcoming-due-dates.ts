@@ -6,6 +6,7 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { D2LApiClient, DEFAULT_CACHE_TTLS } from "../api/index.js";
+import { fetchAllItems } from "../api/paginate.js";
 import {
   GetUpcomingDueDatesSchema,
 } from "./schemas.js";
@@ -34,6 +35,7 @@ interface QuizReadData {
 interface DiscussionForum {
   ForumId: number;
   Name: string;
+  IsHidden: boolean;
 }
 
 interface DiscussionTopic {
@@ -53,10 +55,6 @@ interface EnrollmentItem {
     IsActive: boolean;
     CanAccess?: boolean;
   };
-}
-
-interface EnrollmentResponse {
-  Items: EnrollmentItem[];
 }
 
 interface CourseRef {
@@ -95,11 +93,19 @@ async function resolveCourses(
   let items: EnrollmentItem[] = [];
 
   try {
-    const response = await apiClient.get<EnrollmentResponse>(
-      apiClient.lp("/enrollments/myenrollments/?orgUnitTypeId=3&isActive=true"),
+    // isActive=true tracks the configured policy rather than being pinned on:
+    // a user who set activeOnly:false is asking to see archived courses, and a
+    // query that withholds them leaves applyCourseFilter nothing to let
+    // through. Enrollments are paged, so follow the bookmark chain — a long
+    // enrollment history would otherwise lose every course past the first page,
+    // and every deadline in those courses with it.
+    items = await fetchAllItems<EnrollmentItem>(
+      apiClient,
+      apiClient.lp(
+        `/enrollments/myenrollments/?orgUnitTypeId=3${config.courseFilter.activeOnly ? "&isActive=true" : ""}`
+      ),
       { ttl: DEFAULT_CACHE_TTLS.enrollments }
     );
-    items = response.Items ?? [];
   } catch (error) {
     // Without enrollments there is no course list to walk, so only the explicit
     // single-course case can continue (with an unnamed course).
@@ -129,9 +135,11 @@ async function resolveCourses(
 /**
  * Collect every graded, dated discussion topic for one course.
  *
- * Forums carry no due date themselves; it lives on each topic. A forum whose
- * topics fail to load (e.g. no access) is skipped rather than failing the
- * whole course, matching `getForumsOverview` in get-discussions.ts.
+ * Forums carry no due date themselves; it lives on each topic. A hidden forum
+ * hides everything inside it, however visible its topics claim to be, so it is
+ * skipped without asking for its topics at all. A forum whose topics fail to
+ * load (e.g. no access) is skipped rather than failing the whole course,
+ * matching `getForumsOverview` in get-discussions.ts.
  */
 async function fetchDiscussionDueTopics(
   apiClient: D2LApiClient,
@@ -144,6 +152,8 @@ async function fetchDiscussionDueTopics(
 
   const topics: DiscussionTopic[] = [];
   for (const forum of unwrapList<DiscussionForum>(forums)) {
+    if (forum.IsHidden === true) continue;
+
     try {
       const forumTopics = await apiClient.get<
         { Objects: DiscussionTopic[] } | DiscussionTopic[]

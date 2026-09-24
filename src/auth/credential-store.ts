@@ -180,11 +180,26 @@ function decodeKey(value: string): Buffer {
   return Buffer.from(value, "hex");
 }
 
+function sessionKeyAccount(canonicalDir: string): string {
+  return `session-key:${createHash("sha256").update(canonicalDir).digest("hex")}`;
+}
+
+/**
+ * Whether this session directory already holds a native encryption key, which
+ * is what separates an upgrade that has not run yet from one that finished.
+ * A locked or unavailable store raises instead of answering false, so a
+ * caller never mistakes "cannot tell" for "not migrated".
+ */
+export async function hasSessionEncryptionKey(sessionDir: string, backend: CredentialBackend = nativeCredentialBackend): Promise<boolean> {
+  const canonicalDir = await fs.realpath(sessionDir);
+  return (await backend.getPassword(SERVICE, sessionKeyAccount(canonicalDir))) !== null;
+}
+
 /** The canonical session directory stays stable when DHCP changes the hostname. */
 export async function getSessionEncryptionKey(sessionDir: string, backend: CredentialBackend = nativeCredentialBackend, create = true): Promise<Buffer> {
   await fs.mkdir(sessionDir, { recursive: true, mode: 0o700 });
   const canonicalDir = await fs.realpath(sessionDir);
-  const account = `session-key:${createHash("sha256").update(canonicalDir).digest("hex")}`;
+  const account = sessionKeyAccount(canonicalDir);
   const existing = await backend.getPassword(SERVICE, account);
   if (existing !== null) {
     try {

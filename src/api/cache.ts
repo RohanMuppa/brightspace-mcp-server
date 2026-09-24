@@ -10,6 +10,9 @@
 interface CacheEntry<T> {
   data: T;
   timerId: NodeJS.Timeout;
+  /** When this entry was written, so a caller can judge it against its own
+   * freshness requirement rather than the TTL whoever wrote it chose. */
+  storedAt: number;
 }
 
 export class TTLCache<T = unknown> {
@@ -34,12 +37,26 @@ export class TTLCache<T = unknown> {
     }
 
     // Store entry
-    this.cache.set(key, { data: value, timerId });
+    this.cache.set(key, { data: value, timerId, storedAt: Date.now() });
   }
 
   get(key: string): T | undefined {
     const entry = this.cache.get(key);
     return entry?.data;
+  }
+
+  /**
+   * How long ago this key was written, in milliseconds, or undefined when it
+   * is not cached.
+   *
+   * One key can be written under several TTLs: two tools ask for the same
+   * path with different freshness requirements. An entry another caller kept
+   * alive for an hour is still too old for a caller that asked for ten
+   * minutes, and only its age can say so.
+   */
+  ageOf(key: string): number | undefined {
+    const entry = this.cache.get(key);
+    return entry ? Date.now() - entry.storedAt : undefined;
   }
 
   has(key: string): boolean {

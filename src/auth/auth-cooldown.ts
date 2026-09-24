@@ -27,6 +27,19 @@ export class AuthenticationCooldownError extends Error {
   }
 }
 
+/** The recorded retry time, or undefined when the file says nothing usable. */
+function readRetryAt(content: string): number | undefined {
+  let status: unknown;
+  try {
+    status = JSON.parse(content);
+  } catch {
+    return undefined;
+  }
+  if (typeof status !== "object" || status === null || Array.isArray(status)) return undefined;
+  const retryAt = (status as { retryAt?: unknown }).retryAt;
+  return typeof retryAt === "number" && Number.isFinite(retryAt) ? retryAt : undefined;
+}
+
 /** Non-secret retry metadata. Call only while holding the authentication lock. */
 export class AuthCooldown {
   private readonly file: string;
@@ -42,8 +55,18 @@ export class AuthCooldown {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
       throw error;
     }
-    const status = JSON.parse(content) as { retryAt?: number };
-    if (typeof status.retryAt === "number" && status.retryAt > Date.now()) throw new AuthenticationCooldownError(status.retryAt);
+    const retryAt = readRetryAt(content);
+    if (retryAt === undefined) {
+      // This file is non-secret retry metadata, and only a readable retryAt is
+      // evidence of anything. A truncated or non-object file used to throw out
+      // of here, which runs before the sign-in attempt — and the automatic path
+      // only clears the file after a sign-in that then never started. One
+      // damaged file disabled background sign-in for good, with nothing on
+      // screen naming the cause. Discard it and let this attempt proceed.
+      await fs.unlink(this.file).catch(() => {});
+      return;
+    }
+    if (retryAt > Date.now()) throw new AuthenticationCooldownError(retryAt);
   }
 
   async recordMfaFailure(): Promise<void> {
