@@ -7,13 +7,13 @@ import * as path from "node:path";
  * disk does: the bytes it was handed land somewhere, and then it throws.
  */
 const fsHooks = vi.hoisted(() => ({
-  failWrite: null as null | ((target: string, data: unknown) => never),
+  failWrite: null as null | ((target: string | number, data: unknown) => never),
 }));
 
 vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs")>();
   const writeFileSync = (target: unknown, data: unknown, options?: unknown) => {
-    if (fsHooks.failWrite) fsHooks.failWrite(String(target), data);
+    if (fsHooks.failWrite) fsHooks.failWrite(target as string | number, data);
     return (actual.writeFileSync as (...args: unknown[]) => void)(target, data, options);
   };
   return { ...actual, default: { ...actual, writeFileSync }, writeFileSync };
@@ -206,7 +206,10 @@ describe("client configuration", () => {
 
     fsHooks.failWrite = (target, data) => {
       // A disk that fills up mid-write: some bytes land, then the write dies.
-      fs.writeFileSync(target, String(data).slice(0, 12));
+      // The atomic writer hands over an open descriptor, not a path.
+      const partial = String(data).slice(0, 12);
+      if (typeof target === "number") fs.writeSync(target, partial);
+      else fs.writeFileSync(target, partial);
       const error: NodeJS.ErrnoException = new Error("ENOSPC: no space left on device");
       error.code = "ENOSPC";
       throw error;
