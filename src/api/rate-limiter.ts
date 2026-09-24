@@ -4,8 +4,8 @@
  * Licensed under MIT — see LICENSE file for details.
  */
 
-// Token bucket rate limiter - allows bursts up to capacity
-// Conservative defaults: capacity 10, refill 3/sec
+// Token bucket rate limiter - allows bursts up to capacity.
+// Defaults live in D2LApiClient (client.ts).
 
 export class TokenBucket {
   private tokens: number;

@@ -111,9 +111,12 @@ export class D2LApiClient {
 
     // Initialize cache and rate limiter
     this.cache = new TTLCache();
+    // Sized for the per-course fan-out the tools do (a dozen courses is ~60
+    // requests); at 3/s that took ~17 s once the limiter actually reserved
+    // tokens. Brightspace 429s are still retried with Retry-After.
     const rateLimitConfig = options.rateLimitConfig ?? {
-      capacity: 10,
-      refillRate: 3,
+      capacity: 20,
+      refillRate: 8,
     };
     this.rateLimiter = new TokenBucket(
       rateLimitConfig.capacity,
