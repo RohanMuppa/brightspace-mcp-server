@@ -12,6 +12,7 @@ import {
 import { toolResponse, sanitizeError } from "./tool-helpers.js";
 import { log } from "../utils/logger.js";
 import { applyCourseFilter } from "../utils/course-filter.js";
+import { matchesModifiedSince } from "../utils/modified-since.js";
 import type { AppConfig } from "../types/index.js";
 
 interface NewsItem {
@@ -110,6 +111,7 @@ export function mapNewsItem(item: NewsItem) {
     startDate: item.StartDate,
     date: effectiveDate(item),
     isPinned: item.IsPinned,
+    lastModified: item.LastModifiedDate ?? null,
   };
 }
 
@@ -134,7 +136,8 @@ export function registerGetAnnouncements(
         log("DEBUG", "get_announcements tool called", { args });
 
         // Parse and validate input
-        const { courseId, count } = GetAnnouncementsSchema.parse(args);
+        const { courseId, count, modifiedSince } = GetAnnouncementsSchema.parse(args);
+        const cutoff = modifiedSince ? new Date(modifiedSince) : null;
 
         // Single course case
         if (courseId) {
@@ -144,17 +147,26 @@ export function registerGetAnnouncements(
           });
 
           // Drop drafts, then map to clean objects
-          const announcements = newsItems
-            .filter(isPublishedNewsItem)
-            .map(mapNewsItem)
-            .sort(newestFirst)
-            .slice(0, count);
+          const published = newsItems.filter(isPublishedNewsItem).map(mapNewsItem);
+          const matched = cutoff
+            ? published.filter((a) => matchesModifiedSince(a.lastModified, cutoff))
+            : published;
+          const announcements = matched.sort(newestFirst).slice(0, count);
 
           log(
             "INFO",
             `get_announcements: Retrieved ${announcements.length} announcements for course ${courseId}`
           );
-          return toolResponse(announcements);
+          return toolResponse(
+            modifiedSince
+              ? {
+                  announcements,
+                  modifiedSince,
+                  returned: announcements.length,
+                  filteredOut: published.length - matched.length,
+                }
+              : announcements
+          );
         }
 
         // All courses case
@@ -217,8 +229,12 @@ export function registerGetAnnouncements(
           )
           .flatMap((r) => r.value);
 
+        const allMatched = cutoff
+          ? allAnnouncements.filter((a) => matchesModifiedSince(a.lastModified, cutoff))
+          : allAnnouncements;
+
         // Sort by the scheduled date and slice to count
-        const announcements = allAnnouncements
+        const announcements = allMatched
           .sort(newestFirst)
           .slice(0, count);
 
@@ -226,7 +242,16 @@ export function registerGetAnnouncements(
           "INFO",
           `get_announcements: Retrieved ${announcements.length} announcements (out of ${allAnnouncements.length} total across ${enrollmentResponse.Items.length} courses)`
         );
-        return toolResponse(announcements);
+        return toolResponse(
+          modifiedSince
+            ? {
+                announcements,
+                modifiedSince,
+                returned: announcements.length,
+                filteredOut: allAnnouncements.length - allMatched.length,
+              }
+            : announcements
+        );
       } catch (error) {
         return sanitizeError(error);
       }

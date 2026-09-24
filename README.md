@@ -112,8 +112,8 @@ npx -y brightspace-mcp-server@latest auth
 | Quizzes | "Which quizzes close this week?" · "Is Quiz 3 timed, and does it have a grace period?" |
 | Assignment files | "What does the lab 4 spec actually ask for?" · "Summarize the rubric attached to the project" |
 | Exams | "Is there a midterm in the gradebook that isn't on my assignments list?" |
-| Announcements | "Did any professor post something important today?" · "What did my CS prof announce this week?" |
-| Course content | "Find the midterm review slides" · "Download every PDF from Module 5" |
+| Announcements | "Did any professor post something important today?" · "What did my CS prof announce this week?" · "Any announcements since last Monday?" |
+| Course content | "Find the midterm review slides" · "Download every PDF from Module 5" · "What's new in this course since I last checked?" |
 | Roster | "Who are the TAs for ECE 264?" · "Get me my instructor's email" |
 | Discussions | "What are people saying in the final project thread?" · "Summarize the latest discussion posts" |
 | Planning | "Build me a study schedule based on my upcoming due dates" · "Which class needs the most attention right now?" — pulls from assignments, quizzes, and graded discussion topics (any topic with a due date) |
