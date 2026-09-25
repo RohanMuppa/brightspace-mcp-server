@@ -29,7 +29,7 @@ export function registerDownloadFile(
     {
       title: "Download File",
       description:
-        "Download a file from course content or assignment submissions to a local directory. Use this when the user wants to download, save, or get a file from Brightspace course content or dropbox submissions. IMPORTANT: You MUST ask the user where they want to save the file before calling this tool. Never guess or assume a download directory. After identifying the file to download, suggest a clean readable filename to the user (e.g., 'Lecture 7 - Memory Management.pdf' instead of 'L07_CS251_2026SP_v2.pdf') and ask if they'd like to rename it. Pass their preferred name as customFilename, or omit it to keep the original.",
+        "Download a file from course content, assignment submissions, or an announcement's attachments to a local directory. Use this when the user wants to download, save, or get a file from Brightspace course content, dropbox submissions, or an announcement (newsId + fileId, from get_announcements). IMPORTANT: You MUST ask the user where they want to save the file before calling this tool. Never guess or assume a download directory. After identifying the file to download, suggest a clean readable filename to the user (e.g., 'Lecture 7 - Memory Management.pdf' instead of 'L07_CS251_2026SP_v2.pdf') and ask if they'd like to rename it. Pass their preferred name as customFilename, or omit it to keep the original.",
       inputSchema: DownloadFileSchema,
     },
     async (args: any) => {
@@ -37,7 +37,7 @@ export function registerDownloadFile(
         log("DEBUG", "download_file tool called", { args });
 
         // Parse and validate input
-        const { courseId, topicId, folderId, fileId, downloadPath, customFilename } =
+        const { courseId, topicId, folderId, newsId, fileId, downloadPath, customFilename } =
           DownloadFileSchema.parse(args);
 
         // Validate courseId
@@ -90,9 +90,21 @@ export function registerDownloadFile(
             downloadPath,
             customFilename
           );
+        } else if (newsId !== undefined && fileId !== undefined) {
+          // Announcement attachment download
+          validateContentId(newsId);
+          validateContentId(fileId);
+          return await downloadNewsAttachment(
+            apiClient,
+            courseId,
+            newsId,
+            fileId,
+            downloadPath,
+            customFilename
+          );
         } else {
           return errorResponse(
-            "Either topicId (for content files) or both folderId and fileId (for submission files) must be provided"
+            "Either topicId (for content files), both folderId and fileId (for submission files), or both newsId and fileId (for announcement attachments) must be provided"
           );
         }
       } catch (error) {
@@ -314,6 +326,104 @@ async function downloadSubmissionFile(
   log(
     "INFO",
     `Submission file downloaded successfully: ${result.path} (${result.size} bytes, ${result.mime})`
+  );
+
+  return toolResponse({
+    success: true,
+    filePath: result.path,
+    fileSize: result.size,
+    mimeType: result.mime,
+    originalFilename,
+    message: `File downloaded successfully to ${result.path}`,
+  });
+}
+
+/**
+ * Download an announcement attachment using newsId + fileId
+ */
+async function downloadNewsAttachment(
+  apiClient: D2LApiClient,
+  courseId: number,
+  newsId: number,
+  fileId: number,
+  downloadPath: string,
+  customFilename?: string
+): Promise<any> {
+  log(
+    "INFO",
+    `Downloading announcement attachment: courseId=${courseId}, newsId=${newsId}, fileId=${fileId}`
+  );
+
+  // The news item lists its attachments, so an unknown fileId can name the
+  // real ones and an oversize file is refused before a byte is fetched.
+  interface NewsItem {
+    Attachments?: Array<{
+      FileId: number;
+      FileName: string;
+      Size: number;
+    }> | null;
+  }
+
+  const newsItem = await apiClient.get<NewsItem>(
+    apiClient.le(courseId, `/news/${newsId}`)
+  );
+  const attachments = newsItem?.Attachments ?? [];
+  const file = attachments.find((f) => f.FileId === fileId);
+
+  if (!file) {
+    return errorResponse(
+      `File ID ${fileId} not found on this announcement. Available files: ${attachments.map((f) => `${f.FileName} (ID: ${f.FileId})`).join(", ")}`
+    );
+  }
+
+  if (file.Size > MAX_FILE_SIZE) {
+    return errorResponse(
+      `File too large (${Math.round(file.Size / 1024 / 1024)}MB). Maximum allowed: ${MAX_FILE_SIZE / 1024 / 1024}MB`
+    );
+  }
+
+  // GET /d2l/api/le/(version)/(orgUnitId)/news/(newsItemId)/attachments/(fileId)
+  const response = await apiClient.getRaw(
+    apiClient.le(courseId, `/news/${newsId}/attachments/${fileId}`)
+  );
+
+  // Check Content-Length BEFORE downloading body (prevent memory exhaustion)
+  const contentLength = parseInt(
+    response.headers.get("Content-Length") ?? "0",
+    10
+  );
+  if (contentLength > MAX_FILE_SIZE) {
+    return errorResponse(
+      `File too large (${Math.round(contentLength / 1024 / 1024)}MB). Maximum allowed: ${MAX_FILE_SIZE / 1024 / 1024}MB`
+    );
+  }
+
+  const disposition = response.headers.get("Content-Disposition") ?? "";
+  const filename = parseContentDispositionFilename(disposition) ?? file.FileName;
+
+  // Download body as buffer
+  const buffer = Buffer.from(await response.arrayBuffer());
+
+  // Double-check actual size
+  if (buffer.length > MAX_FILE_SIZE) {
+    return errorResponse(
+      `File too large (${Math.round(buffer.length / 1024 / 1024)}MB). Maximum allowed: ${MAX_FILE_SIZE / 1024 / 1024}MB`
+    );
+  }
+
+  const originalFilename = filename;
+  const effectiveFilename = customFilename || filename;
+
+  // Use secureDownload for path traversal prevention, file type validation, and conflict resolution
+  const result = await secureDownload({
+    targetDir: downloadPath,
+    filename: effectiveFilename,
+    data: buffer,
+  });
+
+  log(
+    "INFO",
+    `Announcement attachment downloaded successfully: ${result.path} (${result.size} bytes, ${result.mime})`
   );
 
   return toolResponse({

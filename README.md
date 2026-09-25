@@ -114,7 +114,7 @@ Run it from your home folder. On macOS, a terminal that lacks Files and Folders 
 | Quizzes | "Which quizzes close this week?" · "Is Quiz 3 timed, and does it have a grace period?" |
 | Assignment files | "What does the lab 4 spec actually ask for?" · "Summarize the rubric attached to the project" |
 | Exams | "Is there a midterm in the gradebook that isn't on my assignments list?" |
-| Announcements | "Did any professor post something important today?" · "What did my CS prof announce this week?" · "Any announcements since last Monday?" |
+| Announcements | "Did any professor post something important today?" · "What did my CS prof announce this week?" · "Any announcements since last Monday?" · "Read the file attached to today's announcement" · "Save the rubric my prof attached to that announcement" |
 | Course content | "Find the midterm review slides" · "Download every PDF from Module 5" · "What's new in this course since I last checked?" |
 | Roster | "Who are the TAs for ECE 264?" · "Get me my instructor's email" |
 | Discussions | "What are people saying in the final project thread?" · "Summarize the latest discussion posts" |

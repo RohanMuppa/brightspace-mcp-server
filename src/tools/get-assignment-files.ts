@@ -8,10 +8,15 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { D2LApiClient, DEFAULT_CACHE_TTLS } from "../api/index.js";
 import { GetAssignmentFilesSchema } from "./schemas.js";
 import { toolResponse, sanitizeError } from "./tool-helpers.js";
-import { extractPdfText } from "../utils/pdf-extractor.js";
-import { officeDocumentText } from "../utils/zip-extract.js";
+import {
+  describeAttachment,
+  readAttachment,
+  type D2LFileAttachment,
+} from "./attachment-reader.js";
 import { assignmentUrl } from "../utils/deep-links.js";
 import { log } from "../utils/logger.js";
+
+export { fileKind } from "./attachment-reader.js";
 
 /**
  * The files an instructor attached to an assignment: the spec PDF, the starter
@@ -24,58 +29,17 @@ import { log } from "../utils/logger.js";
  * asking what they have to do wants the former.
  */
 
-interface DropboxAttachment {
-  FileId: number;
-  FileName: string;
-  Size: number;
-}
-
 interface DropboxFolder {
   Id: number;
   Name: string;
   DueDate: string | null;
   IsHidden: boolean;
-  Attachments: DropboxAttachment[] | null;
+  Attachments: D2LFileAttachment[] | null;
 }
 
 /** D2L list endpoints return either a paged { Objects: [...] } or a flat array. */
 function unwrapList<T>(raw: unknown): T[] {
   return Array.isArray(raw) ? (raw as T[]) : ((raw as any)?.Objects ?? []);
-}
-
-type FileKind = "pdf" | "docx" | "xlsx" | "pptx" | "image" | "text" | "other";
-
-const KIND_BY_EXTENSION: Record<string, FileKind> = {
-  pdf: "pdf",
-  docx: "docx",
-  doc: "other",
-  xlsx: "xlsx",
-  xls: "other",
-  pptx: "pptx",
-  ppt: "other",
-  png: "image",
-  jpg: "image",
-  jpeg: "image",
-  gif: "image",
-  webp: "image",
-  txt: "text",
-  md: "text",
-  csv: "text",
-  json: "text",
-};
-
-export function fileKind(fileName: string): FileKind {
-  const extension = fileName.split(".").pop()?.toLowerCase() ?? "";
-  return KIND_BY_EXTENSION[extension] ?? "other";
-}
-
-function describeAttachment(attachment: DropboxAttachment) {
-  return {
-    fileId: attachment.FileId,
-    fileName: attachment.FileName,
-    size: attachment.Size,
-    kind: fileKind(attachment.FileName),
-  };
 }
 
 /** Every visible folder in the course that has at least one attachment. */
@@ -90,62 +54,6 @@ async function listFolders(
   return unwrapList<DropboxFolder>(raw)
     .filter((folder) => folder.IsHidden !== true)
     .filter((folder) => (folderId === undefined ? true : folder.Id === folderId));
-}
-
-/**
- * Read one attachment. The text is best effort: a scanned PDF or an image
- * yields nothing, and that is reported rather than treated as a failure.
- */
-async function readAttachment(
-  apiClient: D2LApiClient,
-  courseId: number,
-  folderId: number,
-  attachment: DropboxAttachment,
-  extract: boolean,
-  maxChars: number
-): Promise<Record<string, unknown>> {
-  const base = describeAttachment(attachment);
-  if (!extract) return { ...base, text: null, note: "Text extraction was not requested." };
-
-  const response = await apiClient.getRaw(
-    apiClient.le(courseId, `/dropbox/folders/${folderId}/attachments/${attachment.FileId}`)
-  );
-  const buffer = Buffer.from(await response.arrayBuffer());
-
-  let text: string | null = null;
-  let note: string | undefined;
-
-  switch (base.kind) {
-    case "pdf": {
-      const extracted = await extractPdfText(buffer);
-      text = extracted?.text?.trim() || null;
-      if (!text) note = "No text layer in this PDF. It may be a scan.";
-      break;
-    }
-    case "docx":
-    case "xlsx":
-    case "pptx": {
-      text = officeDocumentText(buffer);
-      if (!text) note = "No readable text found in this Office document.";
-      break;
-    }
-    case "text": {
-      text = buffer.toString("utf-8").trim() || null;
-      break;
-    }
-    default: {
-      note = `Cannot extract text from a ${base.kind} file. Use download_file to save it.`;
-    }
-  }
-
-  const truncated = text !== null && text.length > maxChars;
-  return {
-    ...base,
-    bytes: buffer.length,
-    text: truncated ? text!.slice(0, maxChars) : text,
-    truncated,
-    ...(note ? { note } : {}),
-  };
 }
 
 export function registerGetAssignmentFiles(
@@ -198,8 +106,7 @@ export function registerGetAssignmentFiles(
           }
           const file = await readAttachment(
             apiClient,
-            courseId,
-            folderId,
+            apiClient.le(courseId, `/dropbox/folders/${folderId}/attachments/${fileId}`),
             attachment,
             extractText,
             maxChars

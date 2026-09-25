@@ -29,23 +29,28 @@ interface Setup {
   disposition?: string;
   /** What GET .../mysubmissions/ answers with. */
   submissions?: unknown;
+  /** What GET .../news/(newsId) answers with. */
+  newsItem?: unknown;
+  /** Content-Length header on the raw download. */
+  contentLength?: number;
   body?: Buffer;
 }
 
-function setup({ disposition, submissions, body = pdfBuffer() }: Setup) {
+function setup({ disposition, submissions, newsItem, contentLength, body = pdfBuffer() }: Setup) {
   const rawRequested: string[] = [];
 
   const apiClient = {
     le: (orgUnitId: number, p: string) => `/d2l/api/le/1.0/${orgUnitId}${p}`,
-    get: vi.fn(async () => submissions),
+    get: vi.fn(async (p: string) => (p.includes("/news/") ? newsItem : submissions)),
     getRaw: vi.fn(async (p: string) => {
       rawRequested.push(p);
       return {
         ok: true,
         status: 200,
-        headers: new Headers(
-          disposition ? { "Content-Disposition": disposition } : {}
-        ),
+        headers: new Headers({
+          ...(disposition ? { "Content-Disposition": disposition } : {}),
+          ...(contentLength !== undefined ? { "Content-Length": String(contentLength) } : {}),
+        }),
         arrayBuffer: async () => toArrayBuffer(body),
       };
     }),
@@ -260,5 +265,85 @@ describe("download_file: dropbox submissions", () => {
 
     expect(textOf(result)).not.toContain("An unexpected error occurred");
     expect(parse(result).originalFilename).toBe("final.pdf");
+  });
+});
+
+describe("download_file: announcement attachments", () => {
+  const newsItem = (attachments: unknown[]) => ({ Id: 55, Title: "Field notes", Attachments: attachments });
+  const file = (fileId: number, fileName: string, size = 1024) => ({
+    FileId: fileId,
+    FileName: fileName,
+    Size: size,
+  });
+
+  it("saves the attachment under the download directory from the news attachment endpoint", async () => {
+    const { call, rawRequested } = setup({
+      newsItem: newsItem([file(77, "prompts.pdf")]),
+      disposition: 'attachment; filename="prompts.pdf"',
+    });
+
+    const payload = parse(
+      await call({ courseId: COURSE, newsId: 55, fileId: 77, downloadPath: targetDir })
+    );
+
+    expect(payload.filePath).toBe(path.join(targetDir, "prompts.pdf"));
+    expect(rawRequested).toEqual(["/d2l/api/le/1.0/101/news/55/attachments/77"]);
+  });
+
+  it("does not write above the download directory for a traversing Content-Disposition", async () => {
+    const { call } = setup({
+      newsItem: newsItem([file(77, "prompts.pdf")]),
+      disposition: 'attachment; filename="../../pwned.pdf"',
+    });
+
+    await call({ courseId: COURSE, newsId: 55, fileId: 77, downloadPath: targetDir });
+
+    const written = await walk(root);
+    expect(written.filter((f) => !f.startsWith("a/b/"))).toEqual([]);
+  });
+
+  it("refuses an attachment whose listed size is over the limit without downloading it", async () => {
+    const { call, rawRequested } = setup({
+      newsItem: newsItem([file(77, "huge.pdf", 200 * 1024 * 1024)]),
+    });
+
+    const result = await call({ courseId: COURSE, newsId: 55, fileId: 77, downloadPath: targetDir });
+
+    expect(textOf(result)).toContain("File too large");
+    expect(rawRequested).toEqual([]);
+  });
+
+  it("refuses a download whose Content-Length is over the limit", async () => {
+    const { call } = setup({
+      newsItem: newsItem([file(77, "prompts.pdf")]),
+      contentLength: 200 * 1024 * 1024,
+    });
+
+    const result = await call({ courseId: COURSE, newsId: 55, fileId: 77, downloadPath: targetDir });
+
+    expect(textOf(result)).toContain("File too large");
+    expect(await walk(root)).toEqual([]);
+  });
+
+  it("names the announcement's files when the fileId is not one of them", async () => {
+    const { call } = setup({
+      newsItem: newsItem([file(77, "prompts.pdf"), file(78, "rubric.docx")]),
+    });
+
+    const result = await call({ courseId: COURSE, newsId: 55, fileId: 99, downloadPath: targetDir });
+
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain(
+      "File ID 99 not found on this announcement. Available files: prompts.pdf (ID: 77), rubric.docx (ID: 78)"
+    );
+  });
+
+  it("asks for fileId when newsId is given alone", async () => {
+    const { call } = setup({ newsItem: newsItem([file(77, "prompts.pdf")]) });
+
+    const result = await call({ courseId: COURSE, newsId: 55, downloadPath: targetDir });
+
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain("newsId and fileId");
   });
 });
