@@ -16,7 +16,7 @@ import { applyCourseFilter } from "../utils/course-filter.js";
 import { matchesModifiedSince } from "../utils/modified-since.js";
 import type { AppConfig } from "../types/index.js";
 
-interface NewsItem {
+export interface NewsItem {
   Id: number;
   Title: string;
   Body: { Text: string; Html: string } | null;
@@ -29,7 +29,7 @@ interface NewsItem {
   IsPublished?: boolean;
   IsPinned: boolean;
   IsGlobal: boolean;
-  Attachments: any[];
+  Attachments?: Array<{ FileId: number; FileName: string; Size: number }> | null;
 }
 
 interface EnrollmentItem {
@@ -95,6 +95,11 @@ export function newestFirst(
  * Map a raw D2L news item to a clean announcement object.
  */
 export function mapNewsItem(item: NewsItem) {
+  const attachments = (item.Attachments ?? []).map((file) => ({
+    fileId: file.FileId,
+    fileName: file.FileName,
+    size: file.Size,
+  }));
   return {
     id: item.Id,
     title: item.Title,
@@ -103,6 +108,7 @@ export function mapNewsItem(item: NewsItem) {
     date: effectiveDate(item),
     isPinned: item.IsPinned,
     lastModified: item.LastModifiedDate ?? null,
+    ...(attachments.length > 0 ? { attachments } : {}),
   };
 }
 
@@ -119,7 +125,7 @@ export function registerGetAnnouncements(
     {
       title: "Get Announcements",
       description:
-        "Fetch recent announcements from your courses. Can filter to a specific course or get announcements across all courses. Use this when the user asks about announcements, news, updates from instructors, recent posts, or what professors said.",
+        "Fetch recent announcements from your courses. Can filter to a specific course or get announcements across all courses. Use this when the user asks about announcements, news, updates from instructors, recent posts, or what professors said. Attachments are listed per announcement; fetch them with download_file (newsId + fileId) or read them with get_announcement_files.",
       inputSchema: GetAnnouncementsSchema,
     },
     async (args: any) => {

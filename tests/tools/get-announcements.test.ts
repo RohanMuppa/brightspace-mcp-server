@@ -431,3 +431,60 @@ describe("get_announcements", () => {
     });
   });
 });
+
+describe("get_announcements attachments", () => {
+  it("lists an announcement's attached files by fileId, fileName and size", async () => {
+    const { call } = setup(
+      oneCourse([
+        news({
+          Id: 1,
+          StartDate: "2026-09-18T00:00:00.000Z",
+          Attachments: [{ FileId: 77, FileName: "Field notes prompts.docx", Size: 20480 }],
+        }),
+      ])
+    );
+
+    const items = parse(await call({ courseId: COURSE_A.Id }));
+    expect(items[0].attachments).toEqual([
+      { fileId: 77, fileName: "Field notes prompts.docx", size: 20480 },
+    ]);
+  });
+
+  it("omits the attachments key on an announcement with no files", async () => {
+    const { call } = setup(
+      oneCourse([news({ Id: 1, StartDate: "2026-09-18T00:00:00.000Z", Attachments: [] })])
+    );
+
+    const items = parse(await call({ courseId: COURSE_A.Id }));
+    expect(items[0]).not.toHaveProperty("attachments");
+  });
+
+  it("omits the attachments key when the tenant sends no Attachments field", async () => {
+    const { call } = setup(
+      oneCourse([news({ Id: 1, StartDate: "2026-09-18T00:00:00.000Z", Attachments: undefined })])
+    );
+
+    const items = parse(await call({ courseId: COURSE_A.Id }));
+    expect(items[0]).not.toHaveProperty("attachments");
+  });
+
+  it("carries the courseId beside attachments on the all-courses path", async () => {
+    const { call } = setup(
+      manyCourses({
+        [COURSE_A.Id]: [
+          news({
+            Id: 1,
+            StartDate: "2026-09-18T00:00:00.000Z",
+            Attachments: [{ FileId: 77, FileName: "rubric.pdf", Size: 100 }],
+          }),
+        ],
+      })
+    );
+
+    const items = parse(await call({}));
+    expect(items[0]).toMatchObject({
+      courseId: COURSE_A.Id,
+      attachments: [{ fileId: 77, fileName: "rubric.pdf", size: 100 }],
+    });
+  });
+});

@@ -71,7 +71,9 @@ export const DownloadFileSchema = z.object({
   folderId: z.coerce.number().int().positive().optional()
     .describe("Dropbox folder ID (for submission/feedback file downloads)."),
   fileId: z.coerce.number().int().positive().optional()
-    .describe("Specific file ID within a dropbox submission."),
+    .describe("Specific file ID within a dropbox submission, or an announcement attachment's file ID (with newsId)."),
+  newsId: z.coerce.number().int().positive().optional()
+    .describe("Announcement (news item) ID whose attachment to download. Requires fileId."),
   downloadPath: z.string().min(1)
     .describe("Absolute path to the directory where the file should be saved."),
   customFilename: z.string().max(255).optional()
@@ -101,6 +103,19 @@ export const GetAssignmentFilesSchema = z.object({
     .describe("Assignment (dropbox folder) ID. Omit to list every assignment in the course that has attachments."),
   fileId: z.coerce.number().int().positive().optional()
     .describe("Attachment file ID to read. Requires folderId. Omit to list the files without reading them."),
+  extractText: z.boolean().default(true)
+    .describe("Extract readable text from the file. Works for PDF, DOCX, XLSX, PPTX, and plain text."),
+  maxChars: z.coerce.number().int().positive().max(100000).default(12000)
+    .describe("Maximum characters of extracted text to return. The response reports whether it was truncated."),
+});
+
+export const GetAnnouncementFilesSchema = z.object({
+  courseId: z.coerce.number().int().positive()
+    .describe("Course ID whose announcement attachments to look at."),
+  newsId: z.coerce.number().int().positive().optional()
+    .describe("Announcement (news item) ID. Omit to list every announcement in the course that has attachments."),
+  fileId: z.coerce.number().int().positive().optional()
+    .describe("Attachment file ID to read. Requires newsId. Omit to list the files without reading them."),
   extractText: z.boolean().default(true)
     .describe("Extract readable text from the file. Works for PDF, DOCX, XLSX, PPTX, and plain text."),
   maxChars: z.coerce.number().int().positive().max(100000).default(12000)
