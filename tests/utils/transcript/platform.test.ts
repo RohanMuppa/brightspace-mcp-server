@@ -32,6 +32,16 @@ describe("detectVideoPlatform", () => {
     expect(detectVideoPlatform("https://example.edu/course/page.html")).toBe("unknown");
     expect(detectVideoPlatform("not a url")).toBe("unknown");
   });
+
+  it("does not misclassify lookalike hostnames as the real platform", () => {
+    expect(detectVideoPlatform("https://fakeyoutube.com/watch?v=dQw4w9WgXcQ")).toBe("unknown");
+    expect(detectVideoPlatform("https://evil-youtube.com/watch?v=dQw4w9WgXcQ")).toBe("unknown");
+    expect(detectVideoPlatform("https://notreallykaltura.com/embed")).toBe("unknown");
+    expect(detectVideoPlatform("https://fakepanopto.example.com/Panopto/Pages/Viewer.aspx?id=1")).toBe("unknown");
+    expect(detectVideoPlatform("https://notyuja.com/V/Video?v=1")).toBe("unknown");
+    expect(detectVideoPlatform("https://fakeecho360.com/media/1/public")).toBe("unknown");
+    expect(detectVideoPlatform("https://vimeofake.com/12345")).toBe("unknown");
+  });
 });
 
 describe("extractKalturaIds", () => {
@@ -78,5 +88,10 @@ describe("extractYouTubeVideoId", () => {
   it("returns null for a non-YouTube or unparseable URL", () => {
     expect(extractYouTubeVideoId("https://vimeo.com/12345")).toBeNull();
     expect(extractYouTubeVideoId("not a url")).toBeNull();
+  });
+
+  it("returns null for a lookalike hostname", () => {
+    expect(extractYouTubeVideoId("https://fakeyoutube.com/watch?v=dQw4w9WgXcQ")).toBeNull();
+    expect(extractYouTubeVideoId("https://evil-youtube.com/watch?v=dQw4w9WgXcQ")).toBeNull();
   });
 });
