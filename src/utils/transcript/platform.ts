@@ -29,6 +29,21 @@ function safeHostname(url: string): string | null {
   }
 }
 
+/** True if `host` is exactly `domain` or a subdomain of it, e.g. "www.youtube.com" matches "youtube.com". */
+function isDomainOrSubdomain(host: string, domain: string): boolean {
+  return host === domain || host.endsWith(`.${domain}`);
+}
+
+/**
+ * True if `label` appears as one of `host`'s dot-separated segments, e.g.
+ * "mediaspace.kaltura.com" has the label "kaltura". Used instead of a bare
+ * substring test so a lookalike host like "fakekaltura.com" or
+ * "notyuja.example.com" doesn't get misclassified as the real platform.
+ */
+function hasHostLabel(host: string, label: string): boolean {
+  return host.split(".").includes(label);
+}
+
 /**
  * Kaltura's KAF "browseAndEmbed" front end (what a school's own branded
  * domain, e.g. BoilerCast, typically uses) puts params as path segments
@@ -47,12 +62,12 @@ export function detectVideoPlatform(url: string): VideoPlatform {
   // mediaspace.kaltura.com) or from a school's own KAF front end (e.g.
   // BoilerCast at Purdue), which is why entry_id/wid are also checked as
   // query params or path segments before falling back to "unknown".
-  if (/kaltura/.test(host)) return "kaltura";
-  if (/youtube\.com$|youtu\.be$/.test(host)) return "youtube";
-  if (/panopto/.test(host)) return "panopto";
-  if (/yuja/.test(host)) return "yuja";
-  if (/echo360/.test(host)) return "echo360";
-  if (/vimeo/.test(host)) return "vimeo";
+  if (hasHostLabel(host, "kaltura")) return "kaltura";
+  if (isDomainOrSubdomain(host, "youtube.com") || isDomainOrSubdomain(host, "youtu.be")) return "youtube";
+  if (hasHostLabel(host, "panopto")) return "panopto";
+  if (hasHostLabel(host, "yuja")) return "yuja";
+  if (hasHostLabel(host, "echo360")) return "echo360";
+  if (hasHostLabel(host, "vimeo")) return "vimeo";
   if (extractKalturaIds(url)) return "kaltura";
   return "unknown";
 }
@@ -104,10 +119,10 @@ export function extractYouTubeVideoId(url: string): string | null {
   }
   const host = parsed.hostname.toLowerCase();
 
-  if (host === "youtu.be" || host.endsWith(".youtu.be")) {
+  if (isDomainOrSubdomain(host, "youtu.be")) {
     return parsed.pathname.slice(1).split("/")[0] || null;
   }
-  if (host.endsWith("youtube.com") || host.endsWith("youtube-nocookie.com")) {
+  if (isDomainOrSubdomain(host, "youtube.com") || isDomainOrSubdomain(host, "youtube-nocookie.com")) {
     const v = parsed.searchParams.get("v");
     if (v) return v;
     const embedMatch = parsed.pathname.match(/\/embed\/([\w-]+)/);
