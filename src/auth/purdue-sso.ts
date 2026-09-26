@@ -12,7 +12,9 @@ import type { RequestMfaCode } from "./sso-flow.js";
 import { DuoMfaHandler } from "./duo-mfa.js";
 import { AUTH_COMMAND } from "../utils/commands.js";
 
-const EMAIL_SELECTORS = ["input[type=email]", "input[name=loginfmt]"];
+// Entra names its username field type=email/loginfmt; Shibboleth portals (USC's
+// login.usc.edu among them) use the protocol's j_username.
+const EMAIL_SELECTORS = ["input[type=email]", "input[name=loginfmt]", "input[name=j_username]", "input#signinid"];
 const PASSWORD_SELECTORS = ["input[type=password]", "input[name=passwd]"];
 const SUBMIT_SELECTORS = ["#idSIButton9", "input[type=submit]", "button[type=submit]"];
 const FIELD_TIMEOUT_MS = 30_000;
@@ -159,17 +161,30 @@ export class PurdueSSOFlow {
     if (!hintAccepted) {
       const email = signInName(this.config.username, this.config.baseUrl);
       if (!await this.fillWhenReady(page, EMAIL_SELECTORS, email)) {
-        throw new UnsupportedAuthenticationError("The Microsoft email field did not appear. Automatic sign-in cannot continue.");
+        throw new UnsupportedAuthenticationError("The identity provider's username field did not appear. Automatic sign-in cannot continue.");
+      }
+      // A single-page identity provider (Shibboleth portals such as USC's
+      // login.usc.edu) renders the password field next to the username. Clicking
+      // submit between the two would post an empty password and spend the
+      // attempt, so fill both and click once.
+      if (await this.anyVisible(page, PASSWORD_SELECTORS)) {
+        if (!await this.fillWhenReady(page, PASSWORD_SELECTORS, this.config.password)) {
+          throw new UnsupportedAuthenticationError("The identity provider's password field did not appear. Automatic sign-in cannot continue.");
+        }
+        if (!await this.clickWhenReady(page, SUBMIT_SELECTORS)) {
+          throw new UnsupportedAuthenticationError("The identity provider's submit button did not appear. Automatic sign-in cannot continue.");
+        }
+        return;
       }
       if (!await this.clickWhenReady(page, SUBMIT_SELECTORS)) {
-        throw new UnsupportedAuthenticationError("The Microsoft email submit button did not appear. Automatic sign-in cannot continue.");
+        throw new UnsupportedAuthenticationError("The identity provider's username submit button did not appear. Automatic sign-in cannot continue.");
       }
     }
     if (!await this.fillWhenReady(page, PASSWORD_SELECTORS, this.config.password)) {
-      throw new UnsupportedAuthenticationError("The Microsoft password field did not appear. Automatic sign-in cannot continue.");
+      throw new UnsupportedAuthenticationError("The identity provider's password field did not appear. Automatic sign-in cannot continue.");
     }
     if (!await this.clickWhenReady(page, SUBMIT_SELECTORS)) {
-      throw new UnsupportedAuthenticationError("The Microsoft password submit button did not appear. Automatic sign-in cannot continue.");
+      throw new UnsupportedAuthenticationError("The identity provider's password submit button did not appear. Automatic sign-in cannot continue.");
     }
   }
 
@@ -252,6 +267,9 @@ export class PurdueSSOFlow {
           return;
         }
         await this.clickProvenKmsi(page);
+        // The federated-domain trust prompt arrives after the IdP succeeds, so
+        // it has to be caught by this loop rather than by enterCredentials.
+        await this.clickTrustPrompt(page);
         await page.waitForTimeout(NUMBER_MATCH_POLL_MS);
       }
     } catch (error) {
@@ -327,6 +345,23 @@ export class PurdueSSOFlow {
       await yes.click().catch(() => {});
       log("DEBUG", 'Clicked Yes on "Stay signed in?"');
     }
+  }
+
+  /**
+   * Microsoft asks users of a federated domain to confirm they trust it ("Do
+   * you trust usc.edu?") before issuing the SAML assertion to Brightspace.
+   * Nothing proceeds until Continue is clicked, and a headless run has nobody to
+   * click it, so the flow parks on this page until the MFA deadline and the
+   * session is never established. Guarded on the heading so an unrelated
+   * Continue button elsewhere on Microsoft's pages is never hit.
+   */
+  private async clickTrustPrompt(page: Page): Promise<void> {
+    if (new URL(page.url()).hostname !== "login.microsoftonline.com") return;
+    if (!await page.getByText(/Do you trust/i).first().isVisible().catch(() => false)) return;
+    const cont = page.getByRole("button", { name: /continue/i }).first();
+    if (!await cont.isVisible().catch(() => false)) return;
+    await cont.click().catch(() => {});
+    log("INFO", "Clicked Continue on Microsoft's domain-trust prompt.");
   }
 
   /** The digits on screen, or null when Entra is not showing any. */
