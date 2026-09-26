@@ -36,6 +36,9 @@ const PROMPT_SCOPE_SELECTORS = [
   "body",
 ];
 
+/** Duo's own passcode field, which its Universal Prompt labels inconsistently. */
+const PASSCODE_INPUT_SELECTORS = ["#passcode-input", 'input[name="passcode"]'];
+
 interface DuoMfaOptions {
   headless?: boolean;
   requestMfaCode?: RequestMfaCode;
@@ -65,6 +68,11 @@ export class DuoMfaHandler {
   private approvalAnnounced = false;
   private verificationCodeAnnounced: string | null = null;
   private passcodeSubmitted = false;
+  /** True once Duo's remembered-device question has been answered this login. */
+  private deviceQuestionAnswered = false;
+  /** Step guards for walking Duo's "Other options" menu to the passcode field. */
+  private otherOptionsClicked = false;
+  private passcodeChoiceClicked = false;
   /** True once onMfaChallenge has been told about this login, code or not. */
   private announcedToCaller = false;
 
@@ -74,9 +82,80 @@ export class DuoMfaHandler {
     return isDuoPrompt(page);
   }
 
+  /**
+   * Some tenants gate the push behind a remembered-device question ("Is this
+   * your device?") that nothing proceeds past until it is answered. A headless
+   * run has nobody to click it, so the whole login stalls until the five-minute
+   * MFA deadline expires. Answering yes also makes Duo remember this device,
+   * which is what an unattended client wants.
+   */
+  private async answerDeviceQuestion(page: Page): Promise<boolean> {
+    if (this.deviceQuestionAnswered) return false;
+    const candidates = [
+      page.getByRole("button", { name: /yes.*this is my device/i }).first(),
+      page.locator("button", { hasText: /yes.*this is my device/i }).first(),
+    ];
+    for (const candidate of candidates) {
+      if (!await candidate.isVisible().catch(() => false)) continue;
+      this.deviceQuestionAnswered = true;
+      log("INFO", "Answered Duo's remembered-device question with yes.");
+      await candidate.click().catch(() => {});
+      return true;
+    }
+    return false;
+  }
+
+  /** Duo's passcode field, whichever of its shapes is on screen. */
+  private async passcodeInput(page: Page): Promise<Locator | null> {
+    for (const selector of PASSCODE_INPUT_SELECTORS) {
+      const target = page.locator(selector).first();
+      if (await target.isVisible().catch(() => false)) return target;
+    }
+    const byRole = page.getByRole("textbox", { name: /passcode|verification code/i }).first();
+    return await byRole.isVisible().catch(() => false) ? byRole : null;
+  }
+
+  /**
+   * Duo opens on "Check for a Duo Push" and keeps the passcode field behind its
+   * "Other options" menu ("Select an option to log in" -> "Duo Mobile
+   * passcode"). Walking that path makes sign-in independent of push delivery
+   * and of the device Duo happens to pick. Each step is clicked at most once,
+   * so a re-render cannot bounce the page back and forth.
+   */
+  private async openPasscodeEntry(page: Page): Promise<void> {
+    if (await this.passcodeInput(page)) return;
+
+    if (!this.otherOptionsClicked) {
+      const other = page.getByRole("button", { name: /other options/i }).first();
+      if (await other.isVisible().catch(() => false)) {
+        this.otherOptionsClicked = true;
+        log("INFO", "Opening Duo's Other options menu for a passcode.");
+        await other.click().catch(() => {});
+        await page.waitForTimeout(1500);
+      }
+    }
+
+    if (this.passcodeChoiceClicked) return;
+    const choice = page.getByRole("button", { name: /duo mobile passcode/i }).first();
+    if (await choice.isVisible().catch(() => false)) {
+      this.passcodeChoiceClicked = true;
+      log("INFO", "Choosing Duo Mobile passcode entry.");
+      await choice.click().catch(() => {});
+      await page.waitForTimeout(1500);
+    }
+  }
+
   /** Returns true while the page is on a Duo challenge. */
   async handle(page: Page): Promise<boolean> {
     if (!this.isChallenge(page)) return false;
+
+    // Answer before announcing the push: on a gated tenant no push is sent
+    // until this is answered, so announcing first would be a lie.
+    await this.answerDeviceQuestion(page);
+
+    // Opt-in, because it replaces a push with a typed code: without it a tenant
+    // whose pushes work keeps the zero-touch path.
+    if (process.env.D2L_DUO_PASSCODE) await this.openPasscodeEntry(page);
 
     const verificationCode = await this.readVerificationCode(page);
 
@@ -141,8 +220,8 @@ export class DuoMfaHandler {
 
   private async submitPasscode(page: Page): Promise<void> {
     if (this.options.headless === false || this.passcodeSubmitted) return;
-    const input = page.getByRole("textbox", { name: /passcode|verification code/i }).first();
-    if (!await input.isVisible().catch(() => false)) return;
+    const input = await this.passcodeInput(page);
+    if (!input) return;
     if (!this.options.requestMfaCode) {
       throw new UnsupportedAuthenticationError(`Duo requires a passcode. Run \`${AUTH_COMMAND}\` in a terminal to enter it.`);
     }
