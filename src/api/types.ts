@@ -23,6 +23,7 @@ export interface CacheTTLs {
   assignments: number; // ms - 10 min (600_000)
   roster: number; // ms - 1 hour (3_600_000)
   profile: number; // ms - 1 hour (3_600_000)
+  calendar: number; // ms - 10 min (600_000)
 }
 
 // Default TTL values per user decision
@@ -34,6 +35,7 @@ export const DEFAULT_CACHE_TTLS: CacheTTLs = {
   assignments: 600_000, // 10 min
   roster: 3_600_000, // 1 hour
   profile: 3_600_000, // 1 hour
+  calendar: 600_000, // 10 min
 };
 
 // Token bucket rate limiter configuration
