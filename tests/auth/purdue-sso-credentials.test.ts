@@ -165,8 +165,8 @@ describe("PurdueSSOFlow credential choreography ported from Brightspace Bar", ()
   });
 
   it.each([
-    ["email", [], "email field"],
-    ["next", ["email"], "email submit button"],
+    ["email", [], "username field"],
+    ["next", ["email"], "username submit button"],
     ["password", ["email", "next"], "password field"],
     ["submit", ["email", "next", "password"], "password submit button"],
   ] as const)("stops with a typed unsupported error when %s is missing", async (missing, actions, message) => {

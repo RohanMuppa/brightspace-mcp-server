@@ -11,6 +11,8 @@ interface PollState {
   code?: boolean;
   challenge?: boolean;
   kmsi?: boolean;
+  /** Microsoft's federated-domain "Do you trust <domain>?" interstitial. */
+  trust?: boolean;
   url?: string;
   cookie?: boolean;
   d2l?: boolean;
@@ -31,6 +33,7 @@ function makeMfaPage(states: PollState[]) {
   const yes = vi.fn(async () => {});
   const fill = vi.fn(async () => {});
   const press = vi.fn(async () => {});
+  const continueClick = vi.fn(async () => {});
   const current = () => states[Math.min(poll, states.length - 1)] ?? {};
   const locatorTarget = (selector: string) => ({
     isVisible: async () => {
@@ -49,7 +52,23 @@ function makeMfaPage(states: PollState[]) {
   const page = {
     url: vi.fn(() => current().url ?? "https://login.microsoftonline.com/common/SAS/BeginAuth"),
     locator: vi.fn((selector: string) => ({ first: () => locatorTarget(selector) })),
-    getByText: vi.fn(() => ({ first: () => ({ isVisible: async () => Boolean(current().kmsi) }) })),
+    // Pattern-aware: the loop asks this for "Stay signed in?" and for the
+    // federated-domain trust heading, and each belongs to a different state.
+    getByText: vi.fn((pattern: RegExp) => ({ first: () => ({
+      isVisible: async () =>
+        /stay signed in/i.test(String(pattern))
+          ? Boolean(current().kmsi)
+          : /do you trust/i.test(String(pattern))
+            ? Boolean(current().trust)
+            : false,
+    }) })),
+    // Only the controls the MFA loop legitimately looks for are reported
+    // visible, so an unmodelled button is never clicked by accident.
+    getByRole: vi.fn((role: string, query?: { name?: RegExp }) => ({ first: () => ({
+      isVisible: async () =>
+        role === "button" && query?.name?.test("Continue") ? Boolean(current().trust) : false,
+      click: continueClick,
+    }) })),
     context: vi.fn(() => ({
       cookies: vi.fn(async () => current().cookie ? [{ name: "d2lSessionVal", value: "live" }] : []),
     })),
@@ -59,7 +78,7 @@ function makeMfaPage(states: PollState[]) {
       vi.advanceTimersByTime(milliseconds);
     }),
   };
-  return { page, yes, fill, press, poll: () => poll };
+  return { page, yes, fill, press, continueClick, poll: () => poll };
 }
 
 describe("Purdue MFA loop ported from Brightspace Bar", () => {
@@ -128,6 +147,18 @@ describe("Purdue MFA loop ported from Brightspace Bar", () => {
     ]);
     await handleMFA(page);
     expect(yes).toHaveBeenCalledOnce();
+  });
+
+  it("clicks Continue on Microsoft's federated-domain trust prompt", async () => {
+    // A federated domain (reached via whr=) makes Microsoft ask "Do you trust
+    // <domain>?" only after the IdP has already succeeded. Leaving it unclicked
+    // parks the browser on login.srf and the LMS is never reached.
+    const { page, continueClick } = makeMfaPage([
+      { trust: true, url: "https://login.microsoftonline.com/login.srf" },
+      { url: `${BASE_URL}/d2l/home`, cookie: true, d2l: true },
+    ]);
+    await handleMFA(page);
+    expect(continueClick).toHaveBeenCalledOnce();
   });
 
   it("submits an authenticator code without exposing it in logs", async () => {

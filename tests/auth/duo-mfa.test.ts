@@ -80,12 +80,26 @@ function makePage(options: DuoPageOptions = {}) {
     // The unscoped, whole-page text search. Nothing in the handler should use
     // it to read a verification code; the scoping tests below prove that.
     getByText: vi.fn((pattern: RegExp) => locator(nodes.filter(node => pattern.test(node.text)))),
-    getByRole: vi.fn((role: string) => ({ first: () => ({
-      isVisible: async () => role === "textbox" ? Boolean(options.passcode) : options.verifyButton !== false,
-      fill,
-      click,
-      press,
-    }) })),
+    // Honors the accessible-name filter the handler passes. Ignoring it reports
+    // every button as visible, so a handler asking for Duo's "Is this your
+    // device?" control would click this page's Verify instead.
+    getByRole: vi.fn((role: string, query?: { name?: string | RegExp }) => {
+      const matchesName = (candidate: string) => {
+        const pattern = query?.name;
+        if (pattern === undefined) return true;
+        return typeof pattern === "string"
+          ? candidate.toLowerCase().includes(pattern.toLowerCase())
+          : pattern.test(candidate);
+      };
+      return { first: () => ({
+        isVisible: async () => role === "textbox"
+          ? Boolean(options.passcode) && matchesName("passcode")
+          : options.verifyButton !== false && matchesName("Verify"),
+        fill,
+        click,
+        press,
+      }) };
+    }),
   };
   return { page, state, fill, click, press };
 }
