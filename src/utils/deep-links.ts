@@ -64,3 +64,11 @@ export function discussionUrl(
 ): string {
   return `${trimBaseUrl(baseUrl)}/d2l/lms/discussions/threadlist.d2l?ou=${courseId}&tId=${topicId}`;
 }
+
+/**
+ * Link to a course's calendar. Calendar events have no per-event student page
+ * the API names, so every event in a course shares this one link.
+ */
+export function calendarUrl(baseUrl: string, courseId: number): string {
+  return `${trimBaseUrl(baseUrl)}/d2l/le/calendar/${courseId}`;
+}

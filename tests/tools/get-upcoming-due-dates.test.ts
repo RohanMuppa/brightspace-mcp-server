@@ -269,7 +269,8 @@ describe("get_upcoming_due_dates", () => {
 
     await call({ daysAhead: 7 });
     expect(requested.filter((p) => /submissions|feedback|attempts/.test(p))).toEqual([]);
-    expect(requested.filter((p) => p.includes(`/${COURSE_A.Id}/`))).toHaveLength(3);
+    // dropbox, quizzes, discussion forums, and the calendar window
+    expect(requested.filter((p) => p.includes(`/${COURSE_A.Id}/`))).toHaveLength(4);
   });
 
   it("includes a graded discussion topic with a due date (issue #36)", async () => {
@@ -373,6 +374,134 @@ describe("get_upcoming_due_dates", () => {
 
     const items = parse(await call({ daysAhead: 7 }));
     expect(items.map((i) => i.title)).toEqual(["Reading response #2"]);
+  });
+});
+
+/**
+ * Issue #49: exams, labs, and hand-typed deadlines live only on the course
+ * calendar. Brightspace also generates a calendar event for every dated
+ * assignment, quiz, and discussion, so those must not appear twice.
+ */
+describe("get_upcoming_due_dates calendar events", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const midterm = {
+    CalendarEventId: 900,
+    Title: "Midterm",
+    Description: "",
+    StartDateTime: "2026-09-04T23:30:00.000Z",
+    EndDateTime: "2026-09-05T01:30:00.000Z",
+    LocationName: "WTHR 200",
+    IsAssociatedWithEntity: false,
+    AssociatedEntity: null,
+  };
+
+  const hw4Event = {
+    CalendarEventId: 901,
+    Title: "HW 4 - Due",
+    Description: "",
+    StartDateTime: "2026-09-03T12:00:00.000Z",
+    EndDateTime: "2026-09-03T12:00:00.000Z",
+    LocationName: "",
+    IsAssociatedWithEntity: true,
+    AssociatedEntity: { AssociatedEntityType: "D2L.LE.Dropbox.Dropbox", AssociatedEntityId: 44 },
+  };
+
+  const hw4 = { Id: 44, Name: "HW 4", DueDate: "2026-09-03T12:00:00.000Z", IsHidden: false };
+
+  it("lists a hand-made calendar event as type event with its end and location", async () => {
+    const { call } = setup((path) => {
+      if (path.includes("/enrollments/")) return enrollments(COURSE_A);
+      if (path.includes("/calendar/")) return { Objects: [midterm], Next: null };
+      return [];
+    });
+
+    const items = parse(await call({ daysAhead: 7 }));
+    expect(items).toEqual([
+      {
+        type: "event",
+        id: 900,
+        title: "Midterm",
+        courseId: 101,
+        courseName: "CS 180",
+        dueDate: "2026-09-04T23:30:00.000Z",
+        startDate: null,
+        endDate: "2026-09-05T01:30:00.000Z",
+        location: "WTHR 200",
+        url: `${BASE}/d2l/le/calendar/101`,
+      },
+    ]);
+  });
+
+  it("lists an assignment once, not again as its generated calendar event", async () => {
+    const { call } = setup((path) => {
+      if (path.includes("/enrollments/")) return enrollments(COURSE_A);
+      if (path.includes("/calendar/")) return { Objects: [hw4Event, midterm], Next: null };
+      if (path.includes("/dropbox/folders/")) return [hw4];
+      return [];
+    });
+
+    const items = parse(await call({ daysAhead: 7 }));
+    expect(items.map((i) => `${i.type}:${i.title}`)).toEqual([
+      "assignment:HW 4",
+      "event:Midterm",
+    ]);
+  });
+
+  it("omits location when the event has none", async () => {
+    const { call } = setup((path) => {
+      if (path.includes("/enrollments/")) return enrollments(COURSE_A);
+      if (path.includes("/calendar/")) return { Objects: [{ ...midterm, LocationName: "" }], Next: null };
+      return [];
+    });
+
+    const [event] = parse(await call({ daysAhead: 7 }));
+    expect(event).not.toHaveProperty("location");
+  });
+
+  it("excludes a calendar event that starts outside the window", async () => {
+    const { call } = setup((path) => {
+      if (path.includes("/enrollments/")) return enrollments(COURSE_A);
+      if (path.includes("/calendar/")) {
+        return { Objects: [{ ...midterm, StartDateTime: daysFromNow(20), EndDateTime: daysFromNow(20) }], Next: null };
+      }
+      return [];
+    });
+
+    expect(parse(await call({ daysAhead: 7 }))).toEqual([]);
+  });
+
+  it("keeps a course's assignments when its calendar fetch fails", async () => {
+    const { call } = setup((path) => {
+      if (path.includes("/enrollments/")) return enrollments(COURSE_A);
+      if (path.includes("/calendar/")) throw forbidden();
+      if (path.includes("/dropbox/folders/")) return [hw4];
+      return [];
+    });
+
+    const items = parse(await call({ daysAhead: 7 }));
+    expect(items.map((i) => `${i.type}:${i.title}`)).toEqual(["assignment:HW 4"]);
+  });
+
+  it("asks the calendar for the tool's window in UTC", async () => {
+    const { call, requested } = setup((path) => {
+      if (path.includes("/enrollments/")) return enrollments(COURSE_A);
+      return [];
+    });
+
+    await call({ daysAhead: 7 });
+    const calendar = requested.find((p) => p.includes("/calendar/"))!;
+    const query = new URL(calendar, BASE).searchParams;
+    expect(Date.parse(query.get("startDateTime")!)).toBeLessThanOrEqual(NOW.getTime());
+    expect(Date.parse(query.get("endDateTime")!)).toBeGreaterThanOrEqual(Date.parse(daysFromNow(7)));
+    expect(query.get("startDateTime")).toMatch(/Z$/);
   });
 });
 

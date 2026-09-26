@@ -6,15 +6,15 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { D2LApiClient, DEFAULT_CACHE_TTLS } from "../api/index.js";
-import { fetchAllItems } from "../api/paginate.js";
 import {
   GetUpcomingDueDatesSchema,
 } from "./schemas.js";
 import { toolResponse, sanitizeError } from "./tool-helpers.js";
 import { log } from "../utils/logger.js";
-import { applyCourseFilter } from "../utils/course-filter.js";
 import { assignmentUrl, quizUrl, discussionUrl } from "../utils/deep-links.js";
 import type { AppConfig } from "../types/index.js";
+import { resolveCourses, type CourseRef } from "./resolve-courses.js";
+import { fetchCourseCalendarEvents, type CalendarEvent } from "./calendar-events.js";
 
 interface DropboxFolder {
   Id: number;
@@ -45,25 +45,8 @@ interface DiscussionTopic {
   IsHidden: boolean;
 }
 
-interface EnrollmentItem {
-  OrgUnit: {
-    Id: number;
-    Name: string;
-    Code: string;
-  };
-  Access: {
-    IsActive: boolean;
-    CanAccess?: boolean;
-  };
-}
-
-interface CourseRef {
-  id: number;
-  name: string | null;
-}
-
 interface UpcomingItem {
-  type: "assignment" | "quiz" | "discussion";
+  type: "assignment" | "quiz" | "discussion" | "event";
   id: number;
   title: string;
   courseId: number;
@@ -71,65 +54,13 @@ interface UpcomingItem {
   dueDate: string;
   startDate: string | null;
   endDate: string | null;
+  location?: string;
   url: string;
 }
 
 /** D2L list endpoints return either a paged { Objects: [...] } or a flat array. */
 function unwrapList<T>(raw: unknown): T[] {
   return Array.isArray(raw) ? (raw as T[]) : ((raw as any)?.Objects ?? []);
-}
-
-/**
- * Resolve which courses to query, and their names.
- *
- * A tool-level courseId bypasses the configured course filter, but enrollments
- * are still fetched so the course can be named.
- */
-async function resolveCourses(
-  apiClient: D2LApiClient,
-  config: AppConfig,
-  courseId?: number
-): Promise<CourseRef[]> {
-  let items: EnrollmentItem[] = [];
-
-  try {
-    // isActive=true tracks the configured policy rather than being pinned on:
-    // a user who set activeOnly:false is asking to see archived courses, and a
-    // query that withholds them leaves applyCourseFilter nothing to let
-    // through. Enrollments are paged, so follow the bookmark chain — a long
-    // enrollment history would otherwise lose every course past the first page,
-    // and every deadline in those courses with it.
-    items = await fetchAllItems<EnrollmentItem>(
-      apiClient,
-      apiClient.lp(
-        `/enrollments/myenrollments/?orgUnitTypeId=3${config.courseFilter.activeOnly ? "&isActive=true" : ""}`
-      ),
-      { ttl: DEFAULT_CACHE_TTLS.enrollments }
-    );
-  } catch (error) {
-    // Without enrollments there is no course list to walk, so only the explicit
-    // single-course case can continue (with an unnamed course).
-    if (!courseId) throw error;
-    log("DEBUG", "get_upcoming_due_dates: could not fetch enrollments for course name", error);
-  }
-
-  if (courseId) {
-    const match = items.find((item) => item.OrgUnit.Id === courseId);
-    return [{ id: courseId, name: match?.OrgUnit.Name ?? null }];
-  }
-
-  const filtered = applyCourseFilter(
-    items.map((item) => ({
-      id: item.OrgUnit.Id,
-      name: item.OrgUnit.Name,
-      code: item.OrgUnit.Code,
-      isActive: item.Access.IsActive,
-            canAccess: item.Access.CanAccess,
-    })),
-    config.courseFilter
-  );
-
-  return filtered.map((course) => ({ id: course.id, name: course.name }));
 }
 
 /**
@@ -175,8 +106,31 @@ async function fetchDiscussionDueTopics(
 }
 
 /**
- * Collect every dated assignment, quiz, and graded discussion topic for one
- * course.
+ * Calendar events as upcoming items, minus the ones Brightspace generated from
+ * an item already in `items` — that item is the better record of the same
+ * deadline. Hand-made events (exams, labs) have no source item and always stay.
+ */
+function calendarItems(events: CalendarEvent[], items: UpcomingItem[]): UpcomingItem[] {
+  const listed = new Set(items.map((item) => `${item.type}:${item.id}`));
+  return events
+    .filter((event) => !event.generatedFrom || !listed.has(`${event.generatedFrom.type}:${event.generatedFrom.id}`))
+    .map((event) => ({
+      type: "event",
+      id: event.id,
+      title: event.title,
+      courseId: event.courseId,
+      courseName: event.courseName,
+      dueDate: event.start,
+      startDate: null,
+      endDate: event.end ?? null,
+      ...(event.location ? { location: event.location } : {}),
+      url: event.url,
+    }));
+}
+
+/**
+ * Collect every dated assignment, quiz, graded discussion topic, and calendar
+ * event starting in [from, to] for one course.
  *
  * No submissions or attempts: the due date lives on the item itself, which is
  * what makes this cheap enough to run across all enrolled courses. A
@@ -186,9 +140,11 @@ async function fetchDiscussionDueTopics(
 async function fetchCourseDueItems(
   apiClient: D2LApiClient,
   baseUrl: string,
-  course: CourseRef
+  course: CourseRef,
+  from: number,
+  to: number
 ): Promise<UpcomingItem[]> {
-  const [dropboxResult, quizResult, discussionResult] = await Promise.allSettled([
+  const [dropboxResult, quizResult, discussionResult, calendarResult] = await Promise.allSettled([
     apiClient.get<{ Objects: DropboxFolder[] } | DropboxFolder[]>(
       apiClient.le(course.id, "/dropbox/folders/"),
       { ttl: DEFAULT_CACHE_TTLS.assignments }
@@ -198,6 +154,7 @@ async function fetchCourseDueItems(
       { ttl: DEFAULT_CACHE_TTLS.assignments }
     ),
     fetchDiscussionDueTopics(apiClient, course.id),
+    fetchCourseCalendarEvents(apiClient, baseUrl, course, from, to),
   ]);
 
   const items: UpcomingItem[] = [];
@@ -269,6 +226,12 @@ async function fetchCourseDueItems(
     log("DEBUG", `get_upcoming_due_dates: failed to fetch discussions for course ${course.id}`, discussionResult.reason);
   }
 
+  if (calendarResult.status === "fulfilled") {
+    items.push(...calendarItems(calendarResult.value, items));
+  } else {
+    log("DEBUG", `get_upcoming_due_dates: failed to fetch calendar events for course ${course.id}`, calendarResult.reason);
+  }
+
   return items;
 }
 
@@ -285,7 +248,7 @@ export function registerGetUpcomingDueDates(
     {
       title: "Get Upcoming Due Dates",
       description:
-        "Fetch upcoming due dates across all your courses, derived from the due dates on assignments (dropbox folders), quizzes, and graded discussion topics themselves. Use this when the user asks about deadlines, what's due, upcoming work, or what they need to do this week.",
+        "Fetch upcoming due dates across all your courses, derived from the due dates on assignments (dropbox folders), quizzes, and graded discussion topics themselves, plus course calendar events such as exams and labs (type: event). Use this when the user asks about deadlines, what's due, upcoming work, or what they need to do this week.",
       inputSchema: GetUpcomingDueDatesSchema,
     },
     async (args: any) => {
@@ -304,7 +267,7 @@ export function registerGetUpcomingDueDates(
 
         // Fetch every course in parallel; the API client rate limits itself
         const results = await Promise.allSettled(
-          courses.map((course) => fetchCourseDueItems(apiClient, config.baseUrl, course))
+          courses.map((course) => fetchCourseDueItems(apiClient, config.baseUrl, course, now, windowEnd))
         );
 
         const items = results.flatMap((result) => {

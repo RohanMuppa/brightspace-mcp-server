@@ -29,6 +29,17 @@ export const GetUpcomingDueDatesSchema = z.object({
   courseId: z.coerce.number().int().positive().optional().describe("Filter to a specific course ID"),
 });
 
+export const GetCalendarEventsSchema = z.object({
+  courseId: z.coerce.number().int().positive().optional()
+    .describe("Course ID to get calendar events for. If omitted, returns events across all enrolled courses."),
+  from: z.string().datetime({ offset: true, message: "from must be an ISO 8601 datetime, e.g. 2026-01-15T00:00:00Z" }).optional()
+    .describe("Start of the window, ISO 8601 (e.g. 2026-01-15T00:00:00Z). Defaults to now."),
+  to: z.string().datetime({ offset: true, message: "to must be an ISO 8601 datetime, e.g. 2026-01-22T00:00:00Z" }).optional()
+    .describe("End of the window, ISO 8601 (e.g. 2026-01-22T00:00:00Z). Defaults to 7 days after from."),
+  includeGenerated: z.boolean().default(false)
+    .describe("Include the events Brightspace generates from assignment, quiz, and discussion due dates (marked with generatedFrom). Off by default because get_upcoming_due_dates and get_assignments already report those."),
+});
+
 export const GetMyGradesSchema = z.object({
   courseId: z.coerce.number().int().positive().optional().describe("Course ID to get grades for. If omitted, returns grades for all enrolled courses."),
 });
