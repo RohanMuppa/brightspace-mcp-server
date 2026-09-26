@@ -7,7 +7,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { D2LApiClient } from "../api/index.js";
 import { GetCalendarEventsSchema } from "./schemas.js";
-import { toolResponse, sanitizeError } from "./tool-helpers.js";
+import { toolResponse, errorResponse, sanitizeError } from "./tool-helpers.js";
 import { log } from "../utils/logger.js";
 import { resolveCourses } from "./resolve-courses.js";
 import { fetchCourseCalendarEvents } from "./calendar-events.js";
@@ -39,6 +39,15 @@ export function registerGetCalendarEvents(
 
         const windowStart = from ? new Date(from).getTime() : Date.now();
         const windowEnd = to ? new Date(to).getTime() : windowStart + DEFAULT_WINDOW_MS;
+
+        // An inverted window matches nothing, and an empty list reads as "no events".
+        if (windowEnd < windowStart) {
+          return errorResponse(
+            from
+              ? `to (${to}) is before from (${from}). Pass a to that is on or after from.`
+              : `to (${to}) is in the past, and from defaults to now. Pass from as well to look at past events.`
+          );
+        }
 
         const courses = await resolveCourses(apiClient, config, courseId);
 

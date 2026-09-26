@@ -195,6 +195,36 @@ describe("get_calendar_events", () => {
     expect(result.content[0].text).toMatch(/ISO 8601/);
   });
 
+  it("rejects a to earlier than from without querying Brightspace", async () => {
+    const { call, requested } = setup(() => []);
+
+    const result = await call({ from: daysFromNow(10), to: daysFromNow(1) });
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toMatch(/before from/);
+    expect(requested).toEqual([]);
+  });
+
+  it("explains that from defaults to now when only a past to is given", async () => {
+    const { call, requested } = setup(() => []);
+
+    const result = await call({ to: daysFromNow(-3) });
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toMatch(/from defaults to now/);
+    expect(requested).toEqual([]);
+  });
+
+  it("accepts a zero-length window", async () => {
+    const { call } = setup((path) => {
+      if (path.includes("/enrollments/")) return enrollments(COURSE_A);
+      if (path.includes("/calendar/")) return page(event(1, "Final", daysFromNow(2)));
+      return [];
+    });
+
+    const result = await call({ from: daysFromNow(2), to: daysFromNow(2) });
+    expect(result.isError).toBeUndefined();
+    expect(parse(result).map((e: any) => e.title)).toEqual(["Final"]);
+  });
+
   it("uses an explicit from and to window", async () => {
     const { call } = setup((path) => {
       if (path.includes("/enrollments/")) return enrollments(COURSE_A);
