@@ -32,7 +32,9 @@ const SILENT_SSO = {
   // get past this gate otherwise.
   emailFields: ["input[type=email]", "input[name=loginfmt]", "input[name=j_username]", "input#signinid"],
   credentialFields: ['input#username', 'input#userName', 'input[type="password"]'],
-  mfaChallenges: ["#idRichContext_DisplaySign", "#idDiv_SAOTCAS_Title", "#idDiv_SAOTCC_Title"],
+  // Entra's number match and code prompts, then CUNY Login's authenticator-code
+  // field (cuny-sso.ts CUNY_TOTP_SELECTOR).
+  mfaChallenges: ["#idRichContext_DisplaySign", "#idDiv_SAOTCAS_Title", "#idDiv_SAOTCC_Title", '[id="otpValue|input"]'],
   campusSaml: 'a[href*="/d2l/lp/auth/saml/initiate-login"]',
   kmsiCheckbox: "#KmsiCheckboxField",
   kmsiTitle: "Stay signed in?",
