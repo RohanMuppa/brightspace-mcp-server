@@ -91,7 +91,7 @@ There is nothing to log into first. Ask for your grades and the sign-in happens 
 
 Returning the next day normally requires no action. The server renews short-lived API tokens over HTTPS using the saved Brightspace session. If that session ends, a browser restores your saved Microsoft session and tries silent SSO. Approval and code-based modes stay headless; when an automatic run needs a code, run the auth command below to enter it securely in the terminal.
 
-If visible-browser mode is configured, the window stays open for up to five minutes so you can finish credentials and MFA manually when automatic sign-in cannot continue. Rerunning setup preserves your previous hidden or visible choice as the prompt default.
+If visible-browser mode is configured, the auth command opens a window that stays open for up to five minutes so you can finish credentials and MFA manually when automatic sign-in cannot continue. Background recovery during a tool call always runs headless so it never opens a browser over your work; set `D2L_HEADLESS=false` in the server's environment to let it open one too. Rerunning setup preserves your previous hidden or visible choice as the prompt default.
 
 Your school's policy controls when MFA is required. There is no local 24-hour cutoff, and the server no longer discards browser state after one hour. A network outage preserves the saved session and returns a temporary error.
 
