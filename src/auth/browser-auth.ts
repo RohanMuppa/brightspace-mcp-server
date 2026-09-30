@@ -4,7 +4,7 @@
  * Licensed under MIT: see LICENSE file for details.
  */
 
-import type { Browser, BrowserContext, Page, Request } from "playwright";
+import type { Browser, BrowserContext, Locator, Page, Request } from "playwright";
 import * as path from "node:path";
 import { readFileSync, accessSync } from "node:fs";
 import type { AppConfig, TokenData } from "../types/index.js";
@@ -36,6 +36,11 @@ const SILENT_SSO = {
   kmsiCheckbox: "#KmsiCheckboxField",
   kmsiTitle: "Stay signed in?",
   kmsiSubmit: "#idSIButton9",
+  // Microsoft's passwordless approval view ("Approve sign in request", or
+  // "Request wasn't sent" once a push fails) offers the password instead. The
+  // text fallback covers a tenant that renames the id.
+  passwordSwitch: "#idA_PWD_SwitchToPassword",
+  passwordSwitchText: "Use your password instead",
 } as const;
 
 export class BrowserAuthTransportError extends Error {
@@ -366,6 +371,7 @@ export class BrowserAuth {
     const deadline = Date.now() + SILENT_SSO_TIMEOUT_MS;
     let accountHintAttempted = false;
     let passwordPromptPolls = 0;
+    let passwordSwitchAttempted = false;
     do {
       if (await this.hasLiveSession(page)) return true;
 
@@ -385,6 +391,22 @@ export class BrowserAuth {
       }
       if (await this.hasMfaChallenge(page)) {
         log("INFO", "The identity provider requires a login challenge");
+        return false;
+      }
+      const passwordSwitch = await this.passwordSignInOption(page);
+      if (passwordSwitch) {
+        // The approval view has no field or MFA title this poll recognizes, so
+        // without leaving it the poll would wait out its whole budget. Switch
+        // once when a password is saved; the password page then settles the
+        // poll like any other credential prompt.
+        if (!passwordSwitchAttempted && this.ssoFlow.hasCredentials()) {
+          passwordSwitchAttempted = true;
+          await passwordSwitch.click().catch(() => {});
+          log("DEBUG", "Chose the password sign-in option over passwordless approval");
+          await page.waitForTimeout(SILENT_SSO_POLL_MS);
+          continue;
+        }
+        log("INFO", "The identity provider requires a password sign-in");
         return false;
       }
       if (await this.isAnyOnScreen(page, SILENT_SSO.credentialFields)) {
@@ -417,6 +439,13 @@ export class BrowserAuth {
   private async hasCredentialPrompt(page: Page): Promise<boolean> {
     return await this.isAnyOnScreen(page, SILENT_SSO.emailFields) ||
       await this.isAnyOnScreen(page, SILENT_SSO.credentialFields);
+  }
+
+  /** The visible "Use your password instead" control, when Microsoft offers one. */
+  private async passwordSignInOption(page: Page): Promise<Locator | null> {
+    if (await this.isOnScreen(page, SILENT_SSO.passwordSwitch)) return page.locator(SILENT_SSO.passwordSwitch).first();
+    const byText = page.getByText(SILENT_SSO.passwordSwitchText).first();
+    return await byText.isVisible().catch(() => false) ? byText : null;
   }
 
   /** One definition of the MFA pages the shared authentication loop supports. */

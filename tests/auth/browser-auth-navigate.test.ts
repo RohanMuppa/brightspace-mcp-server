@@ -21,6 +21,9 @@ const SAOTCC_SELECTOR = "#idDiv_SAOTCC_Title";
 const CAMPUS_SELECTOR = 'a[href*="/d2l/lp/auth/saml/initiate-login"]';
 const KMSI_CHECKBOX = "#KmsiCheckboxField";
 const KMSI_SUBMIT = "#idSIButton9";
+const PASSWORD_FIELD = 'input[type="password"]';
+const PASSWORD_SWITCH = "#idA_PWD_SwitchToPassword";
+const PASSWORD_SWITCH_TEXT = "text:Use your password instead";
 
 function makeConfig(overrides: Partial<AppConfig> = {}): AppConfig {
   return {
@@ -400,5 +403,52 @@ describe("BrowserAuth.navigateAndLogin", () => {
 
     await expect(navigate(page)).resolves.toBe(true);
     expect(clicks).toEqual(["text:Albany"]);
+  });
+
+  describe("Microsoft passwordless approval surface", () => {
+    const PASSWORDLESS_URL = "https://login.microsoftonline.com/common/login";
+
+    /** The password page replaces the approval view once the switch is clicked. */
+    const passwordlessPage = (visible: string[]) => {
+      const fake = makePage({
+        url: PASSWORDLESS_URL,
+        visible,
+        onTick: (state) => {
+          if (fake.clicks.some((key) => key === PASSWORD_SWITCH || key === PASSWORD_SWITCH_TEXT)) {
+            state.visible = [PASSWORD_FIELD];
+          }
+        },
+      });
+      return fake;
+    };
+
+    it("switches to the password sign-in option and hands the password page to the school flow", async () => {
+      const { page } = passwordlessPage([PASSWORD_SWITCH, PASSWORD_SWITCH_TEXT]);
+
+      await expect(navigate(page)).resolves.toBe(false);
+      expect(ssoFlow.login).toHaveBeenCalledOnce();
+    });
+
+    it("finds the password sign-in option by its text when the id is absent", async () => {
+      const { page } = passwordlessPage([PASSWORD_SWITCH_TEXT]);
+
+      await expect(navigate(page)).resolves.toBe(false);
+      expect(ssoFlow.login).toHaveBeenCalledOnce();
+    });
+
+    it("reports missing credentials at once instead of waiting out the silent budget", async () => {
+      ssoFlow.hasCredentials.mockReturnValue(false);
+      const { page, clicks } = makePage({ url: PASSWORDLESS_URL, visible: [PASSWORD_SWITCH] });
+
+      await expect(navigate(page)).rejects.toThrow("Automatic sign-in requires saved credentials");
+      expect(clicks).toEqual([]);
+    });
+
+    it("stops clicking a password sign-in option that never leaves the approval view", async () => {
+      const { page, clicks } = makePage({ url: PASSWORDLESS_URL, visible: [PASSWORD_SWITCH] });
+
+      await expect(navigate(page)).rejects.toThrow("has not settled on a supported login challenge");
+      expect(clicks).toEqual([PASSWORD_SWITCH]);
+    });
   });
 });
