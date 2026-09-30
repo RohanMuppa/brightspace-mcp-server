@@ -10,7 +10,13 @@ import { TTLCache } from "./cache.js";
 import { TokenBucket } from "./rate-limiter.js";
 import { discoverVersions } from "./version-discovery.js";
 import { ApiError, RateLimitError, NetworkError } from "./errors.js";
-import { withRetry, isRetryableFailure, retryAfterMsFrom, type RetryConfig } from "./retry.js";
+import {
+  withRetry,
+  isRetryableFailure,
+  retryAfterMsFrom,
+  parseRetryAfter,
+  type RetryConfig,
+} from "./retry.js";
 import { log } from "../utils/logger.js";
 import { AUTH_COMMAND } from "../utils/commands.js";
 
@@ -337,9 +343,7 @@ export class D2LApiClient {
 
       // Handle 429 rate limiting
       if (response.status === 429) {
-        const retryAfter = response.headers.get("Retry-After");
-        const retryAfterSeconds = retryAfter ? parseInt(retryAfter, 10) : undefined;
-        throw new RateLimitError(path, retryAfterSeconds);
+        throw new RateLimitError(path, parseRetryAfter(response.headers.get("Retry-After")));
       }
 
       // Handle 403 (common for past-semester courses)
@@ -427,9 +431,7 @@ export class D2LApiClient {
 
       // Handle 429 rate limiting
       if (response.status === 429) {
-        const retryAfter = response.headers.get("Retry-After");
-        const retryAfterSeconds = retryAfter ? parseInt(retryAfter, 10) : undefined;
-        throw new RateLimitError(path, retryAfterSeconds);
+        throw new RateLimitError(path, parseRetryAfter(response.headers.get("Retry-After")));
       }
 
       // Handle 403 (common for past-semester courses or no access)

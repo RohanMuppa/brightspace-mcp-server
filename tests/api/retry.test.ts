@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { withRetry, isRetryableFailure, retryAfterMsFrom } from "../../src/api/retry.js";
+import { withRetry, isRetryableFailure, retryAfterMsFrom, parseRetryAfter } from "../../src/api/retry.js";
 import { ApiError, RateLimitError, NetworkError } from "../../src/api/errors.js";
 
 /**
@@ -126,5 +126,33 @@ describe("retryAfterMsFrom", () => {
     expect(retryAfterMsFrom(new RateLimitError("/x", 7))).toBe(7000);
     expect(retryAfterMsFrom(new RateLimitError("/x"))).toBeUndefined();
     expect(retryAfterMsFrom(new ApiError(503, "/x", ""))).toBeUndefined();
+  });
+});
+
+describe("parseRetryAfter", () => {
+  const now = Date.parse("2026-09-30T13:45:00Z");
+
+  it("reads delta-seconds", () => {
+    expect(parseRetryAfter("120", now)).toBe(120);
+    expect(parseRetryAfter(" 7 ", now)).toBe(7);
+  });
+
+  it("reads an HTTP-date as seconds from now, rounded up", () => {
+    expect(parseRetryAfter("Wed, 30 Sep 2026 13:45:30 GMT", now)).toBe(30);
+    expect(parseRetryAfter("Wed, 30 Sep 2026 13:45:30 GMT", now + 500)).toBe(30);
+  });
+
+  it("treats a date that is now or past as no wait", () => {
+    expect(parseRetryAfter("Wed, 30 Sep 2026 13:45:00 GMT", now)).toBeUndefined();
+    expect(parseRetryAfter("Wed, 30 Sep 2026 13:00:00 GMT", now)).toBeUndefined();
+  });
+
+  it("ignores a missing, zero, or malformed header", () => {
+    expect(parseRetryAfter(null, now)).toBeUndefined();
+    expect(parseRetryAfter("", now)).toBeUndefined();
+    expect(parseRetryAfter("0", now)).toBeUndefined();
+    expect(parseRetryAfter("10abc", now)).toBeUndefined();
+    expect(parseRetryAfter("-5", now)).toBeUndefined();
+    expect(parseRetryAfter("soon", now)).toBeUndefined();
   });
 });

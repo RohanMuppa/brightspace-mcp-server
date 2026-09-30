@@ -102,6 +102,21 @@ describe("D2LApiClient resilience", () => {
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
+  it("honors a Retry-After sent as an HTTP-date", async () => {
+    const c = await client();
+    const retryAt = new Date(Date.now() + 30_000).toUTCString();
+    fetchMock
+      .mockResolvedValueOnce(json({}, { status: 429, headers: { "Retry-After": retryAt } }))
+      .mockResolvedValueOnce(json({ Identifier: "42" }));
+
+    await c.get("/d2l/api/lp/1.62/users/whoami");
+
+    // toUTCString drops milliseconds, so the wait lands in (29s, 30s].
+    const waited = sleep.mock.calls[0][0] as number;
+    expect(waited).toBeGreaterThanOrEqual(29_000);
+    expect(waited).toBeLessThanOrEqual(30_000);
+  });
+
   it("consumes a rate limiter token on every attempt, not once per call", async () => {
     const c = await client();
     const consume = vi.fn(async () => {});

@@ -82,6 +82,26 @@ export function isRetryableFailure(error: unknown): boolean {
   return error instanceof NetworkError;
 }
 
+/**
+ * Read a Retry-After header as whole seconds, or undefined when it asks for
+ * no wait. RFC 9110 allows delta-seconds ("120") or an HTTP-date; a date is
+ * measured from `now` and rounded up. Anything else is ignored so the normal
+ * backoff applies.
+ */
+export function parseRetryAfter(value: string | null, now: number = Date.now()): number | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) return undefined;
+  let seconds: number;
+  if (/^\d+$/.test(trimmed)) {
+    seconds = Number(trimmed);
+  } else {
+    const at = Date.parse(trimmed);
+    if (Number.isNaN(at)) return undefined;
+    seconds = Math.ceil((at - now) / 1000);
+  }
+  return seconds > 0 ? seconds : undefined;
+}
+
 /** The Retry-After a 429 carried, in milliseconds, or undefined. */
 export function retryAfterMsFrom(error: unknown): number | undefined {
   if (error instanceof RateLimitError && typeof error.retryAfter === "number" && error.retryAfter > 0) {
