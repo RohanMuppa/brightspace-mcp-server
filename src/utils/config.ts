@@ -36,9 +36,9 @@ export async function loadConfig(): Promise<AppConfig> {
     : store?.headless ?? true;
 
   // Resolve tokenTtl: env > store > default (3600)
-  const tokenTtl = process.env.D2L_TOKEN_TTL
-    ? parseInt(process.env.D2L_TOKEN_TTL, 10)
-    : store?.tokenTtl ?? 3600;
+  const tokenTtl = positiveSeconds(process.env.D2L_TOKEN_TTL, "D2L_TOKEN_TTL")
+    ?? positiveSeconds(store?.tokenTtl, "tokenTtl in config.json")
+    ?? 3600;
 
   // Resolve includeCourseIds: env > store > undefined
   const includeCourseIds = process.env.D2L_INCLUDE_COURSES
@@ -89,6 +89,19 @@ export function accountSessionDirectory(root: string, baseUrl: string, username?
   if (!username) return root;
   const account = createHash("sha256").update(JSON.stringify([new URL(baseUrl).origin, username])).digest("hex");
   return path.join(root, "accounts", account);
+}
+
+/**
+ * A token lifetime must be a whole, positive number of seconds. NaN, zero, a
+ * negative number, or "1h" read as 1 second would all produce a token that is
+ * already inside the refresh buffer, so every tool call would mint again.
+ */
+function positiveSeconds(value: string | number | undefined, source: string): number | undefined {
+  if (value === undefined || value === "") return undefined;
+  const text = String(value).trim();
+  if (/^\d+$/.test(text) && Number(text) > 0) return Number(text);
+  console.error(`[config] Ignoring ${source}=${JSON.stringify(value)}: expected a positive whole number of seconds`);
+  return undefined;
 }
 
 function expandTilde(filePath: string): string {

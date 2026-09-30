@@ -53,4 +53,25 @@ describe("resolved authentication configuration", () => {
     await expect(loadConfig()).rejects.toThrow("without embedded credentials");
     expect(fake.password).not.toHaveBeenCalled();
   });
+  it("uses a positive whole-second D2L_TOKEN_TTL", async () => {
+    vi.stubEnv("D2L_TOKEN_TTL", " 900 ");
+    expect(await loadConfig()).toMatchObject({ tokenTtl: 900 });
+  });
+
+  it.each(["abc", "0", "-5", "1h", "1.5"])("ignores D2L_TOKEN_TTL=%s and falls back to config.json", async (value) => {
+    vi.stubEnv("D2L_TOKEN_TTL", value);
+    fake.store = { tokenTtl: 1800 };
+    const warn = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(await loadConfig()).toMatchObject({ tokenTtl: 1800 });
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("Ignoring D2L_TOKEN_TTL"));
+    warn.mockRestore();
+  });
+
+  it("falls back to the default when both sources are invalid", async () => {
+    vi.stubEnv("D2L_TOKEN_TTL", "abc");
+    fake.store = { tokenTtl: -1 };
+    const warn = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(await loadConfig()).toMatchObject({ tokenTtl: 3600 });
+    warn.mockRestore();
+  });
 });
