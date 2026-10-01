@@ -85,7 +85,7 @@ The number can change mid-wait: if the request times out or is denied before app
 
 On a Duo tenant, a device-trust prompt ("Is this your device?") gating the push is answered yes automatically, which also makes Duo skip its device check on later logins from this machine — worth mentioning to a user signing in from a shared computer. `D2L_DUO_PASSCODE` switches from waiting for a push to typing a Duo Mobile passcode.
 
-Visible mode remains open for up to five minutes when automatic credential handling is unavailable or the identity provider needs direct interaction. Rerunning setup preserves the existing hidden or visible preference as the default choice.
+Visible mode applies to the manual `auth` command, whose window remains open for up to five minutes when automatic credential handling is unavailable or the identity provider needs direct interaction. Automatic recovery spawned by `AuthRunner` runs headless unless `D2L_HEADLESS` is set explicitly. Rerunning setup preserves the existing hidden or visible preference as the default choice.
 
 ```bash
 npx -y brightspace-mcp-server@latest auth
@@ -140,6 +140,8 @@ src/
     tool-helpers.ts         Shared helpers (course resolution, formatting)
     get-*.ts                One file per tool
     download-file.ts        Binary download + file-type detection
+    content-availability.ts Shared release-window logic (hidden/locked/not_yet_open/ended)
+    topic-availability.ts   Explains a download_file failure using topic/TOC availability metadata
   api/
     client.ts               HTTP client wrapping the Valence/D2L API. lp()/le()
                             leave the version as a {lp}/{le} placeholder that

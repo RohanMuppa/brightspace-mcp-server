@@ -46,6 +46,34 @@ describe("AuthRunner", () => {
     expect(progress.mock.calls).toEqual([["MFA number: 42"], ["Waiting for approval"]]);
   });
 
+  describe("automatic child browser visibility", () => {
+    const original = process.env.D2L_HEADLESS;
+    afterEach(() => {
+      if (original === undefined) delete process.env.D2L_HEADLESS;
+      else process.env.D2L_HEADLESS = original;
+    });
+
+    it("runs the automatic child headless when no environment override is set", () => {
+      delete process.env.D2L_HEADLESS;
+      void new AuthRunner().run().catch(() => {});
+
+      expect(vi.mocked(spawn).mock.calls[0][2]?.env?.D2L_HEADLESS).toBe("true");
+    });
+
+    it("keeps an explicit D2L_HEADLESS=false override for the automatic child", () => {
+      process.env.D2L_HEADLESS = "false";
+      void new AuthRunner().run().catch(() => {});
+
+      expect(vi.mocked(spawn).mock.calls[0][2]?.env?.D2L_HEADLESS).toBe("false");
+    });
+
+    it("hides the automatic child's console window on Windows", () => {
+      void new AuthRunner().run().catch(() => {});
+
+      expect(vi.mocked(spawn).mock.calls[0][2]).toMatchObject({ windowsHide: true });
+    });
+  });
+
   it("joins the login already in flight instead of spawning a second child", async () => {
     const runner = new AuthRunner();
     const first = runner.run();

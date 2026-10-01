@@ -24,6 +24,7 @@ const { SCHOOL_PRESETS, buildConfigToSave, configureMcpClient, presetForArgv } =
   await import("../../src/setup.js");
 const { createSSOFlow } = await import("../../src/auth/sso-flow.js");
 const { SunySSOFlow } = await import("../../src/auth/suny-sso.js");
+const { TUDelftSSOFlow } = await import("../../src/auth/tudelft-sso.js");
 const { WesternSSOFlow } = await import("../../src/auth/western-sso.js");
 const { PurdueSSOFlow } = await import("../../src/auth/purdue-sso.js");
 type AppConfig = import("../../src/types/index.js").AppConfig;
@@ -72,6 +73,7 @@ describe("school presets", () => {
   it("routes each preset's saved URL to the sign-in flow written for it", () => {
     const flowFor = (baseUrl: string) => createSSOFlow({ baseUrl } as AppConfig);
 
+    expect(flowFor(SCHOOL_PRESETS.tudelft.baseUrl)).toBeInstanceOf(TUDelftSSOFlow);
     expect(flowFor(SCHOOL_PRESETS.western.baseUrl)).toBeInstanceOf(WesternSSOFlow);
     expect(flowFor(SCHOOL_PRESETS.suny.baseUrl)).toBeInstanceOf(SunySSOFlow);
     expect(flowFor(SCHOOL_PRESETS.purdue.baseUrl)).toBeInstanceOf(PurdueSSOFlow);

@@ -127,7 +127,8 @@ function forwardLines(
  * re-authenticate when the current session has expired.
  *
  * The child inherits the parent's resolved environment and working directory,
- * so both processes read the same account configuration and .env file.
+ * so both processes read the same account configuration and .env file. It
+ * runs headless unless D2L_HEADLESS is set explicitly.
  *
  * run() settles as soon as the child reports an MFA challenge (with or
  * without a number to display) rather than waiting for the child to exit —
@@ -266,9 +267,13 @@ export class AuthRunner {
         [this.scriptPath, "--automatic"],
         {
           cwd: process.cwd(),
-          env: { ...process.env },
+          // Background recovery never opens a browser over the user's work
+          // unless D2L_HEADLESS explicitly asks for one; the saved
+          // visible-browser preference applies to manual sign-in only.
+          env: { D2L_HEADLESS: "true", ...process.env },
           stdio: ["ignore", "pipe", "pipe"],
           detached: process.platform !== "win32",
+          windowsHide: true,
         },
       );
 
