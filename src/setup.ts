@@ -50,6 +50,13 @@ interface SchoolPreset {
 }
 
 export const SCHOOL_PRESETS: Record<string, SchoolPreset> = {
+  tudelft: {
+    name: "TU Delft",
+    baseUrl: "https://brightspace.tudelft.nl",
+    usernameLabel: "TU Delft NetID",
+    mfaNote: "NetID sign-in normally runs headlessly without MFA.",
+    usernameHint: "Use your NetID, not your student email address.",
+  },
   purdue: {
     name: "Purdue University",
     baseUrl: "https://purdue.brightspace.com",

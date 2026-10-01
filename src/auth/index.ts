@@ -7,6 +7,7 @@
 export { BrowserAuth } from "./browser-auth.js";
 export { PurdueSSOFlow } from "./purdue-sso.js";
 export { SunySSOFlow, isSunyBrightspace } from "./suny-sso.js";
+export { TUDelftSSOFlow, isTUDelftBrightspace } from "./tudelft-sso.js";
 export { createSSOFlow } from "./sso-flow.js";
 export type { SSOFlow } from "./sso-flow.js";
 export { TokenManager } from "./token-manager.js";

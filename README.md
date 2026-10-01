@@ -6,7 +6,7 @@ Talk to your Brightspace courses with AI. Ask about grades, due dates, quizzes, 
 
 This is an [MCP (Model Context Protocol)](https://modelcontextprotocol.io) server that connects your AI to D2L Brightspace so it can pull your grades, assignments, syllabus, and course content on demand.
 
-Connects to D2L Brightspace. Automatic login supports Purdue's Microsoft Entra flow and SUNY campus selection. Other schools need a compatible automated sign-in flow; unsupported login pages return an actionable error.
+Connects to D2L Brightspace. Automatic login supports Purdue's Microsoft Entra flow, SUNY campus selection, Western University, and TU Delft NetID via SURFconext. Other schools need a compatible automated sign-in flow; unsupported login pages return an actionable error.
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/RohanMuppa/brightspace-mcp-server/main/docs/how-it-works.svg" alt="Architecture diagram" width="100%">
@@ -28,7 +28,7 @@ Paste this into Claude Code, Cursor, Windsurf, Copilot, Codex, or any AI coding 
 ```
 Install brightspace-mcp-server for me by following
 https://github.com/RohanMuppa/brightspace-mcp-server/blob/main/LLMs.md
-(use --purdue if I'm at Purdue, or --suny if I'm at a SUNY campus).
+(use --purdue at Purdue, --suny at SUNY, or --tudelft at TU Delft).
 ```
 
 **Option 2: Run it yourself**
@@ -49,6 +49,14 @@ you're at and skips SUNY's campus picker when you sign in:
 ```bash
 npx -y brightspace-mcp-server@latest setup --suny
 ```
+
+TU Delft students can use `--tudelft` to select the Brightspace URL and NetID login:
+
+```bash
+npx -y brightspace-mcp-server@latest setup --tudelft
+```
+
+Use your NetID rather than your student email address. The TU Delft flow is headless NetID username and password sign-in only, including automatic re-authentication when the saved session expires; it does not support MFA or any other interactive step. If your account requires one, [open an issue](https://github.com/RohanMuppa/brightspace-mcp-server/issues) — that tenant isn't supported yet.
 
 The wizard saves your password in the native credential store and asks how you complete MFA. Authentication can wait for approval or number matching, prompt in the terminal for a code from Google Authenticator or another app, or open a visible browser for other interactive methods. The wizard can configure Claude Desktop, Cursor, Codex Desktop and CLI, and Claude Code when they are installed. Restart your AI client when it finishes.
 
