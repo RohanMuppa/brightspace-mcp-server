@@ -16,7 +16,8 @@ import { BROWSER_STATE_FILE, type BrowserState } from "./browser-state-store.js"
  * get_server_info can report it without decrypting the cookie jar.
  */
 
-export type RememberMfaOutcome = "ticked" | "already" | "absent" | "unknown";
+/** "off" means the opt-in (D2L_REMEMBER_MFA=true) was not set, so the box was deliberately left alone. */
+export type RememberMfaOutcome = "ticked" | "already" | "absent" | "unknown" | "off";
 
 export interface RememberMfaResult {
   outcome: RememberMfaOutcome;
@@ -41,7 +42,7 @@ interface SummaryFile {
 const SUMMARY_FILE = "microsoft-session.json";
 const ENTRA_HOST = "login.microsoftonline.com";
 const ENTRA_COOKIES = new Set(["ESTSAUTH", "ESTSAUTHPERSISTENT", "ESTSAUTHLIGHT"]);
-const OUTCOMES: readonly RememberMfaOutcome[] = ["ticked", "already", "absent", "unknown"];
+const OUTCOMES: readonly RememberMfaOutcome[] = ["ticked", "already", "absent", "unknown", "off"];
 
 /** Latest expiry of each Entra sign-in cookie in a jar. */
 function entraExpiries(state: BrowserState | undefined): Map<string, number> {

@@ -89,6 +89,11 @@ describe("Microsoft session summary", () => {
     expect(await readMicrosoftSession(dir, NOW)).toMatchObject({ rememberMfa: "unknown", rememberMfaAt: null });
   });
 
+  it("round-trips the \"off\" outcome a non-opted-in sign-in records", async () => {
+    await recordMicrosoftSession(dir, state(), { outcome: "off", at: "2026-10-01T11:59:00.000Z" });
+    expect(await readMicrosoftSession(dir, NOW)).toMatchObject({ rememberMfa: "off", rememberMfaAt: "2026-10-01T11:59:00.000Z" });
+  });
+
   it("is absent when no browser state is saved", async () => {
     await recordMicrosoftSession(dir, state(cookie("ESTSAUTHPERSISTENT", IN_90_DAYS)));
     await fs.rm(path.join(dir, "storage-state.encrypted.json"));

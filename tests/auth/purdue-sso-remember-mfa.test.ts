@@ -86,10 +86,11 @@ function captureInfo(): string[] {
   return lines;
 }
 
+/** Opted in unless a test says otherwise; `rememberMfa: undefined` is the real default (off). */
 function flowFor(options: { rememberMfa?: boolean; events?: string[]; requestMfaCode?: () => Promise<string> } = {}) {
   return new PurdueSSOFlow({
     baseUrl: BASE_URL,
-    rememberMfa: options.rememberMfa,
+    rememberMfa: "rememberMfa" in options ? options.rememberMfa : true,
     requestMfaCode: options.requestMfaCode,
     onMfaChallenge: () => options.events?.push("announce"),
   });
@@ -168,12 +169,29 @@ describe("Entra remember-MFA checkbox", () => {
     expect(flow.rememberMfaResult()).toBeUndefined();
   });
 
-  it("does nothing when D2L_REMEMBER_MFA turns it off", async () => {
+  it.each([
+    ["is unset (the default)", undefined],
+    ["is false", false],
+  ])("leaves the box alone and records \"off\" when the opt-in %s", async (_label, rememberMfa) => {
+    const lines = captureInfo();
+    const events: string[] = [];
     const { page, checks } = makePage({ boxes: { [NUMBER_MATCH_BOX]: { checked: false } } });
-    const flow = flowFor({ rememberMfa: false });
+    const flow = flowFor({ rememberMfa, events });
     await handleMFA(flow, page);
     expect(checks).toEqual([]);
-    expect(flow.rememberMfaResult()).toBeUndefined();
+    expect(events).toEqual(["announce"]);
+    expect(flow.rememberMfaResult()).toEqual({ outcome: "off", at: "2026-10-01T12:00:00.000Z" });
+    expect(lines.some(line => line.includes("Entra remember-MFA checkbox: off (set D2L_REMEMBER_MFA=true"))).toBe(true);
+  });
+
+  it("records \"off\" only once per login", async () => {
+    const { page } = makePage({ boxes: { [NUMBER_MATCH_BOX]: { checked: false } } });
+    const flow = flowFor({ rememberMfa: undefined });
+    await handleMFA(flow, page);
+    const first = flow.rememberMfaResult();
+    vi.setSystemTime(new Date("2026-10-01T12:05:00Z"));
+    await (flow as any).rememberMfaDevice(page);
+    expect(flow.rememberMfaResult()).toBe(first);
   });
 
   it("ticks the verification-code page's box before asking for the code", async () => {

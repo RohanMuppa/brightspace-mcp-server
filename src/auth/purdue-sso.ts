@@ -46,6 +46,7 @@ const REMEMBER_MFA_LOG: Record<RememberMfaOutcome, string> = {
   already: "already checked",
   absent: "not offered by tenant",
   unknown: "could not be ticked",
+  off: "off (set D2L_REMEMBER_MFA=true to tick it)",
 };
 
 /** How often to look for the number while waiting on MFA. */
@@ -109,7 +110,7 @@ interface PurdueSSOConfig {
   baseUrl?: string;
   headless?: boolean;
   requestMfaCode?: RequestMfaCode;
-  /** Tick Entra's "Don't ask again" box on the MFA page. Defaults to true; false is D2L_REMEMBER_MFA=false. */
+  /** Tick Entra's "Don't ask again" box on the MFA page. Opt-in: only true (D2L_REMEMBER_MFA=true) ticks it. */
   rememberMfa?: boolean;
   /**
    * Fired as soon as an MFA challenge is visible: with the number-match
@@ -520,10 +521,17 @@ export class PurdueSSOFlow {
 
   /**
    * Tick Entra's "Don't ask again" box, once per login and never in a loop.
+   * Opt-in: without an explicit true the box is left alone and the outcome
+   * is recorded as "off", so get_server_info can say why nothing was ticked.
    * An already-checked box is left alone so this can never untick it.
    */
   private async rememberMfaDevice(page: Page): Promise<void> {
-    if (this.rememberMfa || this.config.rememberMfa === false) return;
+    if (this.rememberMfa) return;
+    if (this.config.rememberMfa !== true) {
+      this.rememberMfa = { outcome: "off", at: new Date().toISOString() };
+      log("INFO", `Entra remember-MFA checkbox: ${REMEMBER_MFA_LOG.off}`);
+      return;
+    }
     if (new URL(page.url()).hostname !== "login.microsoftonline.com") return;
     // A nicety, never a reason to fail sign-in: any surprise is "unknown".
     let outcome: RememberMfaOutcome;

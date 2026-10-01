@@ -47,7 +47,7 @@ export interface AppConfig {
   legacyBrowserStateMigrated?: boolean;
   tokenTtl: number; // seconds
   headless: boolean;
-  /** Tick Microsoft Entra's "Don't ask again" box on the MFA page (D2L_REMEMBER_MFA). */
+  /** Tick Microsoft Entra's "Don't ask again" box on the MFA page. Opt-in via D2L_REMEMBER_MFA=true; off by default. */
   rememberMfa?: boolean;
   username?: string;
   password?: string;
