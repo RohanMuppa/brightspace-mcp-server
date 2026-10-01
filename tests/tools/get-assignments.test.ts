@@ -437,3 +437,64 @@ describe("get_assignments across all courses", () => {
     expect(requested[0]).toContain("isActive=true");
   });
 });
+
+/**
+ * A sign-in that has not finished is not an empty course. Every route below
+ * get_assignments swallows its own failures so one forbidden endpoint cannot
+ * hide the rest, but an authentication failure means none of them answered:
+ * the tool has to say so rather than report zero assignments.
+ */
+
+import { AuthProcessError } from "../../src/auth/auth-runner.js";
+import { ApiError } from "../../src/api/errors.js";
+
+const mfaPending = () => new AuthProcessError("mfaPending", "MFA approval pending");
+
+describe("get_assignments while sign-in is pending", () => {
+  it("returns an authentication error for a single course instead of an empty list", async () => {
+    const { call } = setupTool(() => {
+      throw mfaPending();
+    }, allCoursesConfig(true));
+
+    const result = await call({ courseId: COURSE_A.Id });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("Approve the sign-in request");
+  });
+
+  it("returns an authentication error across all courses when the course routes cannot sign in", async () => {
+    // Enrollments answer from cache, the course routes need a live session.
+    const { call } = setupTool((path) => {
+      if (path.includes("/enrollments/")) return { Items: [enrollmentItem(COURSE_A)] };
+      throw mfaPending();
+    }, allCoursesConfig(true));
+
+    const result = await call({});
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("Approve the sign-in request");
+  });
+
+  it("returns an authentication error when only the dropbox route is rejected with 401", async () => {
+    const { call } = setupTool((path) => {
+      if (path.endsWith("/dropbox/folders/")) throw new ApiError(401, path, "expired");
+      return courseWork(path);
+    }, allCoursesConfig(true));
+
+    const result = await call({ courseId: COURSE_A.Id });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("Authentication expired");
+  });
+
+  it("returns an authentication error rather than reporting an assignment as unsubmitted", async () => {
+    const { call } = setupTool((path) => {
+      if (path.includes("/mysubmissions/")) throw mfaPending();
+      return courseWork(path);
+    }, allCoursesConfig(true));
+
+    const result = await call({ courseId: COURSE_A.Id });
+
+    expect(result.isError).toBe(true);
+  });
+});

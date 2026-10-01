@@ -133,6 +133,19 @@ const DOWNLOAD_FAILURE_GUIDANCE: Record<DownloadFailureKind, string> = {
 };
 
 /**
+ * True when an error means the session itself is unusable, not that one
+ * resource refused: a sign-in that failed or is still waiting on MFA, a 401
+ * left over after re-authentication, or a token that could not be renewed.
+ * Tools that tolerate per-route failures must not tolerate these, or a pending
+ * sign-in reads as a successful empty result.
+ */
+export function isAuthUnavailable(error: unknown): boolean {
+  return error instanceof AuthProcessError ||
+    error instanceof TokenRefreshError ||
+    (error instanceof ApiError && error.status === 401);
+}
+
+/**
  * Sanitize errors for user-friendly messages
  *
  * SECURITY: Never include stack traces, raw API responses, or token values
