@@ -19,7 +19,7 @@ Connects to D2L Brightspace. Automatic login supports Purdue's Microsoft Entra f
 
 ## Install
 
-**You need:** [Node.js 20+](https://nodejs.org/) and an available native credential store: macOS Keychain, Windows Credential Manager, or Linux Secret Service. Linux requires `secret-tool` and an unlocked desktop keyring. Install `libsecret-tools` on Debian/Ubuntu, or the package providing `secret-tool` on your distribution. A container or SSH session without Secret Service cannot persist authentication in v2.
+**You need:** [Node.js 20+](https://nodejs.org/) and a native credential store: macOS Keychain, Windows Credential Manager, or Linux Secret Service (requires `secret-tool` and an unlocked keyring — install `libsecret-tools` on Debian/Ubuntu, or your distribution's `secret-tool` package). A container or SSH session without Secret Service can't persist authentication in v2.
 
 **Option 1: Let your AI do it**
 
@@ -58,7 +58,7 @@ npx -y brightspace-mcp-server@latest setup --tudelft
 
 Use your NetID rather than your student email address. The TU Delft flow is headless NetID username and password sign-in only, including automatic re-authentication when the saved session expires; it does not support MFA or any other interactive step. If your account requires one, [open an issue](https://github.com/RohanMuppa/brightspace-mcp-server/issues) — that tenant isn't supported yet.
 
-The wizard saves your password in the native credential store and asks how you complete MFA. Authentication can wait for approval or number matching, prompt in the terminal for a code from Google Authenticator or another app, or open a visible browser for other interactive methods. The wizard can configure Claude Desktop, Cursor, Codex Desktop and CLI, and Claude Code when they are installed. Restart your AI client when it finishes.
+The wizard saves your password in the native credential store and asks how you'll complete MFA: wait for approval or number matching, enter a terminal code from Google Authenticator or another app, or use a visible browser for other interactive methods. It can also configure Claude Desktop, Cursor, Codex Desktop and CLI, and Claude Code when installed — restart your AI client when it finishes.
 
 Any other D2L school: run `setup` without a flag and paste your Brightspace URL (for example `https://yourschool.brightspace.com`).
 
@@ -95,27 +95,19 @@ Claude Desktop uses a separate configuration, which the setup wizard can update 
 
 ## Session Expired?
 
-There is nothing to log into first. Ask for your grades and the sign-in happens as part of that request, so the assistant never has to check whether you are authenticated before it can answer. Starting your AI client touches Brightspace not at all: a restart on its own will never set off an MFA prompt.
+There's no login step — asking a question signs you in.
 
-Returning the next day normally requires no action. The server renews short-lived API tokens over HTTPS using the saved Brightspace session. If that session ends, a browser restores your saved Microsoft session and tries silent SSO. Approval and code-based modes stay headless; when an automatic run needs a code, run the auth command below to enter it securely in the terminal.
+**Normal days:** tokens renew over HTTPS, and a background browser silently replays your saved Microsoft session (silent SSO) if it lapses.
 
-If visible-browser mode is configured, the auth command opens a window that stays open for up to five minutes so you can finish credentials and MFA manually when automatic sign-in cannot continue. Background recovery during a tool call always runs headless so it never opens a browser over your work; set `D2L_HEADLESS=false` in the server's environment to let it open one too. Rerunning setup preserves your previous hidden or visible choice as the prompt default.
+**When MFA is asked:** the number to approve shows up right in the tool's response, and sign-in finishes in the background — approve it, call the tool again, and use the newest number if one goes stale. TOTP apps (Google Authenticator, etc.) get prompted via the terminal; visible-browser mode opens a window instead, though automatic recovery during a tool call still runs headless unless you set `D2L_HEADLESS=false`. On Duo, sign-in auto-answers "Is this your device?" with **yes**, since a headless run has nobody to click it — this also makes Duo remember the device, so skip it on shared machines. Set `D2L_DUO_PASSCODE` to swap the push for a typed passcode.
 
-Your school's policy controls when MFA is required. There is no local 24-hour cutoff, and the server no longer discards browser state after one hour. A network outage preserves the saved session and returns a temporary error.
-
-If you miss an MFA request, automatic browser authentication pauses for five minutes before trying again. Existing tokens and HTTP token renewal still work. Browser-based SSO also pauses because Microsoft can send another phone prompt during a redirect, even without a password submission. Run this command in a terminal to retry immediately, see a number match, or enter an authenticator code:
+**If it gets stuck:** a missed MFA approval pauses automatic sign-in for 5 minutes. This retries immediately, takes over a stuck sign-in, or asks for a code:
 
 ```bash
 npx -y brightspace-mcp-server@latest auth
 ```
 
-Run it from your home folder. On macOS, a terminal that lacks Files and Folders permission (the terminal panel inside Claude Desktop, or a fresh editor terminal) cannot start `npx` from inside Documents, Desktop, or Downloads — it fails with `EPERM: process.cwd failed … uv_cwd` before the server runs. The same applies if your AI client launches the server with one of those folders as its working directory; grant the app access under System Settings → Privacy & Security → Files and Folders, or start the server elsewhere.
-
-**MFA at Purdue** commonly uses Microsoft Authenticator number matching (some schools use Duo instead). When a sign-in needs it, the tool call itself returns quickly with the number to enter, rather than sitting silent for up to five minutes — approve it on your phone, then call the tool again; sign-in finishes in the background in the meantime. Google Authenticator and other one-time-code apps work too, with no setting to change: run the auth command above in a terminal and it prompts for the code when your provider asks for one. Pick the visible-browser option during setup only if your identity provider needs interaction the server cannot drive. The MCP also sends authentication progress as logging notifications to clients that display them, useful if you don't see the number in the tool response for some reason.
-
-The number in that response can go stale if the request times out or you tap Deny before approving it: the server asks Microsoft for another one and the next tool call reports the new number, so always enter whatever number the most recent response shows. If a background sign-in gets stuck, running the auth command above in a terminal takes it over immediately instead of waiting for it to finish or time out.
-
-**On a Duo tenant**, if Duo asks "Is this your device?" before it will send a push, automatic sign-in answers **yes** so the push can go out at all — a headless run has nobody to click it otherwise. That also makes Duo remember the device, which skips its own device check on later logins from this machine. Don't run automatic sign-in on a shared or public computer if you'd rather Duo keep asking. Setting `D2L_DUO_PASSCODE` to any value switches from waiting for a push to typing a code from Duo Mobile's passcode option instead.
+Run it from your home folder — macOS blocks `npx` from Documents, Desktop, or Downloads without Files and Folders permission (`EPERM`). Grant access in System Settings → Privacy & Security → Files and Folders, or run elsewhere.
 
 ## What You Can Ask About
 
