@@ -23,11 +23,17 @@ interface PageOptions {
    * before it disappears and the normal two-step flow continues.
    */
   passwordDuringEmail?: boolean | "flash";
+  /**
+   * `"password"` models Microsoft's password page after awaitSilentSSO clicks
+   * "Use your password instead" on a remembered account: no username field,
+   * because Microsoft already knows the account.
+   */
+  startOn?: "email" | "password";
 }
 
 /** Render each Entra stage independently, including a delayed password field. */
 function makePage(options: PageOptions = {}) {
-  let phase: "email" | "password" | "done" = "email";
+  let phase: "email" | "password" | "done" = options.startOn ?? "email";
   let sinceNext = 0;
   let nextClicks = 0;
   let passwordDuringEmailChecks = 0;
@@ -86,6 +92,13 @@ function makePage(options: PageOptions = {}) {
       vi.advanceTimersByTime(milliseconds);
       if (phase === "password") sinceNext += milliseconds;
     }),
+    // Enough of the login surface for the real login(): Microsoft until the
+    // password is submitted, then a verified Brightspace home.
+    url: () => phase === "done" ? `${PURDUE}/d2l/home` : "https://login.microsoftonline.com/common/login",
+    getByText: vi.fn(() => ({ first: () => absent })),
+    getByRole: vi.fn(() => ({ first: () => absent })),
+    context: () => ({ cookies: async () => [{ name: "d2lSessionVal", value: "session" }] }),
+    evaluate: async () => true,
   };
   return { page, actions, email, password, next, submit };
 }
@@ -186,6 +199,18 @@ describe("PurdueSSOFlow credential choreography ported from Brightspace Bar", ()
     await expect(flow.identifyAccount(form.page as never)).resolves.toBe(true);
     await enterCredentials(flow, form.page);
     expect(form.actions).toEqual(["email", "next", "password", "submit"]);
+  });
+
+  it("signs in from Microsoft's password page when it shows no username field", async () => {
+    // awaitSilentSSO clicked "Use your password instead" on a remembered
+    // account's approval view, so no account hint was submitted this login
+    // and Microsoft asks only for the password.
+    const form = makePage({ startOn: "password" });
+    const flow = new PurdueSSOFlow({ username: USERNAME, password: PASSWORD, baseUrl: PURDUE });
+
+    await expect(flow.login(form.page as never)).resolves.toBe(true);
+    expect(form.actions).toEqual(["password", "submit"]);
+    expect(form.password.fill).toHaveBeenCalledWith(PASSWORD);
   });
 
   it("supports Microsoft's loginfmt and passwd field-name fallbacks", async () => {

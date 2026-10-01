@@ -217,7 +217,11 @@ export class PurdueSSOFlow {
     // and then blames a missing password field.
     const hintAccepted = this.accountHintSubmitted && !await this.anyVisible(page, EMAIL_SELECTORS);
     this.accountHintSubmitted = false;
-    if (!hintAccepted) {
+    // Microsoft can also know the account without a hint from this login: a
+    // remembered account's passwordless approval view, once awaitSilentSSO
+    // takes "Use your password instead", leads to a password page with no
+    // username field at all.
+    if (!hintAccepted && !await this.isPasswordOnlyPage(page)) {
       const email = signInName(this.config.username, this.config.baseUrl);
       if (!await this.fillWhenReady(page, EMAIL_SELECTORS, email)) {
         throw new UnsupportedAuthenticationError("The identity provider's username field did not appear. Automatic sign-in cannot continue.");
@@ -298,6 +302,11 @@ export class PurdueSSOFlow {
     if (!await this.anyVisible(page, PASSWORD_SELECTORS)) return false;
     await page.waitForTimeout(FIELD_POLL_MS);
     return await this.anyVisible(page, PASSWORD_SELECTORS);
+  }
+
+  /** A stable password field with no username field beside it. */
+  private async isPasswordOnlyPage(page: Page): Promise<boolean> {
+    return await this.hasCoVisiblePassword(page) && !await this.anyVisible(page, EMAIL_SELECTORS);
   }
 
   private async hasPostCredentialChallenge(page: Page): Promise<boolean> {
