@@ -18,6 +18,10 @@
  * from inside a live process, which is the thing this package deliberately
  * does not do.
  *
+ * Automatic sign-in (`--automatic`, spawned by the server's AuthRunner) never
+ * re-execs: it must run the auth CLI shipped alongside that server, not
+ * whatever npm calls latest. Only a user-run `auth` self-updates.
+ *
  * Opt out with D2L_NO_UPDATE_CHECK.
  */
 
@@ -91,9 +95,10 @@ export async function reexecLatestIfStale(deps: ReexecDeps = {}): Promise<number
 
   if (installedVersion === undefined) return null;
 
-  // Cheap local checks first, so an opted-out or npx-launched run never even
-  // touches the network.
+  // Cheap local checks first, so an opted-out, npx-launched, or automatic run
+  // never even touches the network.
   if (env[REEXEC_SENTINEL] || env.D2L_NO_UPDATE_CHECK || runningFromNpxCache) return null;
+  if (argv.includes("--automatic")) return null; // stay on the server's sibling version
 
   const latest = await fetchLatestVersion(fetchImpl);
   if (!shouldReexec({ env, latest, installedVersion, runningFromNpxCache })) return null;
