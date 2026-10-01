@@ -7,7 +7,14 @@ const BASE = "https://brightspace.tudelft.nl";
 const IDP = "https://login.tudelft.nl/idp/profile/SAML2/Redirect/SSO";
 const config = { username: "fixture-netid", password: "fixture-password" };
 
-function fixture(options: { url?: string; consent?: boolean; rejected?: boolean; redirectOnUsername?: boolean; stall?: boolean } = {}) {
+function fixture(options: {
+  url?: string;
+  consent?: boolean;
+  rejected?: boolean;
+  benignAlert?: boolean;
+  redirectOnUsername?: boolean;
+  stall?: boolean;
+} = {}) {
   let current = options.url ?? IDP;
   let submitted = false;
   const fills: Array<[string, string]> = [];
@@ -16,9 +23,17 @@ function fixture(options: { url?: string; consent?: boolean; rejected?: boolean;
     url: () => current,
     locator: vi.fn((selector: string) => ({ first: () => ({
       isVisible: async () => {
-        if (current === IDP) return ['input#username', 'input#password', '#submit_button'].includes(selector)
-          || (selector === '[role="alert"]' && submitted && options.rejected === true);
+        if (current === IDP) {
+          if (['input#username', 'input#password', '#submit_button'].includes(selector)) return true;
+          if (selector === '[role="alert"]' && submitted && (options.rejected === true || options.benignAlert === true)) return true;
+          return false;
+        }
         return current.startsWith('https://engine.surfconext.nl/') && selector === '#consent_accept';
+      },
+      textContent: async () => {
+        if (options.rejected === true) return 'Incorrect username or password. Please try again.';
+        if (options.benignAlert === true) return 'This site uses cookies to improve your experience.';
+        return '';
       },
       fill: async (value: string) => {
         fills.push([selector, value]);
@@ -27,11 +42,17 @@ function fixture(options: { url?: string; consent?: boolean; rejected?: boolean;
       click: async () => {
         clicks.push(selector);
         submitted = true;
-        if (!options.rejected && !options.stall) current = options.consent && selector !== '#consent_accept'
+        if (!options.rejected && !options.benignAlert && !options.stall) current = options.consent && selector !== '#consent_accept'
           ? 'https://engine.surfconext.nl/consent' : `${BASE}/d2l/home`;
       },
     }) })),
-    waitForTimeout: vi.fn(async () => { if (options.stall) vi.advanceTimersByTime(60_001); }),
+    waitForTimeout: vi.fn(async (ms: number) => {
+      if (options.stall) { vi.advanceTimersByTime(60_001); return; }
+      // Drive the fake clock forward for scenarios that need several polls to
+      // observe (e.g. the settle window before an alert is trusted) without
+      // waiting on it in real time.
+      if (vi.isFakeTimers()) await vi.advanceTimersByTimeAsync(ms);
+    }),
   };
   return { page, fills, clicks };
 }
@@ -90,6 +111,19 @@ describe("TU Delft NetID sign-in", () => {
     await expect(new TUDelftSSOFlow(config).login(f.page as never)).rejects.toThrow('sign-in was rejected');
     expect(f.clicks).toEqual(['#submit_button']);
   });
+
+  it("ignores a standing non-error alert banner instead of treating it as a rejection", async () => {
+    vi.useFakeTimers();
+    const f = fixture({ benignAlert: true });
+    const error = await new TUDelftSSOFlow(config).login(f.page as never).catch((e: unknown) => e);
+    // The benign banner persists for the whole attempt (it never matches the
+    // rejection text), so sign-in runs out the clock rather than reporting a
+    // rejection it never actually saw.
+    expect(error).toBeInstanceOf(UnsupportedAuthenticationError);
+    expect((error as Error).message).not.toMatch(/was rejected/);
+    expect((error as Error).message).toMatch(/did not reach Brightspace/);
+    expect(f.clicks).toEqual(['#submit_button']);
+  }, 15_000);
 
   it("bounds a stalled sign-in and returns an actionable failure", async () => {
     vi.useFakeTimers();

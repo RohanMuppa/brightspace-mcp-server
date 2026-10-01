@@ -10,6 +10,12 @@ const BRIGHTSPACE_HOST = "brightspace.tudelft.nl";
 const NETID_HOST = "login.tudelft.nl";
 const SURFCONEXT_HOST = "engine.surfconext.nl";
 const LOGIN_TIMEOUT_MS = 60_000;
+// Give the login page time to settle after submission before trusting any
+// alert banner as a rejection: a 1 second margin, or two polls, whichever a
+// given test/runtime environment can observe.
+const REJECTION_SETTLE_MS = 1_000;
+const REJECTION_SETTLE_POLLS = 2;
+const REJECTION_TEXT_PATTERN = /invalid|incorrect|rejected|wrong|failed|onjuist|ongeldig/i;
 
 interface TUDelftSSOConfig {
   username?: string;
@@ -36,6 +42,24 @@ function isNetID(url: URL): boolean {
   return url.protocol === "https:" && url.hostname.toLowerCase() === NETID_HOST;
 }
 
+/**
+ * Only a specific error container counts as a rejection on its own. A bare
+ * `[role="alert"]` is also common for benign, standing banners (maintenance
+ * notices, cookie prompts) that have nothing to do with the credentials just
+ * submitted, so it only counts when its text reads like a rejection.
+ */
+async function findRejectionAlert(page: Page): Promise<Locator | null> {
+  const specific = await firstVisible(page, ['.form-error', '.login-error', '.alert-danger', '#error', '[role="alert"].error']);
+  if (specific) return specific;
+
+  const generic = await firstVisible(page, ['[role="alert"]']);
+  if (generic) {
+    const text = (await generic.textContent().catch(() => null)) ?? "";
+    if (REJECTION_TEXT_PATTERN.test(text)) return generic;
+  }
+  return null;
+}
+
 /** NetID uses a simultaneous username/password form and normally requires no MFA. */
 export class TUDelftSSOFlow implements SSOFlow {
   constructor(private readonly config: TUDelftSSOConfig) {}
@@ -48,12 +72,29 @@ export class TUDelftSSOFlow implements SSOFlow {
     if (!this.hasCredentials()) return false;
     log("INFO", "Starting TU Delft NetID sign-in");
     let submitted = false;
+    let submittedAt: number | null = null;
+    let pollsSinceSubmit = 0;
     let consentSubmitted = false;
     const deadline = Date.now() + LOGIN_TIMEOUT_MS;
 
     try {
       do {
-        const current = new URL(page.url());
+        let current: URL;
+        try {
+          current = new URL(page.url());
+        } catch {
+          // Not a parseable URL (e.g. a transient navigation state). Give it
+          // another poll instead of treating it as a fatal unknown host.
+          await page.waitForTimeout(250);
+          continue;
+        }
+        if (current.protocol !== "https:" && current.protocol !== "http:") {
+          // about:blank and similar interstitial pages show up between
+          // navigations; they're not an identity-provider page to evaluate.
+          await page.waitForTimeout(250);
+          continue;
+        }
+
         if (current.origin === `https://${BRIGHTSPACE_HOST}` && /^\/d2l\/home(?:\/|$)/.test(current.pathname)) {
           return true;
         }
@@ -73,9 +114,17 @@ export class TUDelftSSOFlow implements SSOFlow {
               await password.fill(this.config.password!);
               await submit.click();
               submitted = true;
+              submittedAt = Date.now();
             }
-          } else if (await firstVisible(page, ['[role="alert"]', '.form-error', '.login-error'])) {
-            throw new UnsupportedAuthenticationError("TU Delft NetID sign-in was rejected. Check the saved NetID and password.");
+          } else {
+            pollsSinceSubmit++;
+            const settled = pollsSinceSubmit >= REJECTION_SETTLE_POLLS
+              || (submittedAt !== null && Date.now() - submittedAt >= REJECTION_SETTLE_MS);
+            // Recheck the host: the alert lookup is async and must not act on
+            // a page that has since navigated away from NetID.
+            if (settled && isNetID(new URL(page.url())) && await findRejectionAlert(page)) {
+              throw new UnsupportedAuthenticationError("TU Delft NetID sign-in was rejected. Check the saved NetID and password.");
+            }
           }
         } else if (current.protocol === "https:" && current.hostname.toLowerCase() === SURFCONEXT_HOST) {
           // A user's first visit may require consent to share information with

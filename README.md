@@ -56,7 +56,7 @@ TU Delft students can use `--tudelft` to select the Brightspace URL and NetID lo
 npx -y brightspace-mcp-server@latest setup --tudelft
 ```
 
-Use your NetID rather than your student email address. The usual NetID flow runs headlessly without MFA, including automatic re-authentication when the saved session expires. If your account needs an interactive step, choose a visible browser during setup or retry with `D2L_HEADLESS=false`.
+Use your NetID rather than your student email address. The TU Delft flow is headless NetID username and password sign-in only, including automatic re-authentication when the saved session expires; it does not support MFA or any other interactive step. If your account requires one, [open an issue](https://github.com/RohanMuppa/brightspace-mcp-server/issues) — that tenant isn't supported yet.
 
 The wizard saves your password in the native credential store and asks how you complete MFA. Authentication can wait for approval or number matching, prompt in the terminal for a code from Google Authenticator or another app, or open a visible browser for other interactive methods. The wizard can configure Claude Desktop, Cursor, Codex Desktop and CLI, and Claude Code when they are installed. Restart your AI client when it finishes.
 
