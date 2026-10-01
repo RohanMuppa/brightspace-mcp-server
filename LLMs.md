@@ -140,6 +140,8 @@ src/
     tool-helpers.ts         Shared helpers (course resolution, formatting)
     get-*.ts                One file per tool
     download-file.ts        Binary download + file-type detection
+    content-availability.ts Shared release-window logic (hidden/locked/not_yet_open/ended)
+    topic-availability.ts   Explains a download_file failure using topic/TOC availability metadata
   api/
     client.ts               HTTP client wrapping the Valence/D2L API. lp()/le()
                             leave the version as a {lp}/{le} placeholder that
