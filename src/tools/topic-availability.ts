@@ -1,3 +1,9 @@
+/**
+ * Purdue Brightspace MCP Server
+ * Copyright (c) 2026 Rohan Muppa. All rights reserved.
+ * Licensed under MIT — see LICENSE file for details.
+ */
+
 import { ApiError, DEFAULT_CACHE_TTLS, type D2LApiClient } from "../api/index.js";
 import { contentAvailability, type AvailabilityMetadata, type ContentAvailability } from "./content-availability.js";
 import { log } from "../utils/logger.js";
@@ -11,7 +17,7 @@ export interface UnavailableTopic {
   courseId: number;
   topicId: number;
   title?: string;
-  reason: Exclude<ContentAvailability["availabilityStatus"], "available"> | "restricted";
+  reason: Exclude<ContentAvailability["availabilityStatus"], "available">;
   startDate: string | null;
   endDate: string | null;
   message: string;
@@ -95,13 +101,14 @@ export async function checkTopicAvailability(
   const availability = direct ? contentAvailability(direct, now, fromToc?.availability) : fromToc!.availability;
   const title = typeof metadata.Title === "string" ? metadata.Title
     : typeof fromToc?.metadata.Title === "string" ? fromToc.metadata.Title : undefined;
-  if (availability.isAvailable && httpStatus !== 403) return null;
+  // Additive only: if the metadata itself says the topic is available, it
+  // doesn't explain the download failure — keep the original error instead
+  // of manufacturing a misleading "restricted" response.
+  if (availability.isAvailable) return null;
   return {
     success: false, available: false, courseId, topicId, ...(title ? { title } : {}),
-    reason: availability.isAvailable ? "restricted" : availability.availabilityStatus as UnavailableTopic["reason"],
+    reason: availability.availabilityStatus as UnavailableTopic["reason"],
     startDate: availability.startDate, endDate: availability.endDate,
-    message: availability.isAvailable
-      ? "This topic is listed in the course, but Brightspace denied access. Permissions or release conditions may apply."
-      : availability.availabilityMessage,
+    message: availability.availabilityMessage,
   };
 }

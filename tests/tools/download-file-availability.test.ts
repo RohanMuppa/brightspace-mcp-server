@@ -1,12 +1,23 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { ApiError } from "../../src/api/errors.js";
 import { registerDownloadFile } from "../../src/tools/download-file.js";
 
 const future = "2099-01-01T09:00:00Z";
 const past = "2000-01-01T09:00:00Z";
 
-beforeEach(() => { vi.spyOn(console, 'error').mockImplementation(() => {}); });
-afterEach(() => { vi.restoreAllMocks(); });
+let downloadPath: string;
+
+beforeEach(async () => {
+  vi.spyOn(console, 'error').mockImplementation(() => {});
+  downloadPath = await fs.mkdtemp(path.join(os.tmpdir(), "download-file-availability-"));
+});
+afterEach(async () => {
+  vi.restoreAllMocks();
+  await fs.rm(downloadPath, { recursive: true, force: true });
+});
 
 function harness(options: { status?: number; metadata?: unknown; metadataError?: Error; toc?: unknown; tocError?: Error; rawError?: Error } = {}) {
   const client = {
@@ -29,7 +40,7 @@ function harness(options: { status?: number; metadata?: unknown; metadataError?:
   return {
     client,
     call: async () => {
-      const response = await handler({ courseId: 42, topicId: 101, downloadPath: '/private/tmp' });
+      const response = await handler({ courseId: 42, topicId: 101, downloadPath });
       return { response, data: response.isError ? { message: response.content[0].text } : JSON.parse(response.content[0].text) };
     },
   };
@@ -76,10 +87,11 @@ describe('unavailable file explanations', () => {
     expect(data.reason).toBe(reason);
   });
 
-  it('explains a confirmed topic with permission or release-condition restrictions', async () => {
-    const { data } = await harness({ status: 403, metadata: { Id: 101, Title: 'Known topic' } }).call();
-    expect(data.reason).toBe('restricted');
-    expect(data.message).toContain('Permissions or release conditions');
+  it('preserves the original access-denied error when metadata says the topic is available', async () => {
+    const { response, data } = await harness({ status: 403, metadata: { Id: 101, Title: 'Known topic' } }).call();
+    expect(response.isError).toBe(true);
+    expect(data.reason).toBeUndefined();
+    expect(data.message).toContain('Access denied');
   });
 
   it.each([

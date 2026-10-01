@@ -1,3 +1,9 @@
+/**
+ * Purdue Brightspace MCP Server
+ * Copyright (c) 2026 Rohan Muppa. All rights reserved.
+ * Licensed under MIT — see LICENSE file for details.
+ */
+
 /** Release windows shared by content listings and unavailable-file responses. */
 export type AvailabilityStatus = "available" | "not_yet_open" | "locked" | "hidden" | "ended";
 
@@ -21,8 +27,15 @@ export interface AvailabilityMetadata {
   EndDateTime?: string | null;
 }
 
+const ISO_8601_PATTERN =
+  /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:?\d{2})?)?$/;
+
 function validDate(value: unknown): string | null {
-  return typeof value === "string" && value.trim() !== "" && Number.isFinite(Date.parse(value)) ? value : null;
+  return typeof value === "string" &&
+    ISO_8601_PATTERN.test(value.trim()) &&
+    Number.isFinite(Date.parse(value))
+    ? value
+    : null;
 }
 
 function limitDate(own: string | null, parent: string | null, latest: boolean): string | null {
@@ -49,15 +62,15 @@ export function contentAvailability(
   } else if (endDate && Date.parse(endDate) <= now.getTime()) {
     availabilityStatus = "ended";
     availabilityMessage = `This content's availability window has ended (closed at ${endDate}).`;
+  } else if (item.IsLocked === true || parent?.availabilityStatus === "locked") {
+    availabilityStatus = "locked";
+    availabilityMessage = "This content is locked by the instructor or an enclosing module.";
   } else if (startDate && endDate && Date.parse(startDate) >= Date.parse(endDate)) {
     availabilityStatus = "locked";
     availabilityMessage = "The content and its enclosing modules have no overlapping availability window.";
   } else if (startDate && Date.parse(startDate) > now.getTime()) {
     availabilityStatus = "not_yet_open";
     availabilityMessage = `This content has not been released by the instructor yet (available from ${startDate}).`;
-  } else if (item.IsLocked === true || parent?.availabilityStatus === "locked") {
-    availabilityStatus = "locked";
-    availabilityMessage = "This content is locked by the instructor or an enclosing module.";
   }
   return { isAvailable: availabilityStatus === "available", availabilityStatus, availabilityMessage, startDate, endDate };
 }

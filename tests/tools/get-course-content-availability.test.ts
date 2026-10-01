@@ -23,10 +23,14 @@ function harness(moduleFlags: object = {}, topicFlags: object = {}) {
 }
 
 describe('course content release windows', () => {
-  it('includes complete availability fields for available modules and topics', async () => {
+  it('omits availability fields for available modules and topics, matching isHidden/isLocked', async () => {
     const data = await harness()();
     for (const item of [data.contentTree[0], data.contentTree[0].children[0]]) {
-      expect(item).toMatchObject({ isAvailable: true, availabilityStatus: 'available', availabilityMessage: expect.any(String), startDate: null, endDate: null });
+      expect(item.isAvailable).toBeUndefined();
+      expect(item.availabilityStatus).toBeUndefined();
+      expect(item.availabilityMessage).toBeUndefined();
+      expect(item.startDate).toBeUndefined();
+      expect(item.endDate).toBeUndefined();
     }
   });
 
@@ -45,7 +49,7 @@ describe('course content release windows', () => {
 
   it('keeps a topic-specific window inside an available module', async () => {
     const data = await harness({}, { StartDate: '2099-02-01T00:00:00Z' })();
-    expect(data.contentTree[0].isAvailable).toBe(true);
+    expect(data.contentTree[0].isAvailable).toBeUndefined();
     expect(data.contentTree[0].children[0].availabilityStatus).toBe('not_yet_open');
   });
 });

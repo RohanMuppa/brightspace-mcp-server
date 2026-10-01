@@ -80,6 +80,24 @@ function matchesTypeFilter(item: ContentObject, filter: string): boolean {
 const MAX_CONTENT_DEPTH = 12;
 
 /**
+ * Availability fields are additive, matching the isHidden/isLocked convention
+ * above: an available item carries none of them (absence = available), and a
+ * restricted one omits startDate/endDate when there is no actual bound
+ * rather than emitting a null.
+ */
+function availabilityFields(availability: ContentAvailability): Record<string, unknown> {
+  if (availability.isAvailable) return {};
+  const { isAvailable, availabilityStatus, availabilityMessage, startDate, endDate } = availability;
+  return {
+    isAvailable,
+    availabilityStatus,
+    availabilityMessage,
+    ...(startDate ? { startDate } : {}),
+    ...(endDate ? { endDate } : {}),
+  };
+}
+
+/**
  * Recursively build the content tree with progress tracking.
  */
 async function buildContentTree(
@@ -141,7 +159,7 @@ async function buildContentTree(
           ...(item.ModuleDueDate ? { dueDate: item.ModuleDueDate } : {}),
           ...(item.IsHidden ? { isHidden: item.IsHidden } : {}),
           ...(item.IsLocked ? { isLocked: item.IsLocked } : {}),
-          ...availability,
+          ...availabilityFields(availability),
           lastModified: item.LastModifiedDate ?? null,
           children: processedChildren,
         });
@@ -164,7 +182,7 @@ async function buildContentTree(
         title: item.Title,
         ...(item.IsHidden ? { isHidden: item.IsHidden } : {}),
         ...(item.IsLocked ? { isLocked: item.IsLocked } : {}),
-        ...availability,
+        ...availabilityFields(availability),
         ...(item.DueDate ? { dueDate: item.DueDate } : {}),
         lastModified: item.LastModifiedDate ?? null,
         isCompleted: topicProgress?.IsRead ?? false,
@@ -262,7 +280,7 @@ export function registerGetCourseContent(
     {
       title: "Get Course Content",
       description:
-        "Fetch the content tree for a course showing modules, topics, files, and links. Use this when the user asks about course materials, lecture slides, uploaded files, content structure, or what's in a course module. Use moduleTitle to filter to a specific module (e.g. 'Labs', 'Staff', 'Homeworks') instead of fetching the entire tree. Use maxDepth to limit recursion depth for a table-of-contents view.",
+        "Fetch the content tree for a course showing modules, topics, files, and links. Use this when the user asks about course materials, lecture slides, uploaded files, content structure, or what's in a course module. Use moduleTitle to filter to a specific module (e.g. 'Labs', 'Staff', 'Homeworks') instead of fetching the entire tree. Use maxDepth to limit recursion depth for a table-of-contents view. A module or topic that isn't currently available carries isAvailable/availabilityStatus/availabilityMessage (and startDate/endDate when known) explaining why; absence of these fields means it's available now.",
       inputSchema: GetCourseContentSchema,
     },
     async (args: any) => {

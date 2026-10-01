@@ -13,7 +13,7 @@ describe("content availability", () => {
     [{ StartDate: future, EndDate: past }, "ended"],
     [{ IsHidden: true }, "hidden"],
     [{ IsLocked: true }, "locked"],
-    [{ IsLocked: true, StartDate: future }, "not_yet_open"],
+    [{ IsLocked: true, StartDate: future }, "locked"],
     [{ IsHidden: true, StartDate: future }, "hidden"],
     [{ StartDate: now.toISOString() }, "available"],
     [{ EndDate: now.toISOString() }, "ended"],
@@ -37,6 +37,19 @@ describe("content availability", () => {
 
   it("does not claim a restriction from malformed dates", () => {
     expect(contentAvailability({ StartDate: "invalid", EndDate: "" }, now)).toMatchObject({ isAvailable: true, startDate: null, endDate: null });
+  });
+
+  it("rejects a non-ISO-8601 date string instead of parsing it loosely", () => {
+    expect(contentAvailability({ StartDate: "December 2030" }, now)).toMatchObject({ isAvailable: true, availabilityStatus: "available", startDate: null });
+  });
+
+  it("does not report a locked parent as merely not yet open", () => {
+    const parent = contentAvailability({ IsLocked: true }, now);
+    expect(contentAvailability({ StartDate: future }, now, parent)).toMatchObject({ isAvailable: false, availabilityStatus: "locked" });
+  });
+
+  it("does not report its own IsLocked flag as a future release date", () => {
+    expect(contentAvailability({ IsLocked: true, StartDate: future }, now)).toMatchObject({ isAvailable: false, availabilityStatus: "locked" });
   });
 
   it("intersects topic and module windows", () => {

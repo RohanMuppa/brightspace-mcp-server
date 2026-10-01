@@ -10,7 +10,6 @@ import { DownloadFileSchema } from "./schemas.js";
 import { toolResponse, sanitizeError, errorResponse } from "./tool-helpers.js";
 import { log } from "../utils/logger.js";
 import { checkTopicAvailability } from "./topic-availability.js";
-export { checkTopicAvailability } from "./topic-availability.js";
 // Path containment and magic-byte checks belong to secureDownload, which both
 // download paths below go through; importing them here only made it look as
 // though this file validated anything itself.
@@ -31,7 +30,7 @@ export function registerDownloadFile(
     {
       title: "Download File",
       description:
-        "Download a file from course content, assignment submissions, or an announcement's attachments to a local directory. Use this when the user wants to download, save, or get a file from Brightspace course content, dropbox submissions, or an announcement (newsId + fileId, from get_announcements). IMPORTANT: You MUST ask the user where they want to save the file before calling this tool. Never guess or assume a download directory. After identifying the file to download, suggest a clean readable filename to the user (e.g., 'Lecture 7 - Memory Management.pdf' instead of 'L07_CS251_2026SP_v2.pdf') and ask if they'd like to rename it. Pass their preferred name as customFilename, or omit it to keep the original.",
+        "Download a file from course content, assignment submissions, or an announcement's attachments to a local directory. Use this when the user wants to download, save, or get a file from Brightspace course content, dropbox submissions, or an announcement (newsId + fileId, from get_announcements). IMPORTANT: You MUST ask the user where they want to save the file before calling this tool. Never guess or assume a download directory. After identifying the file to download, suggest a clean readable filename to the user (e.g., 'Lecture 7 - Memory Management.pdf' instead of 'L07_CS251_2026SP_v2.pdf') and ask if they'd like to rename it. Pass their preferred name as customFilename, or omit it to keep the original. If a content-topic download fails because the file isn't released yet, the response explains why when Brightspace's module/topic metadata supports it (not yet open, ended, locked, or hidden).",
       inputSchema: DownloadFileSchema,
     },
     async (args: any) => {
