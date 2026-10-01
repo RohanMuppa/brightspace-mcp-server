@@ -11,6 +11,7 @@ import { MfaApprovalError, UnsupportedAuthenticationError } from "./sso-flow.js"
 import type { RequestMfaCode } from "./sso-flow.js";
 import { DuoMfaHandler } from "./duo-mfa.js";
 import { AUTH_COMMAND } from "../utils/commands.js";
+import type { RememberMfaOutcome, RememberMfaResult } from "./microsoft-session.js";
 
 // Entra names its username field type=email/loginfmt; Shibboleth portals (USC's
 // login.usc.edu among them) use the protocol's j_username.
@@ -29,6 +30,23 @@ const FIELD_POLL_MS = 250;
 const NUMBER_MATCH_SELECTOR = "#idRichContext_DisplaySign";
 const MFA_CODE_SELECTORS = ["#idTxtBx_SAOTCC_OTC", 'input[name="otc"]'];
 const MFA_CODE_SUBMIT_SELECTORS = ["#idSubmit_SAOTCC_Continue", "#idSIButton9"];
+
+/**
+ * Entra's "Don't ask again for N days" checkbox: the number-match page's id
+ * first, then the verification-code page's, then the label text for a tenant
+ * that renames both. "Stay signed in?" only keeps the session; this box is
+ * what lets the tenant skip the second factor, and the page navigates the
+ * instant the phone approves, so it is ticked before the challenge is
+ * announced or a code is asked for.
+ */
+const REMEMBER_MFA_SELECTORS = ["#idChkBx_SAOTCAS_TD", "#idChkBx_SAOTCC_TD"];
+const REMEMBER_MFA_LABEL = /don.t ask again/i;
+const REMEMBER_MFA_LOG: Record<RememberMfaOutcome, string> = {
+  ticked: "ticked",
+  already: "already checked",
+  absent: "not offered by tenant",
+  unknown: "could not be ticked",
+};
 
 /** How often to look for the number while waiting on MFA. */
 const NUMBER_MATCH_POLL_MS = 2000;
@@ -91,6 +109,8 @@ interface PurdueSSOConfig {
   baseUrl?: string;
   headless?: boolean;
   requestMfaCode?: RequestMfaCode;
+  /** Tick Entra's "Don't ask again" box on the MFA page. Defaults to true; false is D2L_REMEMBER_MFA=false. */
+  rememberMfa?: boolean;
   /**
    * Fired as soon as an MFA challenge is visible: with the number-match
    * digits when one is already on screen, otherwise null. Fired again, with
@@ -116,6 +136,8 @@ export class PurdueSSOFlow {
   private accountHintSubmitted = false;
   /** One authenticator code per login. See submitMfaCode. */
   private mfaCodeSubmitted = false;
+  /** Set once per login, the first time Entra's MFA page is handled. */
+  private rememberMfa: RememberMfaResult | undefined;
   private readonly duoMfa: DuoMfaHandler;
 
   constructor(config: PurdueSSOConfig) {
@@ -128,6 +150,11 @@ export class PurdueSSOFlow {
    */
   hasCredentials(): boolean {
     return Boolean(this.config.username && this.config.password);
+  }
+
+  /** What Entra's "Don't ask again" checkbox did, once its MFA page has appeared. */
+  rememberMfaResult(): RememberMfaResult | undefined {
+    return this.rememberMfa;
   }
 
   async prepareLogin(page: Page): Promise<void> {
@@ -352,6 +379,7 @@ export class PurdueSSOFlow {
           await page.locator("#idDiv_SAOTCAS_Title").first().isVisible().catch(() => false) ||
           await page.locator("#idDiv_SAOTCC_Title").first().isVisible().catch(() => false);
         if (challengeVisible && !challenged) {
+          await this.rememberMfaDevice(page);
           challenged = true;
           log("WARN", "Waiting up to 5 minutes for Microsoft MFA approval on your device.");
           this.config.onMfaChallenge?.(number);
@@ -478,6 +506,7 @@ export class PurdueSSOFlow {
         `This MFA method requires a code. Run \`${AUTH_COMMAND}\` in a terminal to enter it.`,
       );
     }
+    await this.rememberMfaDevice(page);
     this.mfaCodeSubmitted = true;
     const code = await this.config.requestMfaCode();
     if (!/^\d{6,8}$/.test(code)) throw new UnsupportedAuthenticationError("The MFA code must contain 6-8 digits.");
@@ -487,6 +516,34 @@ export class PurdueSSOFlow {
     else await input.press("Enter");
     log("INFO", "Authenticator code submitted");
     return true;
+  }
+
+  /**
+   * Tick Entra's "Don't ask again" box, once per login and never in a loop.
+   * An already-checked box is left alone so this can never untick it.
+   */
+  private async rememberMfaDevice(page: Page): Promise<void> {
+    if (this.rememberMfa || this.config.rememberMfa === false) return;
+    if (new URL(page.url()).hostname !== "login.microsoftonline.com") return;
+    // A nicety, never a reason to fail sign-in: any surprise is "unknown".
+    let outcome: RememberMfaOutcome;
+    try {
+      let box = await this.firstVisible(page, REMEMBER_MFA_SELECTORS);
+      if (!box) {
+        const labelled = page.getByLabel(REMEMBER_MFA_LABEL).first();
+        if (await labelled.isVisible().catch(() => false)) box = labelled;
+      }
+      if (!box) outcome = "absent";
+      else if (await box.isChecked()) outcome = "already";
+      else {
+        await box.check({ timeout: 5_000 });
+        outcome = "ticked";
+      }
+    } catch {
+      outcome = "unknown";
+    }
+    this.rememberMfa = { outcome, at: new Date().toISOString() };
+    log("INFO", `Entra remember-MFA checkbox: ${REMEMBER_MFA_LOG[outcome]}`);
   }
 
   private async firstVisible(page: Page, selectors: readonly string[]): Promise<Locator | null> {

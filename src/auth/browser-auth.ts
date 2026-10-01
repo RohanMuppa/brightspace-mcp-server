@@ -14,7 +14,8 @@ import { createSSOFlow, UnsupportedAuthenticationError, MfaApprovalError } from 
 import type { SSOFlow } from "./sso-flow.js";
 import type { RequestMfaCode, OnMfaChallenge } from "./sso-flow.js";
 import { isDuoPrompt } from "./duo-mfa.js";
-import { BrowserStateStore } from "./browser-state-store.js";
+import { BrowserStateStore, type BrowserState } from "./browser-state-store.js";
+import { hasNewerEntraState, recordMicrosoftSession } from "./microsoft-session.js";
 import { acquireProcessLock } from "./auth-lock.js";
 import { AuthCooldown } from "./auth-cooldown.js";
 import { mintAccessToken } from "./token-mint.js";
@@ -116,12 +117,14 @@ export class BrowserAuth {
     let page: Page | undefined;
     let listener: ((request: Request) => void) | undefined;
     let interrupted = false;
+    let state: BrowserState | undefined;
+    let stateSaved = false;
     const closeOnSignal = () => {
       interrupted = true;
       void browser?.close().catch(() => {});
     };
     try {
-      const state = await this.stateStore.load();
+      state = await this.stateStore.load();
       const { chromium } = await import("playwright");
       const args = ["--disable-blink-features=AutomationControlled"];
       if (BrowserAuth.isWSLOrDocker()) args.push("--no-sandbox", "--disable-setuid-sandbox");
@@ -152,7 +155,8 @@ export class BrowserAuth {
       // Persist the verified browser state before token acquisition. Token
       // minting can fail independently, and a temporary outage must not throw
       // away newly renewed Entra or Brightspace cookies.
-      await this.stateStore.save(await context.storageState());
+      await this.saveBrowserState(await context.storageState());
+      stateSaved = true;
       const material = await this.harvestSessionMaterial(page, context);
       let token: TokenData | null = null;
       if (material.cookieHeader && material.csrfToken) {
@@ -173,12 +177,39 @@ export class BrowserAuth {
       if (interrupted) throw new BrowserAuthError("Authentication interrupted", "interrupted");
       log("INFO", "Browser authentication complete");
       return { ...token, ...material, tenantOrigin: new URL(this.config.baseUrl).origin };
+    } catch (error) {
+      if (context && !stateSaved) await this.keepNewerMicrosoftState(context, state);
+      throw error;
     } finally {
       process.removeListener("SIGINT", closeOnSignal);
       process.removeListener("SIGTERM", closeOnSignal);
       if (page && listener) page.removeListener("request", listener);
       await context?.close().catch(() => {});
       await browser?.close().catch(() => {});
+    }
+  }
+
+  /** Save the browser state and what Microsoft remembered in it. */
+  private async saveBrowserState(state: BrowserState): Promise<void> {
+    await this.stateStore.save(state);
+    await recordMicrosoftSession(this.config.sessionDir, state, this.ssoFlow.rememberMfaResult?.())
+      .catch(() => log("WARN", "Could not record the Microsoft sign-in summary; saved sign-in state is unaffected."));
+  }
+
+  /**
+   * A run can fail after Entra already renewed its cookies (an MFA timeout,
+   * a token-mint outage, a Brightspace redirect stall). Keep that renewal
+   * when it is strictly newer than the saved jar; otherwise the saved state
+   * is left untouched. Never masks the original failure.
+   */
+  private async keepNewerMicrosoftState(context: BrowserContext, previous: BrowserState | undefined): Promise<void> {
+    try {
+      const current = await context.storageState();
+      if (!hasNewerEntraState(previous, current)) return;
+      await this.saveBrowserState(current);
+      log("INFO", "Sign-in failed, but Microsoft's renewed sign-in state was kept");
+    } catch {
+      log("DEBUG", "Could not keep Microsoft's renewed sign-in state after a failed sign-in");
     }
   }
 

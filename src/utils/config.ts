@@ -35,6 +35,9 @@ export async function loadConfig(): Promise<AppConfig> {
     ?? store?.headless
     ?? true;
 
+  // Ask Microsoft to skip the second factor for its "Don't ask again" window.
+  const rememberMfa = envBoolean(process.env.D2L_REMEMBER_MFA, "D2L_REMEMBER_MFA") ?? true;
+
   // Resolve tokenTtl: env > store > default (3600)
   const tokenTtl = positiveSeconds(process.env.D2L_TOKEN_TTL, "D2L_TOKEN_TTL")
     ?? positiveSeconds(store?.tokenTtl, "tokenTtl in config.json")
@@ -73,6 +76,7 @@ export async function loadConfig(): Promise<AppConfig> {
     legacyBrowserStateMigrated: legacyMigration?.browserState === "encrypted",
     tokenTtl,
     headless,
+    rememberMfa,
     username,
     password,
     campus: process.env.D2L_CAMPUS || store?.campus,

@@ -85,6 +85,8 @@ The number can change mid-wait: if the request times out or is denied before app
 
 On a Duo tenant, a device-trust prompt ("Is this your device?") gating the push is answered yes automatically, which also makes Duo skip its device check on later logins from this machine — worth mentioning to a user signing in from a shared computer. `D2L_DUO_PASSCODE` switches from waiting for a push to typing a Duo Mobile passcode.
 
+On Microsoft Entra's MFA page (number match or verification code, on `login.microsoftonline.com` only), the "Don't ask again for N days" checkbox is ticked once, before the number is announced or a code is asked for, and an already-checked box is left alone. The window is the tenant's setting; a tenant that never shows the box simply keeps asking. `D2L_REMEMBER_MFA=false` turns this off. A sign-in that fails after Entra renewed its cookies still saves the browser state when those cookies are strictly newer than the saved ones; any other failure leaves the saved state untouched. `get_server_info` reports `microsoftSession` — `staySignedIn`, `staySignedInExpires`, `rememberMfa` (`ticked`, `already`, `absent`, or `unknown`), `rememberMfaAt` — read from a plain summary (`microsoft-session.json`, no cookie values) beside the browser state, and omits it when no browser state is saved.
+
 Visible mode applies to the manual `auth` command, whose window remains open for up to five minutes when automatic credential handling is unavailable or the identity provider needs direct interaction. Automatic recovery spawned by `AuthRunner` runs headless unless `D2L_HEADLESS` is set explicitly. Rerunning setup preserves the existing hidden or visible preference as the default choice.
 
 ```bash
@@ -112,7 +114,7 @@ Registered in `src/tools/index.ts`, schemas in `src/tools/schemas.ts`:
 | `get_assignment_files` | Read the files attached to an assignment (spec, rubric, starter workbook) and return their text |
 | `get_announcement_files` | Read the files attached to an announcement (prompts, rubric, updated schedule) and return their text |
 | `get_video_transcript` | Transcript of a video embedded in course content (Kaltura, YouTube), with timestamps |
-| `get_server_info` | Running version, Node runtime, platform, config and session paths, school URL, and whether a credential is stored — no network call, no secrets |
+| `get_server_info` | Running version, Node runtime, platform, config and session paths, school URL, whether a credential is stored, and `microsoftSession` (what Microsoft remembered) once a browser sign-in is saved — no network call, no secrets |
 
 These sixteen are the whole surface. An available-update notice, when there is one, rides along as a second text block on the first successful result.
 

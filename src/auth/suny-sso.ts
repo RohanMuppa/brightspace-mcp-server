@@ -27,6 +27,7 @@ interface SunySSOConfig {
   /** Campus name or numeric code, matched against SUNY's own dropdown. */
   campus?: string;
   headless?: boolean;
+  rememberMfa?: boolean;
   requestMfaCode?: RequestMfaCode;
   onMfaChallenge?: OnMfaChallenge;
 }
@@ -77,6 +78,7 @@ export class SunySSOFlow {
       password: config.password,
       baseUrl: `https://${SUNY_BRIGHTSPACE_HOST}`,
       headless: config.headless,
+      rememberMfa: config.rememberMfa,
       requestMfaCode: config.requestMfaCode,
       onMfaChallenge: config.onMfaChallenge,
     });

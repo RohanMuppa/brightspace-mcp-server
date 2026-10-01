@@ -47,6 +47,8 @@ export interface AppConfig {
   legacyBrowserStateMigrated?: boolean;
   tokenTtl: number; // seconds
   headless: boolean;
+  /** Tick Microsoft Entra's "Don't ask again" box on the MFA page (D2L_REMEMBER_MFA). */
+  rememberMfa?: boolean;
   username?: string;
   password?: string;
   /** Campus within a shared multi-campus Brightspace instance. */
