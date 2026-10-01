@@ -80,7 +80,7 @@ describe("reexecLatestIfStale", () => {
 
     const code = await reexecLatestIfStale({
       env: {},
-      argv: ["node", "auth-cli.js", "--automatic"],
+      argv: ["node", "auth-cli.js", "--verbose"],
       installedVersion: "1.2.6",
       fetchImpl: vi.fn(async () => okJson("2.0.0")) as unknown as typeof fetch,
       runningFromNpxCache: false,
@@ -92,7 +92,7 @@ describe("reexecLatestIfStale", () => {
     const [command, args, options] = (spawnImpl as unknown as { mock: { calls: unknown[][] } })
       .mock.calls[0] as [string, string[], { env: NodeJS.ProcessEnv }];
     expect(command).toBe("npx");
-    expect(args).toEqual(["-y", "brightspace-mcp-server@latest", "auth", "--automatic"]);
+    expect(args).toEqual(["-y", "brightspace-mcp-server@latest", "auth", "--verbose"]);
     expect(options.env[REEXEC_SENTINEL]).toBe("1");
   });
 
@@ -159,6 +159,33 @@ describe("reexecLatestIfStale", () => {
     });
     expect(code).toBeNull();
     expect(spawnImpl).not.toHaveBeenCalled();
+  });
+
+  it("stays on this version when launched by the server for automatic sign-in", async () => {
+    const spawnImpl = vi.fn();
+    const code = await reexecLatestIfStale({
+      env: {},
+      argv: ["node", "auth-cli.js", "--automatic"],
+      installedVersion: "3.7.2",
+      fetchImpl: vi.fn(async () => okJson("3.7.5")) as unknown as typeof fetch,
+      runningFromNpxCache: false,
+      spawnImpl: spawnImpl as never,
+    });
+    expect(code).toBeNull();
+    expect(spawnImpl).not.toHaveBeenCalled();
+  });
+
+  it("does not query the registry for automatic sign-in", async () => {
+    const fetchImpl = vi.fn(async () => okJson("3.7.5"));
+    await reexecLatestIfStale({
+      env: {},
+      argv: ["node", "auth-cli.js", "--automatic"],
+      installedVersion: "3.7.2",
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      runningFromNpxCache: false,
+      spawnImpl: vi.fn() as never,
+    });
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 
   it("uses npx.cmd on Windows", async () => {
