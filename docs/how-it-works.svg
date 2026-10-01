@@ -79,7 +79,7 @@
   <text x="660" y="282" text-anchor="middle" fill="#22543d" font-size="11" font-weight="500">Class Emails</text>
 
   <!-- Subtitle row -->
-  <text x="480" y="322" text-anchor="middle" fill="#718096" font-size="10">API token renewal over HTTPS; browser authentication only when needed</text>
+  <text x="480" y="322" text-anchor="middle" fill="#718096" font-size="10">HTTPS token renewal; school-specific browser login (including TU Delft NetID) when needed</text>
 
   <!-- Arrow 2 -->
   <line x1="480" y1="335" x2="480" y2="388" stroke="#cbd5e0" stroke-width="2"/>
