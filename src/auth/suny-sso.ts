@@ -9,6 +9,7 @@ import { PurdueSSOFlow } from "./purdue-sso.js";
 import { log } from "../utils/logger.js";
 import { UnsupportedAuthenticationError } from "./sso-flow.js";
 import type { RequestMfaCode, OnMfaChallenge } from "./sso-flow.js";
+import type { RememberMfaResult } from "./microsoft-session.js";
 import { BrowserAuthError } from "../utils/errors.js";
 
 /** SUNY campuses share one Brightspace tenant behind one Shibboleth IdP. */
@@ -86,6 +87,10 @@ export class SunySSOFlow {
 
   hasCredentials(): boolean {
     return this.defaultFlow.hasCredentials();
+  }
+
+  rememberMfaResult(): RememberMfaResult | undefined {
+    return this.defaultFlow.rememberMfaResult();
   }
 
   async prepareLogin(page: Page): Promise<void> {

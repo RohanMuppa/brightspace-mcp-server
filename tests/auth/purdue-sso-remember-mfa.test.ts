@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PurdueSSOFlow } from "../../src/auth/purdue-sso.js";
+import { SunySSOFlow } from "../../src/auth/suny-sso.js";
+import { WesternSSOFlow } from "../../src/auth/western-sso.js";
 
 /**
  * Entra's "Don't ask again for N days" checkbox on the MFA page. KMSI only
@@ -186,5 +188,19 @@ describe("Entra remember-MFA checkbox", () => {
     await handleMFA(flow, page);
     expect(events).toEqual(["check", "code requested"]);
     expect(flow.rememberMfaResult()?.outcome).toBe("ticked");
+  });
+});
+
+describe("Entra remember-MFA result through wrapped flows", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  const result = { outcome: "ticked" as const, at: "2026-10-01T12:00:00.000Z" };
+
+  it.each([
+    ["SUNY", () => new SunySSOFlow({ campus: "Albany" })],
+    ["Western", () => new WesternSSOFlow({ baseUrl: "https://westernu.brightspace.com" })],
+  ])("%s reports what its inner Entra flow recorded", (_name, build) => {
+    vi.spyOn(PurdueSSOFlow.prototype, "rememberMfaResult").mockReturnValue(result);
+    expect(build().rememberMfaResult()).toEqual(result);
   });
 });
