@@ -11,6 +11,7 @@ import { toolResponse, sanitizeError } from "./tool-helpers.js";
 import { convertHtmlToMarkdown } from "../utils/html-converter.js";
 import { matchesModifiedSince } from "../utils/modified-since.js";
 import { log } from "../utils/logger.js";
+import { contentAvailability, type ContentAvailability } from "./content-availability.js";
 
 // D2L Content API response type
 interface ContentObject {
@@ -30,6 +31,8 @@ interface ContentObject {
   // Topic-specific
   TopicType?: number; // 1=File, 2=Link/URL, 3=ExternalLink, etc.
   Url?: string;
+  StartDateTime?: string | null;
+  EndDateTime?: string | null;
   StartDate?: string | null;
   EndDate?: string | null;
   DueDate?: string | null;
@@ -87,11 +90,14 @@ async function buildContentTree(
   typeFilter: string,
   maxDepth?: number,
   currentDepth: number = 0,
+  parentAvailability?: ContentAvailability,
+  now = new Date(),
 ): Promise<any[]> {
   const tree = [];
   const depthLimit = Math.min(maxDepth ?? MAX_CONTENT_DEPTH, MAX_CONTENT_DEPTH);
 
   for (const item of modules) {
+    const availability = contentAvailability(item, now, parentAvailability);
     if (item.Type === 0) {
       // Module: fetch children recursively (unless the depth limit is reached)
       let processedChildren: any[] = [];
@@ -119,7 +125,7 @@ async function buildContentTree(
         }
 
         processedChildren = await buildContentTree(
-          apiClient, courseId, children, progressMap, typeFilter, maxDepth, currentDepth + 1
+          apiClient, courseId, children, progressMap, typeFilter, maxDepth, currentDepth + 1, availability, now
         );
       } else if (currentDepth >= MAX_CONTENT_DEPTH) {
         log('DEBUG', `Content depth ceiling of ${MAX_CONTENT_DEPTH} reached at module ${item.Id}: not descending further`);
@@ -135,6 +141,7 @@ async function buildContentTree(
           ...(item.ModuleDueDate ? { dueDate: item.ModuleDueDate } : {}),
           ...(item.IsHidden ? { isHidden: item.IsHidden } : {}),
           ...(item.IsLocked ? { isLocked: item.IsLocked } : {}),
+          ...availability,
           lastModified: item.LastModifiedDate ?? null,
           children: processedChildren,
         });
@@ -157,6 +164,7 @@ async function buildContentTree(
         title: item.Title,
         ...(item.IsHidden ? { isHidden: item.IsHidden } : {}),
         ...(item.IsLocked ? { isLocked: item.IsLocked } : {}),
+        ...availability,
         ...(item.DueDate ? { dueDate: item.DueDate } : {}),
         lastModified: item.LastModifiedDate ?? null,
         isCompleted: topicProgress?.IsRead ?? false,

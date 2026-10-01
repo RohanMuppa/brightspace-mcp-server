@@ -5,10 +5,12 @@
  */
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { D2LApiClient } from "../api/index.js";
+import { D2LApiClient, ApiError } from "../api/index.js";
 import { DownloadFileSchema } from "./schemas.js";
 import { toolResponse, sanitizeError, errorResponse } from "./tool-helpers.js";
 import { log } from "../utils/logger.js";
+import { checkTopicAvailability } from "./topic-availability.js";
+export { checkTopicAvailability } from "./topic-availability.js";
 // Path containment and magic-byte checks belong to secureDownload, which both
 // download paths below go through; importing them here only made it look as
 // though this file validated anything itself.
@@ -159,8 +161,18 @@ async function downloadContentFile(
   // Build download URL using D2L API path helper
   const apiPath = apiClient.le(courseId, `/content/topics/${topicId}/file`);
 
-  // Fetch file using getRaw (returns Response object, not parsed JSON)
-  const response = await apiClient.getRaw(apiPath);
+  // Unreleased files can return 404 as well as 403. Only explain a release
+  // restriction when the metadata supports it; keep other failures intact.
+  let response: Response;
+  try {
+    response = await apiClient.getRaw(apiPath);
+  } catch (error) {
+    if (error instanceof ApiError && (error.status === 403 || error.status === 404)) {
+      const unavailable = await checkTopicAvailability(apiClient, courseId, topicId, error.status);
+      if (unavailable) return toolResponse(unavailable);
+    }
+    throw error;
+  }
 
   // Check Content-Length BEFORE downloading body (prevent memory exhaustion)
   const contentLength = parseInt(

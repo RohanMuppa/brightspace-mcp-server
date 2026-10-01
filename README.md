@@ -127,5 +127,9 @@ The number in that response can go stale if the request times out or you tap Den
 | Calendar | "When is my midterm?" · "What's on my calendar this week?" · "Is lab cancelled on Thursday?" — reads exams, labs, review sessions, and deadlines instructors put only on the course calendar |
 | Planning | "Build me a study schedule based on my upcoming due dates" · "Which class needs the most attention right now?" — pulls from assignments, quizzes, graded discussion topics (any topic with a due date), and course calendar events such as exams and labs |
 
+`get_course_content` reports `isAvailable`, `availabilityStatus` (`available`, `not_yet_open`, `ended`, `hidden`, or `locked`), `availabilityMessage`, `startDate`, and `endDate` for modules and topics. The effective release window includes restrictions inherited from enclosing modules.
+
+When a content-file download returns 403 or 404, `download_file` checks topic metadata and the course table of contents. Confirmed restrictions return `{ success: false, available: false, reason, message, startDate, endDate }` so the assistant can explain when content opens or why it has closed. Unexplained 404s and server/network failures retain their original errors.
+
 
 Licensed under the MIT License.
