@@ -554,6 +554,99 @@ describe("get_assignments while sign-in is pending", () => {
 });
 
 /**
+ * submissionStatus and attemptStatus are additive fields that tell "known to
+ * be unsubmitted/unattempted" (a 404, D2L's own way of saying "nothing yet")
+ * apart from "the tenant denied the lookup" (any other error), so a denied
+ * 403 is never reported to the user as missing work.
+ */
+describe("fetchCourseAssignments submissionStatus", () => {
+  function makeSubmissionClient(mysubmissionsBehavior: () => unknown) {
+    return {
+      le: (orgUnitId: number, p: string) => `/d2l/api/le/1.0/${orgUnitId}${p}`,
+      get: vi.fn(async (path: string) => {
+        if (path.endsWith("/dropbox/folders/")) {
+          return [{ Id: 55, Name: "HW 1", DueDate: null, IsHidden: false, GroupTypeId: null }];
+        }
+        if (path.includes("/mysubmissions/")) return mysubmissionsBehavior();
+        if (path.endsWith("/quizzes/") || path.endsWith("/grades/")) return [];
+        if (path.endsWith("/content/toc")) return { Modules: [] };
+        throw notFound();
+      }),
+    };
+  }
+
+  it("reports submitted when the submissions list has rows", async () => {
+    const apiClient = makeSubmissionClient(() => [
+      {
+        Id: 1,
+        SubmittedBy: { Identifier: "u1", DisplayName: "Student" },
+        SubmissionDate: "2026-09-01T00:00:00Z",
+        Comment: null,
+        Files: [],
+      },
+    ]);
+    const [assignment] = await fetchCourseAssignments(apiClient as any, COURSE_ID);
+
+    expect(assignment.submissionStatus).toBe("submitted");
+    expect(assignment.submissionStatusNote).toBeUndefined();
+  });
+
+  it("reports not_submitted on a 404 - D2L's own way of saying nothing was turned in", async () => {
+    const apiClient = makeSubmissionClient(() => {
+      throw notFound();
+    });
+    const [assignment] = await fetchCourseAssignments(apiClient as any, COURSE_ID);
+
+    expect(assignment.submissionStatus).toBe("not_submitted");
+    expect(assignment.submission).toBeNull();
+    expect(assignment.submissionStatusNote).toBeUndefined();
+  });
+
+  it("reports unknown, not not_submitted, when the tenant denies the submission list with 403", async () => {
+    const apiClient = makeSubmissionClient(() => {
+      throw forbidden();
+    });
+    const [assignment] = await fetchCourseAssignments(apiClient as any, COURSE_ID);
+
+    expect(assignment.submissionStatus).toBe("unknown");
+    expect(assignment.submission).toBeNull();
+    expect(assignment.submissionStatusNote).toMatch(/did not return this assignment's submission list/);
+  });
+});
+
+describe("fetchCourseAssignments attemptStatus", () => {
+  it("marks attempts unknown, not zero, when the tenant denies the attempts endpoint with 403", async () => {
+    const { apiClient } = makeQuizClient(
+      [
+        {
+          QuizId: 1,
+          Name: "Quiz 1",
+          IsActive: true,
+          AttemptsAllowed: { IsUnlimited: false, NumberOfAttemptsAllowed: 2 },
+        },
+      ],
+      () => {
+        throw forbidden();
+      }
+    );
+    const [quiz] = quizzesOf(await fetchCourseAssignments(apiClient as any, COURSE_ID));
+
+    expect(quiz.attemptStatus).toBe("unknown");
+    expect(quiz.attemptsUsed).toBeNull();
+    expect(quiz.attemptStatusNote).toMatch(/did not provide this quiz's attempt data/);
+  });
+
+  it("marks attempts known once the endpoint answers, even with zero completed attempts", async () => {
+    const { apiClient } = makeQuizClient([{ QuizId: 1, Name: "Quiz 1", IsActive: true }], () => []);
+    const [quiz] = quizzesOf(await fetchCourseAssignments(apiClient as any, COURSE_ID));
+
+    expect(quiz.attemptStatus).toBe("known");
+    expect(quiz.attemptsUsed).toBe(0);
+    expect(quiz.attemptStatusNote).toBeUndefined();
+  });
+});
+
+/**
  * dueIn is additive: a relative-time rendering of dueDate so a caller doesn't
  * have to do its own date math. It rides next to dueDate wherever that field
  * already appears, and is null wherever dueDate is null (gradeOnly rows).

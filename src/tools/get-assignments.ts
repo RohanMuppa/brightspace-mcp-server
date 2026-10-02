@@ -308,8 +308,14 @@ export async function fetchCourseAssignments(
       // Skip hidden folders
       if (folder.IsHidden) continue;
 
-      // Fetch submissions for this folder
+      // Fetch submissions for this folder. Some tenants deny students access
+      // to mysubmissions outright (403), in which case an empty list would be
+      // indistinguishable from genuinely unsubmitted work — track whether the
+      // answer is actually known so the caller never reports denied-but-real
+      // work as missing.
+      // Adapted from JoshuaMontclair/brightspace-mcp-server (MIT).
       let submissions: DropboxSubmission[] = [];
+      let submissionsKnown = true;
       try {
         const submissionsRaw = await apiClient.get<{ Objects: DropboxSubmission[] } | DropboxSubmission[]>(
           apiClient.le(courseId, `/dropbox/folders/${folder.Id}/submissions/mysubmissions/`),
@@ -318,9 +324,10 @@ export async function fetchCourseAssignments(
         submissions = Array.isArray(submissionsRaw) ? submissionsRaw : (submissionsRaw as any).Objects ?? [];
       } catch (error: any) {
         if (isAuthUnavailable(error)) throw error;
-        // 404 means no submissions yet - that's fine
+        // 404 is how D2L reports "nothing submitted yet" - that one is known.
         if (error?.status !== 404) {
-          log("DEBUG", `Failed to fetch submissions for folder ${folder.Id}`, error);
+          submissionsKnown = false;
+          log("DEBUG", `Could not determine submission state for folder ${folder.Id}`, error);
         }
       }
 
@@ -375,6 +382,20 @@ export async function fetchCourseAssignments(
             })) ?? [],
           })) ?? [],
         })) ?? null,
+        // New, additive fields: existing "submission" stays null either way
+        // when nothing is known, but submissionStatus tells apart "nothing
+        // was submitted" (404, a known answer) from "the answer is denied"
+        // (any other error), so a caller never states real work as missing.
+        submissionStatus: !submissionsKnown
+          ? "unknown"
+          : submissions.length > 0
+            ? "submitted"
+            : "not_submitted",
+        ...(submissionsKnown ? {} : {
+          submissionStatusNote:
+            "Brightspace did not return this assignment's submission list, so whether it was submitted " +
+            "is unknown. Do not report it as missing or unsubmitted - tell the user to check Brightspace directly.",
+        }),
         submission: submissions.length > 0
           ? {
               submittedDate: submissions[0].SubmissionDate,
@@ -506,6 +527,17 @@ export async function fetchCourseAssignments(
         // False when the tenant refused the attempts endpoint, in which case
         // every count below is null rather than a guess of zero.
         attemptsAvailable: completedAttempts !== null,
+        // New, additive field mirroring submissionStatus above: "known" is
+        // completedAttempts !== null (the same condition attemptsAvailable
+        // already tracks), named explicitly so a caller does not have to
+        // infer "unknown" from a boolean meant for something else.
+        // Adapted from JoshuaMontclair/brightspace-mcp-server (MIT).
+        attemptStatus: completedAttempts !== null ? "known" : "unknown",
+        ...(completedAttempts !== null ? {} : {
+          attemptStatusNote:
+            "Brightspace did not provide this quiz's attempt data, so it is unknown whether it was taken. " +
+            "Do not report it as not attempted.",
+        }),
         attemptsUsed: completedAttempts?.length ?? null,
         attemptsRemaining,
         attemptWarning,
@@ -589,7 +621,8 @@ export function registerGetAssignments(
     {
       title: "Get Assignments",
       description:
-        "Fetch assignments and quizzes for a specific course or all enrolled courses. Shows dropbox submissions and quizzes with due dates, status, and rubric info. Use this when the user asks about assignments, homework, what to submit, quizzes, or assignment details and rubrics.",
+        "Fetch assignments and quizzes for a specific course or all enrolled courses. Shows dropbox submissions and quizzes with due dates, status, and rubric info. Use this when the user asks about assignments, homework, what to submit, quizzes, or assignment details and rubrics. " +
+        "Read submissionStatus/attemptStatus, not just submission/attemptsUsed, to decide whether something was turned in: some tenants deny students access to submission or attempt data, in which case the status is \"unknown\" even though submission is null or attemptsUsed is 0. Never report an \"unknown\" item as missing, unsubmitted, or not attempted - say it could not be verified and point the user to Brightspace.",
       inputSchema: GetAssignmentsSchema,
     },
     async (args: any) => {

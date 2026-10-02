@@ -9,16 +9,38 @@ import * as os from "node:os";
 import { createHash } from "node:crypto";
 import dotenv from "dotenv";
 import type { AppConfig } from "../types/index.js";
-import { configStoreExists, loadConfigStore } from "./config-store.js";
+import { configStoreExists, getConfigStorePath, loadConfigStore } from "./config-store.js";
+import type { ConfigStoreData } from "./config-store.js";
 import { resolveStoredPassword } from "./secure-config.js";
 import { migrateLegacyState } from "../auth/legacy-state.js";
 
 export async function loadConfig(): Promise<AppConfig> {
   dotenv.config({ quiet: true });
-  const store = configStoreExists() ? loadConfigStore() : null;
+
+  // A corrupt or permission-denied config.json must not take the whole server
+  // down at startup: env vars alone are a complete, if less convenient,
+  // configuration. The failure is still surfaced loudly (never silent) so a
+  // broken file doesn't masquerade as "no config.json was ever created".
+  // Idea from lmgveerhoek's fork (MIT).
+  let store: ConfigStoreData | null = null;
+  let storeLoadError: unknown;
+  if (configStoreExists()) {
+    try {
+      store = loadConfigStore();
+    } catch (error) {
+      storeLoadError = error;
+    }
+  }
 
   if (store) {
     console.error("[config] Loaded base config from ~/.brightspace-mcp/config.json");
+  } else if (storeLoadError) {
+    console.error(
+      `[config] WARN: Failed to read ${getConfigStorePath()} (${
+        storeLoadError instanceof Error ? storeLoadError.message : String(storeLoadError)
+      }); ` +
+      "continuing with environment variables only."
+    );
   } else {
     console.error("[config] No config.json found, using environment variables");
   }

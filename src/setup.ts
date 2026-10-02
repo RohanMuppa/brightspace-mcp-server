@@ -92,6 +92,12 @@ export const SCHOOL_PRESETS: Record<string, SchoolPreset> = {
     mfaNote: "Type the 6-digit code from your authenticator app when prompted.",
     usernameHint: "Use your full CUNY Login address, e.g. firstname.lastname01@login.cuny.edu",
   },
+  javeriana: {
+    name: "Pontificia Universidad Javeriana Cali",
+    baseUrl: "https://auladigital.javerianacali.edu.co",
+    usernameLabel: "Javeriana username",
+    mfaNote: "OneGate asks for a code from your authenticator app when you sign in.",
+  },
 };
 
 /**

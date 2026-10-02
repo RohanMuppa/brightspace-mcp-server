@@ -52,9 +52,17 @@ when the Brightspace session ends the user reruns `auth` in a terminal:
 npx -y brightspace-mcp-server@latest setup --cuny
 ```
 
+If the user is at Pontificia Universidad Javeriana Cali, use the Javeriana
+preset. Sign-in goes through MobilityGuard OneGate, which asks in the
+terminal for a code from the user's authenticator app:
+
+```bash
+npx -y brightspace-mcp-server@latest setup --javeriana
+```
+
 The wizard:
 
-- prompts for the school's Brightspace URL (skipped with `--purdue`, `--suny`, or `--cuny`)
+- prompts for the school's Brightspace URL (skipped with `--purdue`, `--suny`, `--cuny`, or `--javeriana`)
 - asks whether MFA uses device approval, terminal code entry, or a visible browser, then authenticates accordingly
 - saves the password in the native credential store and public settings in `~/.brightspace-mcp/config.json` (0600)
 - writes the encrypted session below `~/.d2l-session/accounts/<account-hash>/` (AES-256-GCM)
@@ -140,8 +148,16 @@ Registered in `src/tools/index.ts`, schemas in `src/tools/schemas.ts`:
 | `get_announcement_files` | Read the files attached to an announcement (prompts, rubric, updated schedule) and return their text |
 | `get_video_transcript` | Transcript of a video embedded in course content (Kaltura, YouTube), with timestamps |
 | `get_server_info` | Running version, Node runtime, platform, config and session paths, school URL, whether a credential is stored, the server's local timezone and UTC offset (`localTimezone`, `utcOffsetMinutes`), `signedInAs` (`uniqueName`/`displayName`) once known, `microsoftSession` (what Microsoft remembered) once a browser sign-in is saved, and `requests` (lightweight API client counters) — no network call, no secrets |
+| `get_dropbox_folders` | Every assignment (dropbox) folder in a course, with due dates, submission type, visibility, and whether rubrics are attached |
+| `get_dropbox_submissions` | Instructor/TA: every student's (or group's) submission to a dropbox folder — submitter, submitted date, late status, files, and feedback/grading status |
+| `get_dropbox_user_submissions` | Instructor/TA: all submissions made by one specific student (or group) in a dropbox folder |
+| `get_dropbox_feedback` | Instructor/TA: feedback already saved for a user or group in a dropbox folder — score, graded state, feedback text, rubric assessment |
+| `get_rubrics_for_object` | The full rubric table (criteria, levels, points) attached to a dropbox folder |
+| `download_dropbox_submission_file` | Instructor/TA: download one file from a student's (or group's) dropbox submission |
 
-These nineteen are the whole surface. An available-update notice, when there is one, rides along as a second text block on the first successful result.
+These twenty-five are the whole surface. An available-update notice, when there is one, rides along as a second text block on the first successful result.
+
+Of the `get_dropbox_*`/`download_dropbox_submission_file` tools above, `get_dropbox_submissions`, `get_dropbox_user_submissions`, `get_dropbox_feedback`, and `download_dropbox_submission_file` are instructor/TA-side: they read every student's submissions and feedback for a course, which Brightspace only grants to course staff. A student account calling one of those gets a clear "Instructor or TA access required for this course" note (403) rather than a generic or broken-looking error. `get_dropbox_folders` and `get_rubrics_for_object` read the same folder-listing endpoint a student's own client uses, so they are not gated the same way. A 404 (no folders, no submissions, folder not found) comes back as an empty list/null with an explanatory `note`, not a failure. They are read-only — there is no tool in this server that posts a grade or feedback back to Brightspace.
 
 `search_course` reuses the same fetchers as `get_course_content`, `get_announcements`, and `get_discussions` (`fetchRootContent`/`buildContentTree`, `fetchCourseNews`, `fetchForums`/`fetchForumTopics`) rather than hitting the API a second way, so results share their cache. It scores in-memory term matches, case-insensitive and tokenized on non-alphanumerics: a result matching every query term always outranks one matching only some, and within that tier a title match outranks a body-only match. One source failing (e.g. a 403 on discussions) is skipped rather than failing the whole search, and named in the response's `note`.
 
@@ -165,6 +181,8 @@ points; each renders a single user message that names the tools above by their r
 `get_video_transcript` takes courseId+topicId (from `get_course_content`) or a direct videoUrl, and pages long transcripts via offset/maxChars the same way `get_assignment_files` pages extracted text. It supports Kaltura (e.g. Purdue's BoilerCast) via an anonymous widget session against the Kaltura API — no Brightspace session is needed or used — and YouTube via its public timedtext endpoint. Panopto, YuJa, Echo360, and Vimeo are detected but not yet implemented: the tool names the platform and says so rather than returning an empty result. A video with no caption track also returns `hasTranscript: false` with an explanation, not an error.
 
 Quiz attempt counts are unavailable to students on the Purdue tenant: `/quizzes/{id}/attempts/` answers 403. Those quizzes carry `attemptsAvailable: false` with null counts rather than a fabricated zero.
+
+Assignment rows additionally carry `submissionStatus` (`"submitted"` / `"not_submitted"` / `"unknown"`) and quiz rows carry `attemptStatus` (`"known"` / `"unknown"`), with a `submissionStatusNote`/`attemptStatusNote` set only when unknown: any non-404 failure on the submission lookup (a 403, a 5xx, …), or a `ContentMetadataOnly` quiz whose attempts route is never called at all, means Brightspace simply did not return the data — not that nothing was submitted or attempted — so these additive fields separate a genuine empty answer from one Brightspace never gave.
 
 Assignments, quizzes, and due dates each carry a `url` field that deep-links into Brightspace. `get_assignments` also returns `gradeOnly` items for gradebook columns that match no assignment or quiz, such as a proctored exam. `get_upcoming_due_dates` reads `DueDate` from assignments, `DueDate ?? EndDate` from quizzes,, `DueDate` from discussion topics (`type: "discussion"`), and each course's calendar events (`type: "event"`, `dueDate` = the event's start, plus `endDate` and `location` when set). A topic with no `DueDate` is an ungraded forum and is excluded. Brightspace generates a calendar event for every dated assignment, quiz, and discussion; an event generated from an item already in the list is dropped, so each deadline appears once, while hand-made events (exams, labs) always stay.
 
@@ -222,6 +240,7 @@ src/
     purdue-sso.ts           Default SSO handler (Shibboleth, CAS, Entra forms)
     suny-sso.ts             SUNY campus selection
     cuny-sso.ts             CUNY Login (Oracle OAM) credentials and authenticator code
+    javeriana-sso.ts        Javeriana Cali (MobilityGuard OneGate) credentials and authenticator code
     session-store.ts        AES-256-GCM token persistence and v1 migration
     browser-state-store.ts  Encrypted cookie and browser storage persistence
     credential-store.ts     Native password and encryption-key storage
@@ -250,6 +269,7 @@ src/
 | `npx -y brightspace-mcp-server@latest setup --purdue` | Setup with Purdue preset |
 | `npx -y brightspace-mcp-server@latest setup --suny` | Setup with SUNY preset (also asks for campus) |
 | `npx -y brightspace-mcp-server@latest setup --cuny` | Setup with CUNY preset |
+| `npx -y brightspace-mcp-server@latest setup --javeriana` | Setup with Javeriana Cali preset |
 | `npx -y brightspace-mcp-server@latest auth` | Manual reauth |
 | `npx -y brightspace-mcp-server@latest doctor` | Diagnose a broken setup — Node version, saved config, credential store, Brightspace reachability, saved sign-in, a real course-list call, and installed version, each as a ✓/✗ line with one plain-English next step |
 | `npx -y brightspace-mcp-server@latest` | Run the MCP server (registered in AI client config) |
@@ -268,6 +288,8 @@ src/
 | Native operating-system credential store | Password and random encryption key | OS access controls |
 
 Environment values override stored configuration. An environment password is native-store input; the application does not rewrite the user's `.env` or client configuration. Account hashes bind saved state to school and username. Legacy unnamed state stays in the session root and is not replayed for a newly configured account. On upgrade, v1 secrets migrate only after verified secure writes. Retired v1 browser data may remain recoverable in Trash.
+
+A `config.json` that is corrupt or unreadable (bad permissions, truncated write, hand-edited garbage) does not crash the server at startup: `loadConfig()` logs a `[config] WARN` naming the file and the failure, then continues as if no config.json existed, so environment variables still configure the server.
 
 ## Adding a school
 
