@@ -166,4 +166,16 @@ export const SearchCourseSchema = z.object({
     .describe("Maximum number of results to return, highest scoring first."),
 });
 
+export const GetAssignmentRubricSchema = z.object({
+  courseId: z.coerce.number().int().positive()
+    .describe("Course ID the assignment belongs to."),
+  assignmentId: z.coerce.number().int().positive()
+    .describe("Assignment (dropbox folder) ID, as returned by get_assignments."),
+});
+
+export const GetMyGroupsSchema = z.object({
+  courseId: z.coerce.number().int().positive()
+    .describe("Course ID to list the current user's project/discussion groups for."),
+});
+
 export const GetServerInfoSchema = z.object({});

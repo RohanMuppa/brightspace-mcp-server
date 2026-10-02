@@ -119,16 +119,48 @@ export async function fetchAllObjects<T>(
   return objects;
 }
 
-/** A Next value resolved to a request path. */
-function nextPath(firstPath: string, next: string): string {
+/**
+ * A Next value resolved to a request path, or null when it should not be
+ * followed.
+ *
+ * Adapted from JhostinAleck/brightspace-mcp (MIT): beyond dropping an
+ * absolute Next's host (the client always prefixes its own configured base
+ * URL, so a hostile/garbled Next cannot redirect requests elsewhere), anything
+ * -- absolute or server-relative -- whose path falls outside `/d2l/api/` is
+ * rejected rather than followed, since that is the only space these paginated
+ * endpoints legitimately point back into.
+ */
+function nextPath(firstPath: string, next: string): string | null {
   if (/^https?:\/\//i.test(next)) {
     const url = new URL(next);
+    if (!isApiPath(url.pathname)) {
+      log("INFO", "Pagination stopped: Next link left the D2L API", {
+        firstPath,
+        nextPath: url.pathname,
+      });
+      return null;
+    }
     return `${url.pathname}${url.search}`;
   }
   // A Next that begins with a slash is already a path, not a bookmark.
   // Appending it as one would ask for a page that does not exist.
   if (next.startsWith("/")) {
+    const nextPathOnly = next.split("?")[0] ?? next;
+    if (!isApiPath(nextPathOnly)) {
+      log("INFO", "Pagination stopped: Next link left the D2L API", {
+        firstPath,
+        // Log only the path, not the query string: a rejected server-relative
+        // Next can carry a `d2lSessionVal=` token in its query.
+        nextPath: nextPathOnly,
+      });
+      return null;
+    }
     return next;
   }
   return withBookmark(firstPath, next);
+}
+
+/** Whether a Next path stays inside the D2L API namespace these endpoints page through. */
+function isApiPath(pathname: string): boolean {
+  return pathname.startsWith("/d2l/api/");
 }

@@ -12,7 +12,7 @@ vi.mock("../../src/utils/config-store.js", () => ({
 }));
 vi.mock("../../src/utils/secure-config.js", () => ({ resolveStoredPassword: fake.password }));
 vi.mock("../../src/auth/legacy-state.js", () => ({ migrateLegacyState: fake.migrate }));
-import { accountSessionDirectory, loadConfig } from "../../src/utils/config.js";
+import { accountSessionDirectory, loadConfig, parseSessionCookieEnv, readEnvSecret } from "../../src/utils/config.js";
 
 describe("resolved authentication configuration", () => {
   beforeEach(() => {
@@ -124,5 +124,124 @@ describe("resolved authentication configuration", () => {
     expect((await loadConfig()).courseFilter.activeOnly).toBe(true);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("Ignoring D2L_ACTIVE_ONLY"));
     warn.mockRestore();
+  });
+
+  describe("D2L_SESSION_COOKIE / D2L_ACCESS_TOKEN (browser-free sign-in)", () => {
+    it("leaves both unset by default — byte-identical to today", async () => {
+      const config = await loadConfig();
+      expect(config.envAccessToken).toBeUndefined();
+      expect(config.envSessionCookie).toBeUndefined();
+    });
+
+    it("normalizes a full cookie-header D2L_SESSION_COOKIE", async () => {
+      vi.stubEnv("D2L_SESSION_COOKIE", "d2lSessionVal=aaa; d2lSecureSessionVal=bbb");
+      const config = await loadConfig();
+      expect(config.envSessionCookie).toBe("d2lSessionVal=aaa; d2lSecureSessionVal=bbb");
+      expect(config.envAccessToken).toBeUndefined();
+    });
+
+    it("accepts the cookie names in either order and ignores extra cookies", async () => {
+      vi.stubEnv("D2L_SESSION_COOKIE", "other=ignored; d2lSecureSessionVal=bbb; d2lSessionVal=aaa");
+      const config = await loadConfig();
+      expect(config.envSessionCookie).toBe("d2lSessionVal=aaa; d2lSecureSessionVal=bbb");
+    });
+
+    it("accepts the two raw values separated by a semicolon, in order", async () => {
+      vi.stubEnv("D2L_SESSION_COOKIE", "aaa;bbb");
+      const config = await loadConfig();
+      expect(config.envSessionCookie).toBe("d2lSessionVal=aaa; d2lSecureSessionVal=bbb");
+    });
+
+    it("rejects a D2L_SESSION_COOKIE missing one of the two cookies", async () => {
+      vi.stubEnv("D2L_SESSION_COOKIE", "d2lSessionVal=aaa");
+      await expect(loadConfig()).rejects.toThrow("D2L_SESSION_COOKIE must be either");
+    });
+
+    it("rejects an unparseable D2L_SESSION_COOKIE", async () => {
+      vi.stubEnv("D2L_SESSION_COOKIE", "just-one-value");
+      await expect(loadConfig()).rejects.toThrow("D2L_SESSION_COOKIE must be either");
+    });
+
+    it("treats an empty D2L_SESSION_COOKIE as unset", async () => {
+      vi.stubEnv("D2L_SESSION_COOKIE", "");
+      const config = await loadConfig();
+      expect(config.envSessionCookie).toBeUndefined();
+    });
+
+    it("passes D2L_ACCESS_TOKEN through unchanged", async () => {
+      vi.stubEnv("D2L_ACCESS_TOKEN", "a-valence-token");
+      const config = await loadConfig();
+      expect(config.envAccessToken).toBe("a-valence-token");
+    });
+
+    it("sets both when both are present — precedence is resolved downstream, not at config load", async () => {
+      vi.stubEnv("D2L_ACCESS_TOKEN", "a-valence-token");
+      vi.stubEnv("D2L_SESSION_COOKIE", "aaa;bbb");
+      const config = await loadConfig();
+      expect(config.envAccessToken).toBe("a-valence-token");
+      expect(config.envSessionCookie).toBe("d2lSessionVal=aaa; d2lSecureSessionVal=bbb");
+    });
+
+    it.each(["D2L_ACCESS_TOKEN", "D2L_SESSION_COOKIE"])(
+      "rejects %s containing a CRLF",
+      async (varName) => {
+        vi.stubEnv(varName, "aaa\r\nbbb");
+        await expect(loadConfig()).rejects.toThrow(/carriage return|line feed/);
+      },
+    );
+
+    // Node truncates process.env values at an embedded NUL before user code
+    // ever sees them (vi.stubEnv("D2L_ACCESS_TOKEN", "aaa\0bbb") arrives as
+    // just "aaa"), so the NUL branch is exercised directly against the
+    // validator rather than through loadConfig()/process.env.
+    it("rejects a value containing an embedded NUL", () => {
+      expect(() => readEnvSecret("aaa\0bbb", "D2L_ACCESS_TOKEN")).toThrow(/NUL/);
+    });
+
+    it.each(["D2L_ACCESS_TOKEN", "D2L_SESSION_COOKIE"])(
+      "rejects %s with leading or trailing whitespace instead of silently trimming it",
+      async (varName) => {
+        vi.stubEnv(varName, varName === "D2L_SESSION_COOKIE" ? " aaa;bbb" : " a-valence-token ");
+        await expect(loadConfig()).rejects.toThrow(/leading or trailing whitespace/);
+      },
+    );
+
+    it("never includes the secret value in the thrown error message", async () => {
+      vi.stubEnv("D2L_ACCESS_TOKEN", "super-secret-token-value\r\n");
+      await expect(loadConfig()).rejects.toThrow();
+      try {
+        await loadConfig();
+        throw new Error("expected loadConfig to reject");
+      } catch (error) {
+        expect((error as Error).message).not.toContain("super-secret-token-value");
+      }
+    });
+  });
+
+  describe("parseSessionCookieEnv", () => {
+    it("normalizes the named cookie-header form", () => {
+      expect(parseSessionCookieEnv("d2lSessionVal=aaa; d2lSecureSessionVal=bbb"))
+        .toBe("d2lSessionVal=aaa; d2lSecureSessionVal=bbb");
+    });
+
+    it("normalizes the two-raw-values form", () => {
+      expect(parseSessionCookieEnv("aaa;bbb")).toBe("d2lSessionVal=aaa; d2lSecureSessionVal=bbb");
+    });
+
+    it("normalizes the two-raw-values form when the second value has base64 padding", () => {
+      // "xyz==" contains an "=" that is not a cookie name -- the form must be
+      // decided by whether a segment is NAMED d2lSessionVal/d2lSecureSessionVal,
+      // not by whether any "=" appears in it.
+      expect(parseSessionCookieEnv("abc;xyz==")).toBe("d2lSessionVal=abc; d2lSecureSessionVal=xyz==");
+    });
+
+    it("tolerates extra whitespace around semicolons and equals signs", () => {
+      expect(parseSessionCookieEnv(" d2lSessionVal = aaa ;  d2lSecureSessionVal = bbb "))
+        .toBe("d2lSessionVal=aaa; d2lSecureSessionVal=bbb");
+    });
+
+    it("throws a clear error for garbage input", () => {
+      expect(() => parseSessionCookieEnv("not-a-cookie-header")).toThrow("D2L_SESSION_COOKIE must be either");
+    });
   });
 });

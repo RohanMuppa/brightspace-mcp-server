@@ -287,6 +287,19 @@ describe("TokenManager", () => {
       expect(retrieved?.csrfToken).toBe(stale.csrfToken);
     });
 
+    it("carries uniqueName/displayName through a cookie-mint refresh", async () => {
+      const stale = { ...expiredWithCookies(), uniqueName: "jdoe", displayName: "Jane Doe" };
+      const mint = vi.fn(async () => ({ ok: true, accessToken: "fresh-jwt" }) as const);
+      const manager = makeManager(mint);
+      await manager.setToken(stale);
+
+      const retrieved = await manager.getToken();
+
+      expect(retrieved?.uniqueName).toBe("jdoe");
+      expect(retrieved?.displayName).toBe("Jane Doe");
+      expect(await new SessionStore(testDir).load()).toMatchObject({ uniqueName: "jdoe", displayName: "Jane Doe" });
+    });
+
     it("persists the minted token to the session store", async () => {
       const mint = vi.fn(async () => ({ ok: true, accessToken: "fresh-jwt" }) as const);
       const manager = makeManager(mint);

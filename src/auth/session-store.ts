@@ -33,6 +33,8 @@ function validToken(value: unknown): value is TokenData {
     && (token.source === "browser" || token.source === "cache")
     && (token.cookieHeader === undefined || typeof token.cookieHeader === "string")
     && (token.csrfToken === undefined || typeof token.csrfToken === "string")
+    && (token.uniqueName === undefined || typeof token.uniqueName === "string")
+    && (token.displayName === undefined || typeof token.displayName === "string")
     && validTenantOrigin(token.tenantOrigin);
 }
 
@@ -159,6 +161,26 @@ export class SessionStore {
       const record = await this.readFile();
       if (!record) return null;
       if (record.version === 1) return await this.withWriteLock(() => this.loadUnlocked());
+      return await this.decode(record);
+    } catch (error) {
+      this.storeError("load", error);
+    }
+  }
+
+  /**
+   * Read-only sibling of load(): same decode (legacy-upgrade validation and
+   * native-key decrypt included), but never takes the write lock and never
+   * writes back a migrated version 1 record. load() upgrades a legacy file
+   * in place as a side effect of reading it; callers that just want to know
+   * "what identity/token is on disk right now" (get_server_info's
+   * signedInAs, say) should not silently rewrite session.json or contend
+   * with an in-flight sign-in for the write lock just to answer that.
+   */
+  async peek(): Promise<TokenData | null> {
+    try {
+      const record = await this.readFile();
+      if (!record) return null;
+      if (record.version === 1) await this.assertLegacyUpgradePending();
       return await this.decode(record);
     } catch (error) {
       this.storeError("load", error);

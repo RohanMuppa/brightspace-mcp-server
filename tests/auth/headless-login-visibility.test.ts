@@ -197,9 +197,18 @@ describe("browser token extraction checks", () => {
   it("requires a user identifier in successful whoami JSON", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch");
     fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ sessionExpired: true }), { headers: { "content-type": "application/json" } }));
-    await expect((auth as any).validateToken("dummy")).resolves.toBe(false);
+    await expect((auth as any).validateToken("dummy")).resolves.toBeNull();
     fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ Identifier: "123" }), { headers: { "content-type": "application/json" } }));
-    await expect((auth as any).validateToken("dummy")).resolves.toBe(true);
+    await expect((auth as any).validateToken("dummy")).resolves.toEqual({});
+  });
+
+  it("carries uniqueName/displayName off a valid whoami response", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch");
+    fetchMock.mockResolvedValueOnce(new Response(
+      JSON.stringify({ Identifier: "123", UniqueName: "jdoe", DisplayName: "Jane Doe" }),
+      { headers: { "content-type": "application/json" } }
+    ));
+    await expect((auth as any).validateToken("dummy")).resolves.toEqual({ uniqueName: "jdoe", displayName: "Jane Doe" });
   });
 
   it("preserves transport errors from token validation", async () => {

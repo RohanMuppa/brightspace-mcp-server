@@ -12,6 +12,7 @@ import {
 import { toolResponse, sanitizeError } from "./tool-helpers.js";
 import { log } from "../utils/logger.js";
 import { assignmentUrl, quizUrl, discussionUrl } from "../utils/deep-links.js";
+import { dueIn } from "../utils/due-in.js";
 import type { AppConfig } from "../types/index.js";
 import { resolveCourses, type CourseRef } from "./resolve-courses.js";
 import { fetchCourseCalendarEvents, type CalendarEvent } from "./calendar-events.js";
@@ -52,6 +53,8 @@ interface UpcomingItem {
   courseId: number;
   courseName: string | null;
   dueDate: string;
+  /** Relative phrasing of dueDate ("in 3 days", "yesterday"), so a caller never has to do its own date math. */
+  dueIn: string | null;
   startDate: string | null;
   endDate: string | null;
   location?: string;
@@ -121,6 +124,7 @@ function calendarItems(events: CalendarEvent[], items: UpcomingItem[]): Upcoming
       courseId: event.courseId,
       courseName: event.courseName,
       dueDate: event.start,
+      dueIn: dueIn(event.start),
       startDate: null,
       endDate: event.end ?? null,
       ...(event.location ? { location: event.location } : {}),
@@ -171,6 +175,7 @@ async function fetchCourseDueItems(
         courseId: course.id,
         courseName: course.name,
         dueDate: folder.DueDate,
+        dueIn: dueIn(folder.DueDate),
         startDate: null,
         endDate: null,
         url: assignmentUrl(baseUrl, course.id, folder.Id),
@@ -196,6 +201,7 @@ async function fetchCourseDueItems(
         courseId: course.id,
         courseName: course.name,
         dueDate,
+        dueIn: dueIn(dueDate),
         startDate: quiz.StartDate ?? null,
         endDate: quiz.EndDate ?? null,
         url: quizUrl(baseUrl, course.id, quiz.QuizId),
@@ -217,6 +223,7 @@ async function fetchCourseDueItems(
         courseId: course.id,
         courseName: course.name,
         dueDate: topic.DueDate,
+        dueIn: dueIn(topic.DueDate),
         startDate: null,
         endDate: null,
         url: discussionUrl(baseUrl, course.id, topic.TopicId),

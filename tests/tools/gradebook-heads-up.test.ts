@@ -61,6 +61,7 @@ describe("gradebook heads-up rows", () => {
         id: 900,
         name: "Midterm Exam",
         dueDate: null,
+        dueIn: null,
         url: `${BASE}/d2l/lms/grades/my_grades/main.d2l?ou=${COURSE_ID}`,
       },
     ]);
