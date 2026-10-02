@@ -102,6 +102,19 @@ Visible mode applies to the manual `auth` command, whose window remains open for
 npx -y brightspace-mcp-server@latest auth
 ```
 
+## Browser-free sign-in (`D2L_SESSION_COOKIE` / `D2L_ACCESS_TOKEN`)
+
+Two opt-in environment variables bypass the Playwright browser entirely, for Docker, headless Linux, WSL without a display, or a tenant whose MFA requires a hardware key. Neither changes anything for a user who doesn't set them.
+
+- **`D2L_ACCESS_TOKEN`** — a pre-issued Bearer token (admin-issued Valence token, or one minted by a TA script). Used directly on every request.
+- **`D2L_SESSION_COOKIE`** — the `d2lSessionVal` and `d2lSecureSessionVal` cookies copied from a logged-in browser. Accepts either the cookie-header form (`"d2lSessionVal=...; d2lSecureSessionVal=..."`, extra cookies and either order are fine) or just the two values separated by a semicolon (`"<d2lSessionVal>;<d2lSecureSessionVal>"`). It is sent on every request via the client's existing cookie-based auth (the `cookie:` prefix in `D2LApiClient.buildAuthHeaders`) rather than minted into a Bearer JWT — minting needs an XSRF token that only a live browser page can produce, which a pasted cookie never carries.
+
+**Precedence:** `D2L_ACCESS_TOKEN` > `D2L_SESSION_COOKIE` > the normal stored-credential browser flow. Both are validated at config load (`src/utils/config.ts`) regardless of which one wins, so a typo in the losing variable still fails loudly at startup rather than silently falling back.
+
+**Validation:** both values are rejected at config load — not silently trimmed or ignored — if they contain a CR, LF, or NUL character, or have leading/trailing whitespace. Neither value is ever logged (see the redaction rules in `src/utils/logger.ts`).
+
+**No renewal, by design:** a token built from either variable is handed back by `TokenManager.getToken()` with a far-future `expiresAt` (there is no real expiry to track) and `source: "env"`. The only thing that can end it is Brightspace itself answering 401, at which point `TokenManager` returns `null` instead of the same rejected value, and `D2LApiClient` throws an error telling the user to paste a fresh cookie or token — it never spawns `AuthRunner`/`auth-cli`, because there is no stored credential to drive a browser login from. `src/index.ts` only wires `AuthRunner` and the normal "session expired" message when neither variable is set.
+
 ## Available tools
 
 Registered in `src/tools/index.ts`, schemas in `src/tools/schemas.ts`:

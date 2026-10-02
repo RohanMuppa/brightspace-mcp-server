@@ -119,6 +119,25 @@ npx -y brightspace-mcp-server@latest auth
 
 Run it from your home folder — macOS blocks `npx` from Documents, Desktop, or Downloads without Files and Folders permission (`EPERM`). Grant access in System Settings → Privacy & Security → Files and Folders, or run elsewhere.
 
+## No browser? Paste a session cookie or token
+
+The normal setup drives a real (usually hidden) browser through sign-in, which doesn't work in Docker, headless Linux, WSL without a display, or on a tenant whose MFA requires a hardware security key. Two environment variables skip the browser entirely; set one and leave the normal setup untouched:
+
+- **`D2L_SESSION_COOKIE`** — the `d2lSessionVal` and `d2lSecureSessionVal` cookies from a browser tab where you're already signed in to Brightspace. In Chrome DevTools: open your Brightspace site, **F12 → Application → Cookies**, find `d2lSessionVal` and `d2lSecureSessionVal`, and set the variable to either form:
+  ```bash
+  export D2L_SESSION_COOKIE="d2lSessionVal=<value>; d2lSecureSessionVal=<value>"
+  # or just the two values, in that order:
+  export D2L_SESSION_COOKIE="<d2lSessionVal>;<d2lSecureSessionVal>"
+  ```
+- **`D2L_ACCESS_TOKEN`** — a pre-issued Bearer token (an admin-issued Valence token, or one minted by a TA script):
+  ```bash
+  export D2L_ACCESS_TOKEN="<token>"
+  ```
+
+Set either in your MCP client's `env` config instead of a shell export if you're not running the server from a terminal. If both are set, `D2L_ACCESS_TOKEN` wins.
+
+**The catch:** neither one renews itself. A pasted session cookie dies at D2L's own idle timeout (the same timeout that would eventually log you out in a browser), and a pre-issued token dies whenever it expires or is revoked. When that happens the server does **not** fall back to a browser login — it answers with an error telling you to paste a fresh value. There's no in-between: this is a deliberate escape hatch for environments that can't run a browser at all, not a way to skip typing your password once.
+
 ## What You Can Ask About
 
 | Topic | Examples |

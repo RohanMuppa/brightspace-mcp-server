@@ -85,6 +85,7 @@ export class D2LApiClient {
   private readonly cacheTTLs: CacheTTLs;
   private readonly timeoutMs: number;
   private readonly onAuthExpired?: () => Promise<boolean>;
+  private readonly authExpiredMessage?: string;
   private readonly retryConfig: RetryConfig;
   private versions: ApiVersions | null = null;
   /** Single in-flight discovery, so concurrent first requests share one fetch. */
@@ -110,6 +111,7 @@ export class D2LApiClient {
     this.tokenManager = options.tokenManager;
     this.timeoutMs = options.timeoutMs ?? 30_000;
     this.onAuthExpired = options.onAuthExpired;
+    this.authExpiredMessage = options.authExpiredMessage;
     this.retryConfig = options.retry ?? {};
 
     // Merge user-provided TTLs with defaults
@@ -314,7 +316,7 @@ export class D2LApiClient {
       }
       log("WARN", "Auto-reauthentication did not produce a valid token");
     }
-    throw new ApiError(401, path, `Session expired. Please re-authenticate via ${AUTH_COMMAND}.`);
+    throw new ApiError(401, path, this.authExpiredMessage ?? `Session expired. Please re-authenticate via ${AUTH_COMMAND}.`);
   }
 
   /**

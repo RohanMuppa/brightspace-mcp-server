@@ -53,6 +53,13 @@ export interface D2LApiClientOptions {
   timeoutMs?: number; // default 30_000
   /** Called when auth is expired and retries are exhausted. Return true if re-auth succeeded. */
   onAuthExpired?: () => Promise<boolean>;
+  /**
+   * Overrides the generic "Session expired" message thrown when no
+   * onAuthExpired is configured (or it fails to produce a usable token).
+   * Set this for D2L_SESSION_COOKIE / D2L_ACCESS_TOKEN, where there is no
+   * browser to relaunch and the fix is to paste a fresh credential instead.
+   */
+  authExpiredMessage?: string;
   /** Backoff for 429, 5xx, and network failures. See retry.ts for defaults. */
   retry?: RetryConfig;
 }

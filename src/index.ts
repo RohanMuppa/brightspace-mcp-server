@@ -91,20 +91,35 @@ if (subcommand === 'setup') {
         sessionDir: config.sessionDir,
         baseUrl: config.baseUrl,
         tokenTtl: config.tokenTtl,
+        envAccessToken: config.envAccessToken,
+        envSessionCookie: config.envSessionCookie,
       });
 
-      // Create AuthRunner for auto-reauthentication
-      const authRunner = new AuthRunner({
-        onProgress: (message) => {
-          void server.sendLoggingMessage({ level: "info", logger: "brightspace-auth", data: message }).catch(() => {});
-        },
-      });
+      // D2L_ACCESS_TOKEN / D2L_SESSION_COOKIE are opt-in browser-free sign-in
+      // escape hatches (Docker, headless Linux, WSL, hardware-key MFA
+      // tenants). When either is set, AuthRunner is never created: there is
+      // no stored credential to drive a browser login from, and a rejected
+      // pasted credential should fail with a clear "paste a fresh one"
+      // message rather than spawning auth-cli.
+      const envAuthActive = Boolean(config.envAccessToken || config.envSessionCookie);
+      const authRunner = envAuthActive
+        ? undefined
+        : new AuthRunner({
+            onProgress: (message) => {
+              void server.sendLoggingMessage({ level: "info", logger: "brightspace-auth", data: message }).catch(() => {});
+            },
+          });
 
       // Create D2L API Client with auto-reauth support
       const apiClient = new D2LApiClient({
         baseUrl: config.baseUrl,
         tokenManager,
-        onAuthExpired: () => authRunner.run(),
+        onAuthExpired: authRunner ? () => authRunner.run() : undefined,
+        authExpiredMessage: config.envAccessToken
+          ? "D2L_ACCESS_TOKEN was rejected by Brightspace (expired or invalid). Issue a fresh token and update the environment variable; this server does not fall back to a browser login while D2L_ACCESS_TOKEN is set."
+          : config.envSessionCookie
+            ? "The pasted D2L_SESSION_COOKIE has expired. Copy a fresh d2lSessionVal/d2lSecureSessionVal pair from a logged-in browser and update the environment variable; this server does not fall back to a browser login while D2L_SESSION_COOKIE is set."
+            : undefined,
       });
 
       // Nothing here reaches Brightspace. API versions are discovered by the
