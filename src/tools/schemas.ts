@@ -179,3 +179,71 @@ export const GetMyGroupsSchema = z.object({
 });
 
 export const GetServerInfoSchema = z.object({});
+
+// ── Instructor / TA dropbox tools ──────────────────────────────────────────
+// Read-only, instructor/TA-side views of a course's dropbox (assignment)
+// folders and the submissions inside them. These answer "who has/hasn't
+// submitted" and "what feedback has already been given", distinct from the
+// student-facing tools above which only ever see the caller's own work.
+
+export const GetDropboxFoldersSchema = z.object({
+  courseId: z.coerce.number().int().positive()
+    .describe("Course ID to list dropbox (assignment) folders for."),
+});
+
+export const GetDropboxSubmissionsSchema = z.object({
+  courseId: z.coerce.number().int().positive()
+    .describe("Course ID the dropbox folder belongs to."),
+  folderId: z.coerce.number().int().positive()
+    .describe("Dropbox folder ID to list submissions for. Use get_dropbox_folders to find it."),
+  activeOnly: z.boolean().default(false)
+    .describe("When true, skip submissions that have already been fully graded (feedback published with a score). Default false: returns every submission, graded and ungraded."),
+  ignoreFeedback: z.boolean().default(false)
+    .describe("When true, omit feedback status from each submission entry to reduce response size."),
+  limit: z.coerce.number().int().positive().max(1000).default(100)
+    .describe("Maximum submissions to return. Default 100. The response reports the true total and whether it was truncated; feedback is only fetched for the returned slice."),
+});
+
+export const GetDropboxUserSubmissionsSchema = z.object({
+  courseId: z.coerce.number().int().positive()
+    .describe("Course ID the dropbox folder belongs to."),
+  folderId: z.coerce.number().int().positive()
+    .describe("Dropbox folder ID."),
+  userId: z.coerce.number().int().positive()
+    .describe("Brightspace user ID (or group ID for a group folder) whose submissions to retrieve."),
+  ignoreFeedback: z.boolean().default(false)
+    .describe("When true, omit feedback status from the response."),
+});
+
+export const GetDropboxFeedbackSchema = z.object({
+  courseId: z.coerce.number().int().positive()
+    .describe("Course ID the dropbox folder belongs to."),
+  folderId: z.coerce.number().int().positive()
+    .describe("Dropbox folder ID."),
+  entityType: z.enum(["user", "group"])
+    .describe("Whether entityId identifies an individual user or a group."),
+  entityId: z.coerce.number().int().positive()
+    .describe("User ID or group ID whose existing feedback to retrieve."),
+});
+
+export const GetRubricsForObjectSchema = z.object({
+  courseId: z.coerce.number().int().positive()
+    .describe("Course ID the dropbox folder belongs to."),
+  folderId: z.coerce.number().int().positive()
+    .describe("Dropbox folder ID whose rubric(s) to retrieve full criteria/level detail for."),
+});
+
+export const DownloadDropboxSubmissionFileSchema = z.object({
+  courseId: z.coerce.number().int().positive()
+    .describe("Course ID the dropbox folder belongs to."),
+  folderId: z.coerce.number().int().positive()
+    .describe("Dropbox folder ID."),
+  submissionId: z.coerce.number().int().positive()
+    .describe("Submission ID, from get_dropbox_submissions or get_dropbox_user_submissions."),
+  fileId: z.coerce.number().int().positive()
+    .describe("File ID within that submission."),
+  downloadPath: z.string().min(1)
+    .describe("Absolute path to the local directory where the file should be saved."),
+  customFilename: z.string().max(255).optional()
+    .describe("Custom filename for the downloaded file (include extension). If omitted, uses the original submission filename."),
+});

@@ -19,6 +19,8 @@ interface EnrollmentItem {
   Access: {
     IsActive: boolean;
     CanAccess?: boolean;
+    StartDate: string | null;
+    EndDate: string | null;
   };
 }
 
@@ -72,7 +74,9 @@ export async function resolveCourses(
       name: item.OrgUnit.Name,
       code: item.OrgUnit.Code,
       isActive: item.Access.IsActive,
-            canAccess: item.Access.CanAccess,
+      canAccess: item.Access.CanAccess,
+      startDate: item.Access.StartDate,
+      endDate: item.Access.EndDate,
     })),
     config.courseFilter
   );

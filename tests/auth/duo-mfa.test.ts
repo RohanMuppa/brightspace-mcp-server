@@ -19,8 +19,20 @@ interface DuoPageOptions {
   nodes?: FakeNode[];
   /** Container selectors the page answers to, besides body. */
   containers?: string[];
+  /** The passcode field is visible on this page from the very start. */
   passcode?: boolean;
   verifyButton?: boolean;
+  /** Duo's remembered-device gate: "Is this your device?" */
+  deviceQuestion?: boolean;
+  /** Duo's "Other options" menu control, and the "Duo Mobile passcode" choice inside it. */
+  otherOptions?: boolean;
+  /**
+   * The passcode field is hidden until Duo's "Other options" -> "Duo Mobile
+   * passcode" walk (openPasscodeEntry in duo-mfa.ts) has been completed, the
+   * way Duo's push-first Universal Prompt actually gates it. Mutually
+   * exclusive in practice with `passcode` (which is visible unconditionally).
+   */
+  passcodeBehindOtherOptions?: boolean;
 }
 
 /**
@@ -41,6 +53,13 @@ function makePage(options: DuoPageOptions = {}) {
   const fill = vi.fn(async () => {});
   const click = vi.fn(async () => {});
   const press = vi.fn(async () => {});
+  const waitForTimeout = vi.fn(async () => {});
+  const deviceQuestionClick = vi.fn(async () => {});
+  const otherOptionsClick = vi.fn(async () => {});
+  const passcodeChoiceClick = vi.fn(async () => {});
+  // Flips once "Duo Mobile passcode" has been chosen, the way the real
+  // Universal Prompt only reveals the passcode field after that walk.
+  let otherOptionsChosen = false;
 
   const nodes: FakeNode[] = options.nodes ?? (options.verificationCode
     ? [{ text: options.verificationCode, className: "verification-code", within: ["#auth-view"] }]
@@ -91,17 +110,48 @@ function makePage(options: DuoPageOptions = {}) {
           ? candidate.toLowerCase().includes(pattern.toLowerCase())
           : pattern.test(candidate);
       };
+      const passcodeVisible = () => options.passcode || (options.passcodeBehindOtherOptions && otherOptionsChosen);
+
+      if (role === "textbox") {
+        return { first: () => ({
+          isVisible: async () => Boolean(passcodeVisible()) && matchesName("passcode"),
+          fill, click, press,
+        }) };
+      }
+      if (matchesName("Yes, this is my device")) {
+        return { first: () => ({
+          isVisible: async () => Boolean(options.deviceQuestion),
+          fill, press,
+          click: deviceQuestionClick,
+        }) };
+      }
+      if (matchesName("Other options")) {
+        return { first: () => ({
+          isVisible: async () => Boolean(options.otherOptions),
+          fill, press,
+          click: otherOptionsClick,
+        }) };
+      }
+      if (matchesName("Duo Mobile passcode")) {
+        return { first: () => ({
+          isVisible: async () => Boolean(options.otherOptions),
+          fill, press,
+          click: vi.fn(async () => {
+            otherOptionsChosen = true;
+            await passcodeChoiceClick();
+          }),
+        }) };
+      }
       return { first: () => ({
-        isVisible: async () => role === "textbox"
-          ? Boolean(options.passcode) && matchesName("passcode")
-          : options.verifyButton !== false && matchesName("Verify"),
+        isVisible: async () => options.verifyButton !== false && matchesName("Verify"),
         fill,
         click,
         press,
       }) };
     }),
+    waitForTimeout,
   };
-  return { page, state, fill, click, press };
+  return { page, state, fill, click, press, waitForTimeout, deviceQuestionClick, otherOptionsClick, passcodeChoiceClick };
 }
 
 function captureWarnings() {
@@ -261,5 +311,57 @@ describe("DuoMfaHandler", () => {
     const { page, fill } = makePage({ passcode: true });
     await new DuoMfaHandler({ headless: false }).handle(page as never);
     expect(fill).not.toHaveBeenCalled();
+  });
+
+  it("answers Duo's remembered-device question with yes exactly once", async () => {
+    const { page, deviceQuestionClick } = makePage({ deviceQuestion: true });
+    const handler = new DuoMfaHandler({});
+
+    await handler.handle(page as never);
+    await handler.handle(page as never);
+
+    expect(deviceQuestionClick).toHaveBeenCalledOnce();
+  });
+
+  describe("D2L_DUO_PASSCODE", () => {
+    const originalEnv = process.env.D2L_DUO_PASSCODE;
+    afterEach(() => {
+      if (originalEnv === undefined) delete process.env.D2L_DUO_PASSCODE;
+      else process.env.D2L_DUO_PASSCODE = originalEnv;
+    });
+
+    it("walks to Duo's passcode entry and fills it when set, instead of waiting on a push", async () => {
+      process.env.D2L_DUO_PASSCODE = "1";
+      const requestMfaCode = vi.fn(async () => "123456");
+      const { page, otherOptionsClick, passcodeChoiceClick, fill } = makePage({
+        otherOptions: true,
+        passcodeBehindOtherOptions: true,
+      });
+      const handler = new DuoMfaHandler({ requestMfaCode });
+
+      await handler.handle(page as never);
+
+      expect(otherOptionsClick).toHaveBeenCalledOnce();
+      expect(passcodeChoiceClick).toHaveBeenCalledOnce();
+      expect(requestMfaCode).toHaveBeenCalledOnce();
+      expect(fill).toHaveBeenCalledWith("123456");
+    });
+
+    it("leaves the passcode walk untouched and waits on the push when unset", async () => {
+      delete process.env.D2L_DUO_PASSCODE;
+      const requestMfaCode = vi.fn(async () => "123456");
+      const { page, otherOptionsClick, passcodeChoiceClick, fill } = makePage({
+        otherOptions: true,
+        passcodeBehindOtherOptions: true,
+      });
+      const handler = new DuoMfaHandler({ requestMfaCode });
+
+      await expect(handler.handle(page as never)).resolves.toBe(true);
+
+      expect(otherOptionsClick).not.toHaveBeenCalled();
+      expect(passcodeChoiceClick).not.toHaveBeenCalled();
+      expect(requestMfaCode).not.toHaveBeenCalled();
+      expect(fill).not.toHaveBeenCalled();
+    });
   });
 });
