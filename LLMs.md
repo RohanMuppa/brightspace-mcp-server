@@ -127,6 +127,19 @@ Registered in `src/tools/index.ts`, schemas in `src/tools/schemas.ts`:
 
 These sixteen are the whole surface. An available-update notice, when there is one, rides along as a second text block on the first successful result.
 
+### Available prompts
+
+Registered in `src/prompts/index.ts` (one file per prompt, same shape as `src/tools/`). A client that
+shows server-provided prompts in a picker (e.g. Claude Desktop) surfaces these as one-click starting
+points; each renders a single user message that names the tools above by their real names:
+
+| Prompt | Arguments | What it does |
+|--------|-----------|--------------|
+| `weekly_briefing` | none | 7-day briefing of due dates, new announcements, and grade changes across all courses |
+| `grade_audit` | `courseId` (optional) | Analyzes grades for one course, or all of them, flagging missing/low items |
+| `study_planner` | `daysAhead` (optional, default 7) | Plans study time from upcoming due dates and calendar events |
+| `course_summary` | `courseId` (required) | Syllabus, content outline, assignments, and grades for one course |
+
 `get_video_transcript` takes courseId+topicId (from `get_course_content`) or a direct videoUrl, and pages long transcripts via offset/maxChars the same way `get_assignment_files` pages extracted text. It supports Kaltura (e.g. Purdue's BoilerCast) via an anonymous widget session against the Kaltura API — no Brightspace session is needed or used — and YouTube via its public timedtext endpoint. Panopto, YuJa, Echo360, and Vimeo are detected but not yet implemented: the tool names the platform and says so rather than returning an empty result. A video with no caption track also returns `hasTranscript: false` with an explanation, not an error.
 
 Quiz attempt counts are unavailable to students on the Purdue tenant: `/quizzes/{id}/attempts/` answers 403. Those quizzes carry `attemptsAvailable: false` with null counts rather than a fabricated zero.
@@ -153,6 +166,12 @@ src/
     download-file.ts        Binary download + file-type detection
     content-availability.ts Shared release-window logic (hidden/locked/not_yet_open/ended)
     topic-availability.ts   Explains a download_file failure using topic/TOC availability metadata
+  prompts/
+    index.ts                Prompt registry
+    weekly-briefing.ts      weekly_briefing prompt
+    grade-audit.ts          grade_audit prompt
+    study-planner.ts        study_planner prompt
+    course-summary.ts       course_summary prompt
   api/
     client.ts               HTTP client wrapping the Valence/D2L API. lp()/le()
                             leave the version as a {lp}/{le} placeholder that

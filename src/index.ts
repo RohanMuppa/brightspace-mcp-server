@@ -35,6 +35,12 @@ import {
   registerGetVideoTranscript,
   registerGetServerInfo,
 } from "./tools/index.js";
+import {
+  registerWeeklyBriefingPrompt,
+  registerGradeAuditPrompt,
+  registerStudyPlannerPrompt,
+  registerCourseSummaryPrompt,
+} from "./prompts/index.js";
 import { AUTH_COMMAND } from "./utils/commands.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -148,11 +154,21 @@ if (subcommand === 'setup') {
       registerGetServerInfo(server, config, PKG_VERSION);
       log("DEBUG", "MCP tools registered (16 tools)");
 
+      // Register MCP prompts — surfaced in clients (e.g. Claude Desktop) as a
+      // picker, distinct from tools. Each one is a canned user message that
+      // names our own tools by name, so a client with no idea what to ask
+      // for still gets a one-click starting point.
+      registerWeeklyBriefingPrompt(server);
+      registerGradeAuditPrompt(server);
+      registerStudyPlannerPrompt(server);
+      registerCourseSummaryPrompt(server);
+      log("DEBUG", "MCP prompts registered (4 prompts)");
+
       // Connect stdio transport
       const transport = new StdioServerTransport();
       await server.connect(transport);
 
-      log("INFO", "Brightspace MCP Server by Rohan Muppa — running on stdio (16 tools registered)");
+      log("INFO", "Brightspace MCP Server by Rohan Muppa — running on stdio (16 tools, 4 prompts registered)");
       log("INFO", "Setup: see README.md for MCP client configuration (Claude Desktop, ChatGPT Desktop, Cursor, etc.)");
     } catch (error) {
       log("ERROR", "MCP Server failed to start", error);

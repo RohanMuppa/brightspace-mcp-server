@@ -137,6 +137,21 @@ Run it from your home folder — macOS blocks `npx` from Documents, Desktop, or 
 | Calendar | "When is my midterm?" · "What's on my calendar this week?" · "Is lab cancelled on Thursday?" — reads exams, labs, review sessions, and deadlines instructors put only on the course calendar |
 | Planning | "Build me a study schedule based on my upcoming due dates" · "Which class needs the most attention right now?" — pulls from assignments, quizzes, graded discussion topics (any topic with a due date), and course calendar events such as exams and labs |
 
+### Prompts
+
+Clients that show server-provided prompts (e.g. Claude Desktop's prompt picker) can also start from one of
+four canned prompts instead of typing a question from scratch:
+
+| Prompt | Arguments | What it asks for |
+|--------|-----------|-------------------|
+| `weekly_briefing` | — | A 7-day rollup of what's due, what's new, and what's changed in grades, across every course |
+| `grade_audit` | `courseId` (optional) | Analyzes grades for one course, or all of them, and flags missing or low-scoring items |
+| `study_planner` | `daysAhead` (optional, default 7) | Plans study time from upcoming due dates and calendar events |
+| `course_summary` | `courseId` (required) | Syllabus, content outline, assignments, and grades for one course |
+
+Each prompt is a single starter message built from the tools above — it doesn't add any new capability on
+its own, just a one-click way to ask for a common combination of them.
+
 `get_course_content` reports `isAvailable`, `availabilityStatus` (`available`, `not_yet_open`, `ended`, `hidden`, or `locked`), `availabilityMessage`, `startDate`, and `endDate` for modules and topics. The effective release window includes restrictions inherited from enclosing modules.
 
 When a content-file download returns 403 or 404, `download_file` checks topic metadata and the course table of contents. Confirmed restrictions return `{ success: false, available: false, reason, message, startDate, endDate }` so the assistant can explain when content opens or why it has closed. Unexplained 404s and server/network failures retain their original errors.
