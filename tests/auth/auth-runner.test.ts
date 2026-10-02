@@ -332,4 +332,91 @@ describe("AuthRunner", () => {
     expect(process.listenerCount("exit")).toBe(exits);
     expect(vi.getTimerCount()).toBe(0);
   });
+  describe("a caller that can be told the challenge mid-call", () => {
+    it("tells the caller the number to enter as soon as the challenge appears", async () => {
+      const onChallenge = vi.fn();
+      void new AuthRunner().run(onChallenge).catch(() => {});
+      child.stdout.write("MFA_NUMBER:47\n");
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(onChallenge).toHaveBeenCalledWith("47");
+    });
+
+    it("tells the caller a number-less challenge appeared", async () => {
+      const onChallenge = vi.fn();
+      void new AuthRunner().run(onChallenge).catch(() => {});
+      child.stdout.write("MFA_PENDING\n");
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(onChallenge).toHaveBeenCalledWith(undefined);
+    });
+
+    it("keeps waiting after the challenge and resolves once the sign-in completes", async () => {
+      const result = new AuthRunner().run(() => {});
+      child.stdout.write("MFA_NUMBER:47\n");
+      await vi.advanceTimersByTimeAsync(30000);
+      child.emit("close", 0);
+
+      expect(await result).toBe(true);
+    });
+
+    it("rejects with the sign-in's own failure when it fails while the caller waits", async () => {
+      const result = new AuthRunner().run(() => {});
+      const failure = expect(result).rejects.toMatchObject({ kind: "cooldown" });
+      child.stdout.write("MFA_NUMBER:47\n");
+      await vi.advanceTimersByTimeAsync(10000);
+      child.emit("close", 3);
+      await failure;
+    });
+
+    it("answers with the pending challenge once the 45-second poll window lapses", async () => {
+      const result = new AuthRunner().run(() => {});
+      const failure = expect(result).rejects.toMatchObject({ kind: "mfaPending", numberMatch: "47" });
+      child.stdout.write("MFA_NUMBER:47\n");
+      await vi.advanceTimersByTimeAsync(45000);
+      await failure;
+
+      expect(child.kill).not.toHaveBeenCalled();
+    });
+
+    it("is still waiting just before the poll window lapses", async () => {
+      let settled = false;
+      void new AuthRunner().run(() => {}).then(() => { settled = true; }, () => { settled = true; });
+      child.stdout.write("MFA_NUMBER:47\n");
+      await vi.advanceTimersByTimeAsync(44000);
+
+      expect(settled).toBe(false);
+    });
+
+    it("answers by 55 seconds into the call when the challenge arrives late", async () => {
+      const result = new AuthRunner().run(() => {});
+      const failure = expect(result).rejects.toMatchObject({ kind: "mfaPending", numberMatch: "47" });
+      await vi.advanceTimersByTimeAsync(30000);
+      child.stdout.write("MFA_NUMBER:47\n");
+      await vi.advanceTimersByTimeAsync(25000);
+      await failure;
+    });
+
+    it("is still waiting just before 55 seconds into the call when the challenge arrives late", async () => {
+      let settled = false;
+      void new AuthRunner().run(() => {}).then(() => { settled = true; }, () => { settled = true; });
+      await vi.advanceTimersByTimeAsync(30000);
+      child.stdout.write("MFA_NUMBER:47\n");
+      await vi.advanceTimersByTimeAsync(24000);
+
+      expect(settled).toBe(false);
+    });
+
+    it("answers at once without waiting when the challenge arrives after 55 seconds", async () => {
+      const onChallenge = vi.fn();
+      const result = new AuthRunner().run(onChallenge);
+      const failure = expect(result).rejects.toMatchObject({ kind: "mfaPending", numberMatch: "47" });
+      await vi.advanceTimersByTimeAsync(56000);
+      child.stdout.write("MFA_NUMBER:47\n");
+      await vi.advanceTimersByTimeAsync(0);
+      await failure;
+
+      expect(onChallenge).not.toHaveBeenCalled();
+    });
+  });
 });

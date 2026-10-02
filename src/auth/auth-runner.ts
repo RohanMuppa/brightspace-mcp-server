@@ -34,6 +34,28 @@ const KILL_GRACE_MS = 5000;
 const JOIN_GRACE_MS = 5000;
 
 /**
+ * How long a caller that can be told the challenge mid-call (see run()'s
+ * onChallenge) keeps waiting for the background sign-in after the challenge
+ * appears: long enough to find a phone and approve.
+ */
+const MFA_POLL_MS = 45000;
+
+/**
+ * The latest a polling caller is answered, counted from when it called run().
+ * Browser launch and the SSO pages can take half a minute before the
+ * challenge even appears, so the poll is cut short to fit this budget. It
+ * stays under the 60-second request timeout MCP clients commonly apply, so a
+ * client that never shows the mid-call notice still gets the number in the
+ * answer.
+ */
+const CALL_BUDGET_MS = 55000;
+
+/** How long to poll after a challenge seen elapsedMs into the call. */
+function pollWindowMs(elapsedMs: number): number {
+  return Math.min(MFA_POLL_MS, CALL_BUDGET_MS - elapsedMs);
+}
+
+/**
  * The only two lines auth-cli.ts is allowed to hand back as structured data.
  * Deliberately strict (whole line, 1-3 digits or the literal word) so this
  * can never become a channel for arbitrary child-process text to reach a
@@ -179,8 +201,30 @@ export class AuthRunner {
   /**
    * Authenticate, joining the login this process already started if there is
    * one. Returns true on success and throws a useful error on failure.
+   *
+   * Without onChallenge, an MFA challenge answers the caller at once with an
+   * mfaPending error. With it, the caller is handed the challenge (the
+   * number to enter, if any) and keeps waiting on the background sign-in for
+   * up to MFA_POLL_MS, and never past CALL_BUDGET_MS from the call, so an
+   * approval within that window completes the caller's original request;
+   * past it, the caller gets the same mfaPending answer it would have had up
+   * front.
    */
-  async run(): Promise<boolean> {
+  async run(onChallenge?: (numberMatch: string | undefined) => void): Promise<boolean> {
+    const startedAt = Date.now();
+    try {
+      return await this.runOnce();
+    } catch (error) {
+      const childDone = this.childDone;
+      if (!onChallenge || !childDone || !(error instanceof AuthProcessError) || error.kind !== "mfaPending") throw error;
+      const windowMs = pollWindowMs(Date.now() - startedAt);
+      if (windowMs <= 0) throw error;
+      try { onChallenge(error.numberMatch); } catch { /* Announcing must not interrupt authentication. */ }
+      return this.awaitBackgroundChild(childDone, windowMs);
+    }
+  }
+
+  private runOnce(): Promise<boolean> {
     if (this.inFlight) {
       log("DEBUG", "Joining the authentication already in flight");
       return this.inFlight;
@@ -225,16 +269,25 @@ export class AuthRunner {
       await Promise.race([childDone.catch(() => {}), this.challengeSignal]);
     }
 
-    const challenge = this.pendingChallenge;
-    if (!challenge) return childDone;
+    if (!this.pendingChallenge) return childDone;
+    return this.awaitBackgroundChild(childDone, JOIN_GRACE_MS);
+  }
 
+  /**
+   * Race a background child already past its MFA challenge against a wait
+   * of graceMs. The child's own outcome wins if it lands in time; otherwise
+   * the caller is re-answered with the latest challenge the child reported.
+   */
+  private awaitBackgroundChild(childDone: Promise<boolean>, graceMs: number): Promise<boolean> {
+    const challenge = this.pendingChallenge;
     return new Promise<boolean>((resolve, reject) => {
       let settled = false;
       const graceTimer = setTimeout(() => {
         if (settled) return;
         settled = true;
-        reject(new AuthProcessError(...mfaPendingFailure(challenge.numberMatch), challenge.numberMatch));
-      }, JOIN_GRACE_MS);
+        const numberMatch = this.pendingChallenge?.numberMatch ?? challenge?.numberMatch;
+        reject(new AuthProcessError(...mfaPendingFailure(numberMatch), numberMatch));
+      }, graceMs);
       graceTimer.unref?.();
       childDone.then(
         (value) => {
