@@ -8,7 +8,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { D2LApiClient, ApiError } from "../api/index.js";
 import { DownloadFileSchema } from "./schemas.js";
-import { toolResponse, sanitizeError, errorResponse } from "./tool-helpers.js";
+import { toolResponse, sanitizeError, errorResponse, withUpdateNotice } from "./tool-helpers.js";
 import { log } from "../utils/logger.js";
 import { checkTopicAvailability } from "./topic-availability.js";
 // Path containment checks belong to secureDownload, which disk-mode downloads
@@ -29,6 +29,18 @@ import path from "node:path";
  * just needs to pass an absolute `downloadPath` to save it to disk instead.
  */
 const INLINE_MAX_SIZE = 10 * 1024 * 1024; // 10 MB
+
+/**
+ * Maximum bytes of an image specifically that we'll embed inline as an MCP
+ * ImageContent block. Base64 encoding adds ~33% overhead, so a file right up
+ * against INLINE_MAX_SIZE (10 MB) would base64-encode to ~13.6 MB — comfortably
+ * over the model API's ~5 MB per-image limit, which fails the *entire* tool
+ * response, not just the image block. A tighter cap here (3.5 MB raw, ~4.7 MB
+ * base64) keeps every inlined image under that limit; a larger image falls
+ * through to the binary_description_only branch with a note to use
+ * downloadPath instead.
+ */
+const INLINE_IMAGE_MAX_SIZE = 3.5 * 1024 * 1024; // 3.5 MB
 
 /**
  * Maximum characters of extracted text (PDF, Office document, or plain text)
@@ -123,21 +135,31 @@ async function respondInline(
       metadata.representation = "pdf_text_extraction_failed";
       metadata.note =
         "No text layer found in this PDF (it may be a scan). Re-run with an absolute downloadPath to save the raw file to disk.";
-      content.push({ type: "text", text: JSON.stringify(metadata, null, 2) });
-      return { content };
+      content.push({ type: "text", text: JSON.stringify(metadata) });
+      return withUpdateNotice(content);
     }
     const { body, truncated } = truncateForInline(extracted.text, INLINE_TEXT_MAX_CHARS);
     metadata.representation = "extracted_text";
     metadata.pages = extracted.totalPages;
     metadata.truncated = truncated;
-    content.push({ type: "text", text: JSON.stringify(metadata, null, 2) });
+    content.push({ type: "text", text: JSON.stringify(metadata) });
     content.push({
       type: "text",
       text: `--- Extracted PDF text (${extracted.totalPages} page${extracted.totalPages === 1 ? "" : "s"})${truncated ? ", truncated" : ""} ---\n${body}`,
     });
   } else if (INLINE_IMAGE_MIMES.has(mime)) {
+    if (buffer.length > INLINE_IMAGE_MAX_SIZE) {
+      // Base64-encoding a file this size would exceed the model API's image
+      // limit and fail the whole response, so this falls back to the same
+      // "can't display inline" path as an unsupported binary format rather
+      // than emitting an oversized ImageContent block.
+      metadata.representation = "binary_description_only";
+      metadata.note = `This image is too large to inline (${Math.round(buffer.length / 1024 / 1024)}MB, inline image max ${INLINE_IMAGE_MAX_SIZE / 1024 / 1024}MB). Re-run download_file with an absolute downloadPath to save it to disk instead.`;
+      content.push({ type: "text", text: JSON.stringify(metadata) });
+      return withUpdateNotice(content);
+    }
     metadata.representation = "image";
-    content.push({ type: "text", text: JSON.stringify(metadata, null, 2) });
+    content.push({ type: "text", text: JSON.stringify(metadata) });
     content.push({ type: "image", data: buffer.toString("base64"), mimeType: mime });
   } else if (INLINE_OFFICE_MIMES.has(mime)) {
     // Reuses the same zip-based text extraction get_assignment_files and
@@ -148,20 +170,20 @@ async function respondInline(
       metadata.representation = "office_text_extraction_failed";
       metadata.note =
         "No readable text found in this Office document. Re-run with an absolute downloadPath to save the raw file to disk.";
-      content.push({ type: "text", text: JSON.stringify(metadata, null, 2) });
-      return { content };
+      content.push({ type: "text", text: JSON.stringify(metadata) });
+      return withUpdateNotice(content);
     }
     const { body, truncated } = truncateForInline(text, INLINE_TEXT_MAX_CHARS);
     metadata.representation = "extracted_text";
     metadata.truncated = truncated;
-    content.push({ type: "text", text: JSON.stringify(metadata, null, 2) });
+    content.push({ type: "text", text: JSON.stringify(metadata) });
     content.push({ type: "text", text: `--- Extracted text (${effectiveFilename}) ---\n${body}` });
   } else if (INLINE_TEXT_MIMES.has(mime)) {
     const raw = buffer.toString("utf-8");
     const { body, truncated } = truncateForInline(raw, INLINE_TEXT_MAX_CHARS);
     metadata.representation = "text";
     metadata.truncated = truncated;
-    content.push({ type: "text", text: JSON.stringify(metadata, null, 2) });
+    content.push({ type: "text", text: JSON.stringify(metadata) });
     content.push({ type: "text", text: `--- File contents (${effectiveFilename}) ---\n${body}` });
   } else {
     // Binary formats we can't meaningfully show in the conversation (zip,
@@ -170,10 +192,10 @@ async function respondInline(
     // mode described above, so this just points the caller at disk mode.
     metadata.representation = "binary_description_only";
     metadata.note = `This file type (${mime}) cannot be displayed inline. Re-run download_file with an absolute downloadPath to save it to disk instead.`;
-    content.push({ type: "text", text: JSON.stringify(metadata, null, 2) });
+    content.push({ type: "text", text: JSON.stringify(metadata) });
   }
 
-  return { content };
+  return withUpdateNotice(content);
 }
 
 /**

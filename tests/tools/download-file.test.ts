@@ -2,10 +2,14 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import {
+
+vi.mock("../../src/utils/update-checker.js", () => ({ getUpdateNotice: vi.fn(() => null) }));
+
+const { getUpdateNotice } = await import("../../src/utils/update-checker.js");
+const {
   registerDownloadFile,
   parseContentDispositionFilename,
-} from "../../src/tools/download-file.js";
+} = await import("../../src/tools/download-file.js");
 
 /**
  * download_file had no test of its own. Both of the things it gets from the
@@ -51,6 +55,113 @@ function minimalPdf(text: string): Buffer {
 /** A buffer file-type recognises as a JPEG purely from its header bytes. */
 function jpegBuffer(): Buffer {
   return Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(256)]);
+}
+
+/**
+ * A buffer file-type recognises as a PNG. Unlike JPEG, file-type's PNG
+ * detector reads past the signature for a real IHDR chunk (13 bytes, by
+ * name) followed by a chunk it can name as IDAT before it trusts the magic
+ * bytes alone — the rest of the file can be arbitrary padding to reach
+ * `totalSize` since detection returns as soon as it sees the IDAT header.
+ */
+function pngBuffer(totalSize: number): Buffer {
+  const signature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
+  const ihdrHeader = Buffer.alloc(8);
+  ihdrHeader.writeUInt32BE(13, 0);
+  ihdrHeader.write("IHDR", 4, "latin1");
+  const ihdrDataAndCrc = Buffer.alloc(13 + 4); // contents unchecked by file-type
+
+  const idatHeader = Buffer.alloc(8);
+  idatHeader.writeUInt32BE(0, 0);
+  idatHeader.write("IDAT", 4, "latin1");
+
+  const head = Buffer.concat([signature, ihdrHeader, ihdrDataAndCrc, idatHeader]);
+  return Buffer.concat([head, Buffer.alloc(Math.max(0, totalSize - head.length))]);
+}
+
+/**
+ * Build a minimal real ZIP archive (stored entries, no compression) so
+ * file-type's own zip scanner — not just our in-repo zip-extract.ts reader —
+ * recognises it. Mirrors the helper in tests/utils/zip-extract.test.ts.
+ */
+function buildZip(entries: Array<{ name: string; content: Buffer }>): Buffer {
+  const locals: Buffer[] = [];
+  const centrals: Buffer[] = [];
+  let offset = 0;
+
+  for (const entry of entries) {
+    const name = Buffer.from(entry.name, "utf-8");
+
+    const local = Buffer.alloc(30);
+    local.writeUInt32LE(0x04034b50, 0);
+    local.writeUInt16LE(20, 4);
+    local.writeUInt16LE(0, 8); // stored, no compression
+    local.writeUInt32LE(0, 14); // crc, unchecked by either reader
+    local.writeUInt32LE(entry.content.length, 18);
+    local.writeUInt32LE(entry.content.length, 22);
+    local.writeUInt16LE(name.length, 26);
+    local.writeUInt16LE(0, 28);
+    const localBlock = Buffer.concat([local, name, entry.content]);
+
+    const central = Buffer.alloc(46);
+    central.writeUInt32LE(0x02014b50, 0);
+    central.writeUInt16LE(20, 6);
+    central.writeUInt16LE(0, 10);
+    central.writeUInt32LE(0, 16);
+    central.writeUInt32LE(entry.content.length, 20);
+    central.writeUInt32LE(entry.content.length, 24);
+    central.writeUInt16LE(name.length, 28);
+    central.writeUInt32LE(offset, 42);
+    centrals.push(Buffer.concat([central, name]));
+
+    locals.push(localBlock);
+    offset += localBlock.length;
+  }
+
+  const centralBlock = Buffer.concat(centrals);
+  const eocd = Buffer.alloc(22);
+  eocd.writeUInt32LE(0x06054b50, 0);
+  eocd.writeUInt16LE(entries.length, 8);
+  eocd.writeUInt16LE(entries.length, 10);
+  eocd.writeUInt32LE(centralBlock.length, 12);
+  eocd.writeUInt32LE(offset, 16);
+
+  return Buffer.concat([...locals, centralBlock, eocd]);
+}
+
+/**
+ * A DOCX file-type will actually identify as
+ * application/vnd.openxmlformats-officedocument.wordprocessingml.document:
+ * a [Content_Types].xml declaring word/document.xml's content type (the
+ * ".main+xml" suffix is how file-type's own detector reads this, matching a
+ * real DOCX) plus the document part itself.
+ */
+function fakeDocxBuffer(text: string): Buffer {
+  const contentTypes = Buffer.from(
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+      '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">' +
+      '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>' +
+      '<Default Extension="xml" ContentType="application/xml"/>' +
+      '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>' +
+      "</Types>",
+    "utf-8"
+  );
+  const documentXml = Buffer.from(
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+      '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">' +
+      `<w:body><w:p><w:r><w:t>${text}</w:t></w:r></w:p></w:body></w:document>`,
+    "utf-8"
+  );
+  return buildZip([
+    { name: "[Content_Types].xml", content: contentTypes },
+    { name: "word/document.xml", content: documentXml },
+  ]);
+}
+
+/** A plain ZIP with no Office parts — file-type reports it as application/zip. */
+function plainZipBuffer(): Buffer {
+  return buildZip([{ name: "readme.txt", content: Buffer.from("just a zip, nothing office about it") }]);
 }
 
 function toArrayBuffer(buf: Buffer): ArrayBuffer {
@@ -481,5 +592,145 @@ describe("download_file: inline mode (downloadPath omitted)", () => {
     expect(result.isError).toBeUndefined();
     expect(parse(result).mode).toBe("inline");
     expect(textOf(result)).toContain("Final answer: 42");
+  });
+
+  it("serializes the inline metadata block as compact JSON, not pretty-printed", async () => {
+    const { call } = setup({
+      disposition: 'attachment; filename="Lecture 7.pdf"',
+      body: minimalPdf("Office hours are Tuesdays"),
+    });
+
+    const result = await call({ courseId: COURSE, topicId: 7 });
+
+    const metadataText = result.content[0].text;
+    expect(metadataText).not.toContain("\n");
+    expect(metadataText).not.toContain("  ");
+    expect(JSON.parse(metadataText).mode).toBe("inline");
+  });
+
+  it("appends the update notice in inline mode just like disk mode", async () => {
+    vi.mocked(getUpdateNotice).mockReturnValueOnce("Update available: v2.0.0 to v2.1.0.");
+
+    const { call } = setup({
+      disposition: 'attachment; filename="Lecture 7.pdf"',
+      body: minimalPdf("Office hours are Tuesdays"),
+    });
+
+    const result = await call({ courseId: COURSE, topicId: 7 });
+
+    expect(textOf(result)).toContain("Update available: v2.0.0 to v2.1.0.");
+  });
+
+  it("falls back to binary_description_only for an image over the inline image cap, even though it fits the overall inline cap", async () => {
+    // 4 MB clears INLINE_MAX_SIZE's 10 MB ceiling but should trip the
+    // tighter image-only cap: base64 would otherwise push a 6-10 MB image
+    // past the model API's ~5 MB image limit and fail the whole response.
+    const { call } = setup({
+      disposition: 'attachment; filename="diagram.png"',
+      body: pngBuffer(4 * 1024 * 1024),
+    });
+
+    const result = await call({ courseId: COURSE, topicId: 7 });
+
+    expect(result.isError).toBeUndefined();
+    const metadata = parse(result);
+    expect(metadata.representation).toBe("binary_description_only");
+    expect(metadata.note).toContain("downloadPath");
+    expect(result.content.some((c: any) => c.type === "image")).toBe(false);
+  });
+
+  it("still inlines a PNG under the image cap as an ImageContent block", async () => {
+    const { call } = setup({
+      disposition: 'attachment; filename="small.png"',
+      body: pngBuffer(1024),
+    });
+
+    const result = await call({ courseId: COURSE, topicId: 7 });
+
+    expect(parse(result).representation).toBe("image");
+    const imageBlock = result.content.find((c: any) => c.type === "image");
+    expect(imageBlock?.mimeType).toBe("image/png");
+  });
+
+  it("extracts text from a DOCX when downloadPath is omitted", async () => {
+    const { call } = setup({
+      disposition: 'attachment; filename="syllabus.docx"',
+      body: fakeDocxBuffer("Office hours are Tuesdays at 2pm"),
+    });
+
+    const result = await call({ courseId: COURSE, topicId: 7 });
+
+    expect(result.isError).toBeUndefined();
+    const metadata = parse(result);
+    expect(metadata.mode).toBe("inline");
+    expect(metadata.mimeType).toBe(
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    );
+    expect(metadata.representation).toBe("extracted_text");
+    expect(textOf(result)).toContain("Office hours are Tuesdays at 2pm");
+  });
+
+  it("returns plain text verbatim for a text/plain file", async () => {
+    const { call } = setup({
+      disposition: 'attachment; filename="notes.txt"',
+      body: Buffer.from("Office hours moved to Friday this week.", "utf-8"),
+    });
+
+    const result = await call({ courseId: COURSE, topicId: 7 });
+
+    expect(result.isError).toBeUndefined();
+    const metadata = parse(result);
+    expect(metadata.mode).toBe("inline");
+    expect(metadata.mimeType).toBe("text/plain");
+    expect(metadata.representation).toBe("text");
+    expect(metadata.truncated).toBe(false);
+    expect(textOf(result)).toContain("Office hours moved to Friday this week.");
+  });
+
+  it("truncates extracted text at 400,000 characters and says so", async () => {
+    const { call } = setup({
+      disposition: 'attachment; filename="notes.txt"',
+      body: Buffer.from("a".repeat(400_050), "utf-8"),
+    });
+
+    const result = await call({ courseId: COURSE, topicId: 7 });
+
+    const metadata = parse(result);
+    expect(metadata.truncated).toBe(true);
+    expect(textOf(result)).toContain("[...truncated at 400000 characters");
+    expect(textOf(result)).toContain("downloadPath");
+  });
+
+  it("reports binary_description_only and points to downloadPath for a type with no inline representation", async () => {
+    const { call } = setup({
+      disposition: 'attachment; filename="archive.zip"',
+      body: plainZipBuffer(),
+    });
+
+    const result = await call({ courseId: COURSE, topicId: 7 });
+
+    expect(result.isError).toBeUndefined();
+    const metadata = parse(result);
+    expect(metadata.mode).toBe("inline");
+    expect(metadata.mimeType).toBe("application/zip");
+    expect(metadata.representation).toBe("binary_description_only");
+    expect(metadata.note).toContain("downloadPath");
+    // Only the one metadata block — no attempt to inline the raw bytes.
+    expect(result.content).toHaveLength(1);
+  });
+
+  it("reports pdf_text_extraction_failed for a PDF with no readable text layer", async () => {
+    const { call } = setup({
+      disposition: 'attachment; filename="scan.pdf"',
+      body: pdfBuffer(), // a bare %PDF-1.4 header with no real page content
+    });
+
+    const result = await call({ courseId: COURSE, topicId: 7 });
+
+    expect(result.isError).toBeUndefined();
+    const metadata = parse(result);
+    expect(metadata.mode).toBe("inline");
+    expect(metadata.representation).toBe("pdf_text_extraction_failed");
+    expect(metadata.note).toContain("downloadPath");
   });
 });

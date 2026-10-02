@@ -19,26 +19,36 @@ import {
 } from "../utils/download-errors.js";
 
 /**
+ * Append an available-update notice to an already-built content array and
+ * wrap it as a CallToolResult. This is the one place an update notice can
+ * reach a user regardless of which tool (or which response mode within a
+ * tool) they happen to hit, and it is throttled inside getUpdateNotice so a
+ * busy session is not spammed. `toolResponse` and any hand-built multi-block
+ * result (e.g. download_file's inline mode) both funnel through here so
+ * neither path can silently drop the notice.
+ */
+export function withUpdateNotice(content: CallToolResult["content"]): CallToolResult {
+  const notice = getUpdateNotice();
+  if (notice) content.push({ type: "text", text: notice });
+
+  return { content };
+}
+
+/**
  * Wrap data as MCP-compatible tool result.
  *
  * Every tool returns through here, which makes it the one place an update
  * notice can reach a user regardless of which tool they happen to call. The
  * notice is appended as a separate content block so content[0].text stays a
- * pure JSON document for anything parsing it, and it is throttled inside
- * getUpdateNotice so a busy session is not spammed.
+ * pure JSON document for anything parsing it.
  */
 export function toolResponse(data: unknown): CallToolResult {
-  const content: CallToolResult["content"] = [
+  return withUpdateNotice([
     {
       type: "text",
       text: JSON.stringify(data),
     },
-  ];
-
-  const notice = getUpdateNotice();
-  if (notice) content.push({ type: "text", text: notice });
-
-  return { content };
+  ]);
 }
 
 /**
