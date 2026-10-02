@@ -24,10 +24,16 @@ export interface SignedInIdentity {
  * means "don't report an identity", not a failed tool call. Identity is
  * reported regardless of whether the underlying token itself is still valid
  * — it answers "who last signed in", not "is that session still usable".
+ *
+ * Uses SessionStore.peek() rather than load(): load() silently upgrades a
+ * legacy version-1 session file in place (a write) the first time anything
+ * reads it, and this tool is called just to report status, often repeatedly
+ * and never as part of establishing a session. A read-only status check
+ * should not be the thing that migrates on-disk session state.
  */
 async function defaultReadSignedInIdentity(sessionDir: string): Promise<SignedInIdentity | null> {
   try {
-    const token = await new SessionStore(sessionDir).load();
+    const token = await new SessionStore(sessionDir).peek();
     if (!token || (!token.uniqueName && !token.displayName)) return null;
     return {
       ...(token.uniqueName ? { uniqueName: token.uniqueName } : {}),
@@ -84,8 +90,11 @@ export function registerGetServerInfo(
         hasStoredCredential: config.password !== undefined,
         localTimezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
         // Minutes the local clock is ahead of UTC (the inverse sign of
-        // Date#getTimezoneOffset, which is "minutes behind UTC").
-        utcOffsetMinutes: -new Date().getTimezoneOffset(),
+        // Date#getTimezoneOffset, which is "minutes behind UTC"). On a UTC
+        // runner getTimezoneOffset() is 0, so negating it yields -0; `|| 0`
+        // normalizes that back to 0 so Object.is-based equality (toBe(0) in
+        // tests, and any JSON consumer that cares) sees a plain zero.
+        utcOffsetMinutes: -new Date().getTimezoneOffset() || 0,
         ...(microsoftSession && { microsoftSession }),
         ...(signedInAs && { signedInAs }),
       });

@@ -129,6 +129,23 @@ describe("SessionStore", () => {
     expect(await fs.readFile(path.join(dir, "session.json"), "utf8")).toBe(saved);
   });
 
+  it("peek() reads a legacy session without upgrading it on disk", async () => {
+    const planted = await writeLegacySession(dir);
+    expect(await store.peek()).toEqual(testToken);
+    expect(await fs.readFile(path.join(dir, "session.json"), "utf8")).toBe(planted);
+    expect(backend.writes).toBe(0);
+  });
+
+  it("peek() matches load() for an already-upgraded session", async () => {
+    await store.save(testToken);
+    expect(await store.peek()).toEqual(await store.load());
+  });
+
+  it("peek() returns null only for an absent session", async () => {
+    expect(await store.peek()).toBeNull();
+    expect(backend.writes).toBe(0);
+  });
+
   it("clears a readable session recoverably", async () => {
     await store.save(testToken);
     await store.clear();

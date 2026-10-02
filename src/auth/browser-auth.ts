@@ -170,7 +170,13 @@ export class BrowserAuth {
       if (material.cookieHeader && material.csrfToken) {
         const minted = await mintAccessToken({ baseUrl: this.config.baseUrl, cookieHeader: material.cookieHeader, csrfToken: material.csrfToken });
         if (minted.ok) {
-          token = { accessToken: minted.accessToken, capturedAt: Date.now(), expiresAt: Date.now() + this.config.tokenTtl * 1000, source: "browser" };
+          // The mint endpoint itself carries no identity. Reuse the same
+          // whoami read the other extraction strategies already validate
+          // against so a mint-path login reports signedInAs too; a failure
+          // here (offline, slow tenant) must not fail a login that already
+          // has a good token, so it degrades to "no identity" instead.
+          const identity = await this.validateToken(minted.accessToken).catch(() => null);
+          token = { accessToken: minted.accessToken, capturedAt: Date.now(), expiresAt: Date.now() + this.config.tokenTtl * 1000, source: "browser", ...identity };
         } else if (minted.reason === "transport") {
           throw new BrowserAuthTransportError(`Token mint temporarily failed: ${minted.detail ?? "network unavailable"}. Saved sign-in state is preserved.`);
         } else {

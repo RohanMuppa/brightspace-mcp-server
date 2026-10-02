@@ -65,7 +65,11 @@ describe("get_server_info", () => {
   });
 
   it("reports the UTC offset in minutes, the inverse of Date#getTimezoneOffset", async () => {
-    expect((await payload(config())).utcOffsetMinutes).toBe(-new Date().getTimezoneOffset());
+    // On a UTC runner, getTimezoneOffset() is 0 and negating it produces -0;
+    // `|| 0` is the same normalization the source applies, since the
+    // response has already been through a JSON round trip (which itself
+    // turns -0 into 0) by the time it reaches this assertion.
+    expect((await payload(config())).utcOffsetMinutes).toBe(-new Date().getTimezoneOffset() || 0);
   });
 
   it("reports the version the server was started with", async () => {

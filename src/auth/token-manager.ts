@@ -151,6 +151,11 @@ export class TokenManager {
         source: "browser",
         cookieHeader: stale.cookieHeader,
         csrfToken: stale.csrfToken,
+        // The cookie mint only returns a JWT, not an identity; carry the
+        // uniqueName/displayName the original browser login captured
+        // forward so an hourly HTTP re-mint doesn't erase signedInAs.
+        uniqueName: stale.uniqueName,
+        displayName: stale.displayName,
       };
       if (!await this.sessionStore.saveIfCurrent(token, stale)) return this.afterConcurrentChange();
       this.cachedToken = token;
