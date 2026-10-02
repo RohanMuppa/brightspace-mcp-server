@@ -157,4 +157,9 @@ export const GetRosterSchema = z.object({
     .describe("Maximum users to return. Default 100. The response reports the true total and whether it was truncated."),
 });
 
+export const GetMyGroupsSchema = z.object({
+  courseId: z.coerce.number().int().positive()
+    .describe("Course ID to list the current user's project/discussion groups for."),
+});
+
 export const GetServerInfoSchema = z.object({});

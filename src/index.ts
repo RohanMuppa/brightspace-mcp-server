@@ -30,6 +30,7 @@ import {
   registerDownloadFile,
   registerGetClasslistEmails,
   registerGetRoster,
+  registerGetMyGroups,
   registerGetSyllabus,
   registerGetDiscussions,
   registerGetVideoTranscript,
@@ -142,6 +143,7 @@ if (subcommand === 'setup') {
       registerDownloadFile(server, apiClient);
       registerGetClasslistEmails(server, apiClient);
       registerGetRoster(server, apiClient);
+      registerGetMyGroups(server, apiClient);
       registerGetSyllabus(server, apiClient);
       registerGetDiscussions(server, apiClient);
       registerGetVideoTranscript(server, apiClient);

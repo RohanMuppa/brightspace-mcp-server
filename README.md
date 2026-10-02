@@ -131,6 +131,7 @@ Run it from your home folder — macOS blocks `npx` from Documents, Desktop, or 
 | Announcements | "Did any professor post something important today?" · "What did my CS prof announce this week?" · "Any announcements since last Monday?" · "Read the file attached to today's announcement" · "Save the rubric my prof attached to that announcement" |
 | Course content | "Find the midterm review slides" · "Download every PDF from Module 5" · "What's new in this course since I last checked?" |
 | Roster | "Who are the TAs for ECE 264?" · "Get me my instructor's email" |
+| Groups | "Who is in my project group?" · "List my lab group members for this course" |
 | Discussions | "What are people saying in the final project thread?" · "Summarize the latest discussion posts" |
 | Video transcripts | "What did the professor say about pinch-off in Tuesday's lecture recording?" · "Summarize last week's BoilerCast video" — works for Kaltura and YouTube embeds; other platforms report that they aren't supported yet |
 | Troubleshooting | "Which version of the Brightspace server am I running?" · "Where is my Brightspace config file?" — `get_server_info` reports the version, Node runtime, platform, config and session paths, school URL, whether a credential is stored, and what Microsoft remembered (`microsoftSession`: stay-signed-in and its expiry, plus whether "Don't ask again" was ticked, already on, not offered, or left off because `D2L_REMEMBER_MFA` isn't set), without contacting Brightspace or revealing secrets |

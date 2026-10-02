@@ -17,6 +17,7 @@ export { registerGetCourseContent } from "./get-course-content.js";
 export { registerDownloadFile } from "./download-file.js";
 export { registerGetClasslistEmails } from "./get-classlist-emails.js";
 export { registerGetRoster } from "./get-roster.js";
+export { registerGetMyGroups } from "./get-my-groups.js";
 export { registerGetSyllabus } from "./get-syllabus.js";
 export { registerGetDiscussions } from "./get-discussions.js";
 export { registerGetVideoTranscript } from "./get-video-transcript.js";

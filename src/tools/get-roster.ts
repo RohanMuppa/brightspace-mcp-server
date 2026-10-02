@@ -13,7 +13,7 @@ import {
 import { toolResponse, sanitizeError } from "./tool-helpers.js";
 import { log } from "../utils/logger.js";
 
-interface ClasslistUser {
+export interface ClasslistUser {
   Identifier: number;
   DisplayName: string;
   Email: string | null;
@@ -32,9 +32,13 @@ const INSTRUCTOR_ROLE_ID = 109;
 const TA_ROLE_ID = 135;
 
 /**
- * Fetch every classlist user matching the optional filters, across all pages
+ * Fetch every classlist user matching the optional filters, across all pages.
+ *
+ * Exported so other tools that need names for a course's enrolled users
+ * (e.g. get_my_groups resolving group membership) can reuse this instead of
+ * re-implementing the paged classlist fetch.
  */
-async function fetchClasslistUsers(
+export async function fetchClasslistUsers(
   apiClient: D2LApiClient,
   courseId: number,
   options?: { roleId?: number; searchTerm?: string }
