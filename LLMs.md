@@ -121,7 +121,7 @@ Registered in `src/tools/index.ts`, schemas in `src/tools/schemas.ts`:
 
 | Tool | Purpose |
 |------|---------|
-| `get_my_courses` | List enrolled courses |
+| `get_my_courses` | List enrolled courses, each with `startDate`/`endDate` (the enrollment's `Access.StartDate`/`Access.EndDate`) alongside the existing fields — emitted unconditionally, independent of `currentOnly` |
 | `get_my_grades` | Grades for a course or all courses |
 | `get_assignments` | Assignments with due dates and submission status |
 | `get_assignment_rubric` | Full rubric table (criteria groups, levels, points, descriptions) for a dropbox assignment, plus the student's own graded outcome per criterion when the tenant exposes it |
