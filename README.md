@@ -111,6 +111,7 @@ How often you're asked is up to your school, not this tool. Everything else abou
 
 ## Something not working?
 
+- Run `npx -y brightspace-mcp-server@latest doctor` first — it checks your Node version, saved setup, credential store, Brightspace connectivity, saved sign-in, and installed version, and tells you exactly what to fix.
 - **It works in the terminal but not in the app:** the app starts it separately and may not see your password store yet — see [docs/troubleshooting.md](docs/troubleshooting.md).
 - **Which version do I have?** Ask your AI "which version of the Brightspace server am I running?"
 - **Still stuck?** [Open an issue](https://github.com/RohanMuppa/brightspace-mcp-server/issues) and paste what the terminal printed.

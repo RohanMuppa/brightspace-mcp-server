@@ -207,6 +207,7 @@ src/
   index.ts                  MCP server entrypoint, registers tools
   setup.ts                  Setup wizard (CLI subcommand `setup`)
   auth-cli.ts               Manual reauth (CLI subcommand `auth`)
+  doctor.ts                 Beginner diagnostic (CLI subcommand `doctor`)
   update.ts                 Self-update checker
   tools/
     index.ts                Tool registry
@@ -271,6 +272,7 @@ src/
 | `npx -y brightspace-mcp-server@latest setup --ngeeann` | Setup with Ngee Ann Polytechnic preset |
 | `npx -y brightspace-mcp-server@latest setup --javeriana` | Setup with Javeriana Cali preset |
 | `npx -y brightspace-mcp-server@latest auth` | Manual reauth |
+| `npx -y brightspace-mcp-server@latest doctor` | Diagnose a broken setup — Node version, saved config, credential store, Brightspace reachability, saved sign-in, a real course-list call, and installed version, each as a ✓/✗ line with one plain-English next step |
 | `npx -y brightspace-mcp-server@latest` | Run the MCP server (registered in AI client config) |
 | `npm run build` | Compile TypeScript to `build/` |
 | `npm run dev` | Watch-mode TypeScript compile |

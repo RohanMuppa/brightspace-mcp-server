@@ -23,6 +23,9 @@ export const AUTH_COMMAND = `npx -y ${PACKAGE_NAME}@latest auth`;
 /** Re-run the setup wizard. Always runs the current published release. */
 export const SETUP_COMMAND = `npx -y ${PACKAGE_NAME}@latest setup`;
 
+/** Diagnose a broken setup. Always runs the current published release. */
+export const DOCTOR_COMMAND = `npx -y ${PACKAGE_NAME}@latest doctor`;
+
 /** Bring a global install up to date. The only fix for a stale `npm i -g` copy. */
 export const GLOBAL_INSTALL_COMMAND = `npm install -g ${PACKAGE_NAME}@latest`;
 

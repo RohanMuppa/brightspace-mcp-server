@@ -233,7 +233,8 @@ export function parseSessionCookieEnv(raw: string): string {
   throw new Error(SESSION_COOKIE_FORMAT_ERROR);
 }
 
-function expandTilde(filePath: string): string {
+/** Exported for the `doctor` CLI, which resolves the same session directory without loading the full app config. */
+export function expandTilde(filePath: string): string {
   if (filePath.startsWith("~")) {
     return path.join(os.homedir(), filePath.slice(1));
   }

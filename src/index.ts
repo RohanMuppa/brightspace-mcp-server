@@ -70,6 +70,8 @@ if (subcommand === 'setup') {
   await import('./setup.js');
 } else if (subcommand === 'auth') {
   await import('./auth-cli.js');
+} else if (subcommand === 'doctor') {
+  await import('./doctor.js');
 } else {
   // ── MCP Server (default) ────────────────────────────────────────────
 

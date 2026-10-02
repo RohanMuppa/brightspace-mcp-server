@@ -21,7 +21,7 @@ import {
 import { saveSecureConfig } from "./utils/secure-config.js";
 import { writeFileAtomicSync } from "./utils/atomic-write.js";
 import type { ConfigStoreData } from "./utils/config-store.js";
-import { AUTH_COMMAND } from "./utils/commands.js";
+import { AUTH_COMMAND, DOCTOR_COMMAND } from "./utils/commands.js";
 import {
   cliMcpClients,
   configureCliMcpClient,
@@ -485,14 +485,15 @@ async function main(): Promise<void> {
     console.log(dim(`  Brightspace URL: ${baseUrl}`));
     console.log("");
   } else {
+    console.log(dim("  Your school's Brightspace address — the web address you open to see your courses."));
     while (!baseUrl) {
       const raw = await ask(
         rl,
-        "What is your Brightspace URL? (e.g., purdue.brightspace.com): ",
+        "What is your Brightspace address? (e.g., purdue.brightspace.com): ",
       );
       const normalized = normalizeUrl(raw);
       if (!raw || !isValidUrl(normalized)) {
-        console.log(yellow("  Please enter a valid URL (e.g., purdue.brightspace.com)"));
+        console.log(yellow("  Please enter a valid address, like purdue.brightspace.com"));
         continue;
       }
       baseUrl = normalized;
@@ -520,9 +521,11 @@ async function main(): Promise<void> {
   // ── Step 2: Username ─────────────────────────────────────────────
   const usernamePrompt = preset
     ? `What is your ${preset.usernameLabel}? `
-    : "What is your Brightspace username? ";
+    : "What username do you use to sign in to Brightspace? ";
   if (preset?.usernameHint) {
     console.log(dim(`  ${preset.usernameHint}`));
+  } else {
+    console.log(dim("  The same username you type on your school's Brightspace sign-in page."));
   }
   let username = "";
   while (!username) {
@@ -537,6 +540,7 @@ async function main(): Promise<void> {
   // Close the rl temporarily since askPassword manages its own
   rl.close();
 
+  console.log(dim("  The password you use to sign in. It won't be shown as you type — asterisks stand in for each character."));
   const passwordPrompt = preset
     ? `What is your ${preset.name} password? `
     : "What is your Brightspace password? ";
@@ -557,19 +561,20 @@ async function main(): Promise<void> {
   const configuredClients: string[] = [];
 
   // ── Step 4: MFA info ─────────────────────────────────────────────
+  console.log(dim("  Your school may ask you to approve the sign-in a second way — on your phone, with a code, or something else."));
   if (preset) {
-    console.log(dim(`  MFA: ${preset.mfaNote}`));
+    console.log(dim(`  ${preset.mfaNote}`));
   } else {
-    console.log(dim("  MFA: You will be prompted to approve the sign-in on your phone during auth."));
+    console.log(dim("  You'll be prompted to approve the sign-in on your phone during auth."));
   }
   console.log("");
   // Only two outcomes exist: a hidden browser or a visible one. Which kind of
   // MFA you have is detected at sign-in time, so offering "approve a prompt"
   // and "type a code" as separate choices would be a distinction the code does
   // not make, and picking between them would change nothing on disk.
-  console.log("  How do you complete MFA?");
-  console.log("    1. On your phone, or by typing a code here (recommended)");
-  console.log("    2. In a visible browser window");
+  console.log("  When your school asks you to approve the sign-in, how will you do it?");
+  console.log("    1. I approve on my phone, or I type a code from an authenticator app (recommended)");
+  console.log("    2. Something else — open a browser window I can use");
   let savedHeadless: boolean | undefined;
   try {
     savedHeadless = configStoreExists() ? loadConfigStore().headless : undefined;
@@ -603,21 +608,21 @@ async function main(): Promise<void> {
   console.log("");
 
   // ── Step 6: Authenticate now? ────────────────────────────────────
-  const authNow = await ask(rl2, "Would you like to authenticate now? (yes/no): ");
+  const authNow = await ask(rl2, "Sign in now, so everything is ready to go? (yes/no): ");
   if (/^y(es)?$/i.test(authNow)) {
     rl2.close();
     console.log("");
-    console.log(dim("  Starting authentication..."));
+    console.log(dim("  Signing you in..."));
     console.log("");
     const ok = await runAuth();
     rl2 = readline.createInterface({ input: process.stdin, output: process.stdout });
     if (ok) {
-      console.log(green("\n  Authentication successful!"));
+      console.log(green("\n  Signed in!"));
     } else {
-      console.log(yellow(`\n  Authentication failed. You can retry later with: ${AUTH_COMMAND}`));
+      console.log(yellow(`\n  Sign-in didn't finish. You can try again later by running: ${AUTH_COMMAND}`));
     }
   } else {
-    console.log(dim(`  You can authenticate later by running: ${AUTH_COMMAND}`));
+    console.log(dim(`  You can sign in later by running: ${AUTH_COMMAND}`));
   }
   console.log("");
 
@@ -712,12 +717,14 @@ async function main(): Promise<void> {
   console.log("  Next steps:");
   if (configuredClients.length > 0) {
     console.log(`  1. Restart ${configuredClients.join(", ")}`);
-    console.log("  2. Ask your AI client about your Brightspace courses");
+    console.log(`  2. Ask it: "What's due this week?"`);
     console.log("     Sign-in runs automatically if your saved session has expired.");
   } else {
     console.log("  1. Register the MCP server in your AI client using the command in README.md");
-    console.log("  2. Restart your AI client and ask about your Brightspace courses");
+    console.log(`  2. Restart your AI client, then ask it: "What's due this week?"`);
   }
+  console.log("");
+  console.log(dim(`  If something doesn't work, run: ${DOCTOR_COMMAND}`));
   console.log("");
 }
 
