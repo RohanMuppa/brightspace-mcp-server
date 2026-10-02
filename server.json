@@ -1,6 +1,6 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
-  "name": "io.github.rohanmuppa/brightspace",
+  "name": "io.github.RohanMuppa/brightspace",
   "description": "D2L Brightspace MCP server: grades, due dates, assignments, announcements and files. Any school.",
   "repository": {
     "url": "https://github.com/RohanMuppa/brightspace-mcp-server",
