@@ -28,14 +28,14 @@ Works with Claude Desktop, Claude Code, Cursor, ChatGPT Desktop, Windsurf, and a
    It asks for your school's Brightspace address, your username and password, and how you normally do two-factor sign-in (phone approval, authenticator code, or a browser window). Your password goes into your computer's own password store (Keychain on Mac, Credential Manager on Windows), never into a file. At the end it connects itself to Claude Desktop, Cursor, Codex, or Claude Code if you have them.
 3. **Restart your AI app and ask it something** — the first question signs you in. If your phone asks you to approve a sign-in, approve it and ask again.
 
-At one of these schools, add the flag and skip typing the address: `--purdue`, `--suny`, `--western`, `--tudelft`, `--cuny`, `--leiden`, `--mcgill`, `--javeriana`.
+At one of these schools, add the flag and skip typing the address: `--purdue`, `--suny`, `--western`, `--tudelft`, `--cuny`, `--leiden`, `--mcgill`, `--ngeeann`, `--javeriana`.
 
 **Rather have the AI install it for you?** Paste this into Claude Code, Cursor, Windsurf, Copilot, or Codex:
 
 ```
 Install brightspace-mcp-server for me by following
 https://github.com/RohanMuppa/brightspace-mcp-server/blob/main/LLMs.md
-(use --purdue at Purdue, --suny at SUNY, --tudelft at TU Delft, --cuny at CUNY, --leiden at Leiden, --mcgill at McGill, or --javeriana at Javeriana Cali).
+(use --purdue at Purdue, --suny at SUNY, --tudelft at TU Delft, --cuny at CUNY, --leiden at Leiden, --mcgill at McGill, --ngeeann at Ngee Ann Polytechnic, or --javeriana at Javeriana Cali).
 ```
 
 Using a different AI app? Add the command `npx -y brightspace-mcp-server@latest` to its MCP settings (on Windows: `cmd /c npx -y brightspace-mcp-server@latest`). Exact steps for each app: [docs/troubleshooting.md](docs/troubleshooting.md).
@@ -54,6 +54,7 @@ If your school uses D2L Brightspace, yes. These have automatic sign-in built in:
 | Leiden University | SURFconext → Microsoft | `--leiden` |
 | McGill University | Microsoft Entra | `--mcgill` |
 | Javeriana Cali | OneGate (password + authenticator code) | `--javeriana` |
+| Ngee Ann Polytechnic | Microsoft Entra | `--ngeeann` |
 | Any other D2L school | Paste your Brightspace address; if the login page isn't recognized, a browser window opens so you can sign in by hand | none |
 
 School-specific quirks: [docs/sign-in.md](docs/sign-in.md#per-school-notes).

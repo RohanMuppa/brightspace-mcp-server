@@ -36,6 +36,7 @@ Run it from your home folder — macOS blocks `npx` from Documents, Desktop, or 
 | Leiden University | `--leiden` | Sign in with your full Microsoft address (for example `s1234567@vuw.leidenuniv.nl`). The flow picks Leiden University (Entra) on SURFconext's account page, then uses the same Microsoft sign-in as Purdue. Leiden normally asks for a code from your authenticator app, which `auth` prompts for in the terminal. |
 | McGill University | `--mcgill` | Microsoft Entra; myCourses sends you straight to Entra via SAML. |
 | Javeriana Cali | `--javeriana` | MobilityGuard OneGate: password, then an authenticator code that `auth` prompts for in the terminal. Headless sign-in needs the terminal prompt; otherwise use the visible browser. |
+| Ngee Ann Polytechnic | `--ngeeann` | Plain Microsoft Entra, no extra steps. |
 | Any other D2L school | none | Run `setup` with no flag and paste your Brightspace URL (for example `https://yourschool.brightspace.com`). An unsupported login page falls back to a visible browser window you complete by hand. |
 
 The setup wizard saves your password in the native credential store and asks how you'll complete MFA: wait for approval or number matching, enter a terminal code from an authenticator app, or use a visible browser for other interactive methods. It can also configure Claude Desktop, Cursor, Codex Desktop and CLI, and Claude Code when installed — restart your AI client when it finishes.

@@ -85,6 +85,9 @@ describe("school presets", () => {
     expect(flowFor(SCHOOL_PRESETS.javeriana.baseUrl)).toBeInstanceOf(JaverianaSSOFlow);
     expect(flowFor(SCHOOL_PRESETS.suny.baseUrl)).toBeInstanceOf(SunySSOFlow);
     expect(flowFor(SCHOOL_PRESETS.purdue.baseUrl)).toBeInstanceOf(PurdueSSOFlow);
+    // Ngee Ann Polytechnic is plain Microsoft Entra with no extra steps, so it
+    // gets no handler of its own and falls through to the default flow.
+    expect(flowFor(SCHOOL_PRESETS.ngeeann.baseUrl)).toBeInstanceOf(PurdueSSOFlow);
   });
 
   it("asks for a campus only where several campuses share one site", () => {
@@ -94,6 +97,7 @@ describe("school presets", () => {
     expect(SCHOOL_PRESETS.mcgill.campusPrompt).toBeUndefined();
     expect(SCHOOL_PRESETS.javeriana.campusPrompt).toBeUndefined();
     expect(SCHOOL_PRESETS.purdue.campusPrompt).toBeUndefined();
+    expect(SCHOOL_PRESETS.ngeeann.campusPrompt).toBeUndefined();
   });
 });
 
