@@ -228,6 +228,13 @@ describe("resolved authentication configuration", () => {
       expect(parseSessionCookieEnv("aaa;bbb")).toBe("d2lSessionVal=aaa; d2lSecureSessionVal=bbb");
     });
 
+    it("normalizes the two-raw-values form when the second value has base64 padding", () => {
+      // "xyz==" contains an "=" that is not a cookie name -- the form must be
+      // decided by whether a segment is NAMED d2lSessionVal/d2lSecureSessionVal,
+      // not by whether any "=" appears in it.
+      expect(parseSessionCookieEnv("abc;xyz==")).toBe("d2lSessionVal=abc; d2lSecureSessionVal=xyz==");
+    });
+
     it("tolerates extra whitespace around semicolons and equals signs", () => {
       expect(parseSessionCookieEnv(" d2lSessionVal = aaa ;  d2lSecureSessionVal = bbb "))
         .toBe("d2lSessionVal=aaa; d2lSecureSessionVal=bbb");

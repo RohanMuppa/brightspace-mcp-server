@@ -136,6 +136,8 @@ The normal setup drives a real (usually hidden) browser through sign-in, which d
 
 Set either in your MCP client's `env` config instead of a shell export if you're not running the server from a terminal. If both are set, `D2L_ACCESS_TOKEN` wins.
 
+If this is a Docker or other headless setup with no `~/.brightspace-mcp/config.json` on disk, also set **`D2L_BASE_URL`** to your school's Brightspace URL — with no config file to read it from, the server otherwise defaults to Purdue's.
+
 **The catch:** neither one renews itself. A pasted session cookie dies at D2L's own idle timeout (the same timeout that would eventually log you out in a browser), and a pre-issued token dies whenever it expires or is revoked. When that happens the server does **not** fall back to a browser login — it answers with an error telling you to paste a fresh value. There's no in-between: this is a deliberate escape hatch for environments that can't run a browser at all, not a way to skip typing your password once.
 
 ## What You Can Ask About

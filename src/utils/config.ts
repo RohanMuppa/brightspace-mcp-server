@@ -184,14 +184,19 @@ const SESSION_COOKIE_FORMAT_ERROR =
 export function parseSessionCookieEnv(raw: string): string {
   const segments = raw.split(";").map((part) => part.trim()).filter((part) => part.length > 0);
   const named: Partial<Record<string, string>> = {};
+  // The form is decided by whether a segment is NAMED d2lSessionVal/
+  // d2lSecureSessionVal (its name before the first "="), not by whether any
+  // "=" appears at all -- the two-raw-values form's second value can itself
+  // contain "=" (base64 padding), which must not be mistaken for a name.
   let anyNamed = false;
   for (const segment of segments) {
     const eq = segment.indexOf("=");
     if (eq === -1) continue;
-    anyNamed = true;
     const name = segment.slice(0, eq).trim();
-    const value = segment.slice(eq + 1).trim();
-    if (name === D2L_SESSION_VAL || name === D2L_SECURE_SESSION_VAL) named[name] = value;
+    if (name === D2L_SESSION_VAL || name === D2L_SECURE_SESSION_VAL) {
+      anyNamed = true;
+      named[name] = segment.slice(eq + 1).trim();
+    }
   }
 
   if (anyNamed) {

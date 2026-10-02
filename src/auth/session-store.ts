@@ -30,7 +30,7 @@ function validTenantOrigin(origin: unknown): boolean {
 function validToken(value: unknown): value is TokenData {
   const token = value as TokenData | null;
   return !!token && typeof token.accessToken === "string" && Number.isFinite(token.capturedAt) && Number.isFinite(token.expiresAt)
-    && (token.source === "browser" || token.source === "cache" || token.source === "env")
+    && (token.source === "browser" || token.source === "cache")
     && (token.cookieHeader === undefined || typeof token.cookieHeader === "string")
     && (token.csrfToken === undefined || typeof token.csrfToken === "string")
     && validTenantOrigin(token.tenantOrigin);
