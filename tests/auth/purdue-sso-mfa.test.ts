@@ -28,6 +28,8 @@ interface PollState {
    * denied while the resend control is on screen.
    */
   resend?: boolean;
+  /** Entra's "Sign in another way" link, which switches verification methods. */
+  otherMethod?: boolean;
 }
 
 const RESEND_ID_SELECTOR = "#idA_SAASTO_Resend";
@@ -49,6 +51,7 @@ function makeMfaPage(states: PollState[]) {
   const press = vi.fn(async () => {});
   const continueClick = vi.fn(async () => {});
   const resendClick = vi.fn(async () => {});
+  const otherMethodClick = vi.fn(async () => {});
   const current = () => states[Math.min(poll, states.length - 1)] ?? {};
   const locatorTarget = (selector: string) => ({
     isVisible: async () => {
@@ -76,13 +79,16 @@ function makeMfaPage(states: PollState[]) {
           ? Boolean(current().kmsi)
           : /do you trust/i.test(String(pattern))
             ? Boolean(current().trust)
-            : false,
+            : /sign in another way/i.test(String(pattern))
+              ? Boolean(current().otherMethod)
+              : false,
       textContent: async () => {
         const trust = current().trust;
         if (!trust) return null;
         const domain = trust === true ? "purdue.edu" : trust;
         return `Do you trust ${domain}?\nWorking anonymously? Continue only if you trust it.`;
       },
+      click: otherMethodClick,
     }) })),
     // Only the controls the MFA loop legitimately looks for are reported
     // visible, so an unmodelled button is never clicked by accident.
@@ -100,7 +106,7 @@ function makeMfaPage(states: PollState[]) {
       vi.advanceTimersByTime(milliseconds);
     }),
   };
-  return { page, yes, fill, press, continueClick, resendClick, poll: () => poll };
+  return { page, yes, fill, press, continueClick, resendClick, otherMethodClick, poll: () => poll };
 }
 
 describe("Purdue MFA loop ported from Brightspace Bar", () => {
@@ -261,6 +267,36 @@ describe("Purdue MFA loop ported from Brightspace Bar", () => {
     await handleMFA(page, requestMfaCode);
     expect(requestMfaCode).toHaveBeenCalledOnce();
     expect(fill).toHaveBeenCalledOnce();
+  });
+
+  it("submits a visible code form instead of switching to another verification method", async () => {
+    const requestMfaCode = vi.fn(async () => "123456");
+    const { page, fill, otherMethodClick } = makeMfaPage([
+      { code: true, otherMethod: true },
+      { url: `${BASE_URL}/d2l/home`, cookie: true, d2l: true },
+    ]);
+    await handleMFA(page, requestMfaCode);
+    expect(fill).toHaveBeenCalledWith("123456");
+    expect(otherMethodClick).not.toHaveBeenCalled();
+  });
+
+  it("completes a verified Brightspace home without announcing stale challenge controls", async () => {
+    const lines = captureWarnings();
+    const onMfaChallenge = vi.fn();
+    const { page } = makeMfaPage([
+      { url: `${BASE_URL}/d2l/home`, cookie: true, d2l: true, number: "42", challenge: true },
+    ]);
+    await handleMFA(page, undefined, onMfaChallenge);
+    expect({ warnings: lines, onMfaChallenge: onMfaChallenge.mock.calls }).toEqual({ warnings: [], onMfaChallenge: [] });
+  });
+
+  it("does not ask for a code when a verified Brightspace home still shows a stale code field", async () => {
+    const requestMfaCode = vi.fn(async () => "123456");
+    const { page } = makeMfaPage([
+      { url: `${BASE_URL}/d2l/home`, cookie: true, d2l: true, code: true },
+    ]);
+    await handleMFA(page, requestMfaCode);
+    expect(requestMfaCode).not.toHaveBeenCalled();
   });
 
   it("leaves code entry to the user when the browser is visible", async () => {
