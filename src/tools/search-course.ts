@@ -9,7 +9,7 @@ import { D2LApiClient, ApiError } from "../api/index.js";
 import { SearchCourseSchema } from "./schemas.js";
 import { toolResponse, sanitizeError } from "./tool-helpers.js";
 import { log } from "../utils/logger.js";
-import { fetchRootContent, fetchModuleStructure, buildContentTree } from "./get-course-content.js";
+import { fetchRootContent, buildContentTree } from "./get-course-content.js";
 import { fetchCourseNews, isPublishedNewsItem, mapNewsItem } from "./get-announcements.js";
 import { fetchForums, fetchForumTopics } from "./get-discussions.js";
 
@@ -49,9 +49,17 @@ const BODY_WEIGHT = 1;
  */
 const ALL_TERMS_BONUS = 1000;
 
-/** Lowercase, split on anything that isn't a letter or digit, drop empties. */
+/**
+ * Lowercase, split on anything that isn't a Unicode letter or digit (so
+ * accented and non-Latin query terms tokenize the same as their matches
+ * instead of being shredded at every diacritic), and drop both empty and
+ * single-character residue left over from the split.
+ */
 export function tokenize(text: string): string[] {
-  return text.toLowerCase().split(/[^a-z0-9]+/i).filter(Boolean);
+  return text
+    .toLowerCase()
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter((term) => term.length > 1);
 }
 
 /**
@@ -207,7 +215,7 @@ export function registerSearchCourse(
     {
       title: "Search Course",
       description:
-        "Search a course's content (modules, topics, file names), announcements, and discussion forums/topics by keyword in a single call, instead of reading the whole content tree. Use this when the user wants to find something specific, e.g. 'find the midterm review slides' or 'did anyone post about office hours'. Results are ranked: a result matching every query term ranks above one matching only some, and within that, a match in the title ranks above one only in the body text. If one source (e.g. discussions) can't be read, it's skipped and named in `note` rather than failing the whole search.",
+        "Search a course's content (modules, topics, file names), announcements, and discussion forums/topics by keyword in a single call, instead of reading the whole content tree. Use this when the user wants to find something specific, e.g. 'find the midterm review slides' or 'did anyone post about office hours'. Results are ranked: a result matching every query term ranks above one matching only some, and within that, a match in the title ranks above one only in the body text. If one source (e.g. discussions) can't be read, it's skipped and named in `note` rather than failing the whole search. This fans out over the entire content tree, announcements, and every discussion forum, so it can be slower than calling a single tool like get_course_content directly.",
       inputSchema: SearchCourseSchema,
     },
     async (args: any) => {

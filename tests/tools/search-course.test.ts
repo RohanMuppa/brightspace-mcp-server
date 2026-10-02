@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { registerSearchCourse, buildSnippet, rankEntries, type SearchEntry } from "../../src/tools/search-course.js";
+import { registerSearchCourse, buildSnippet, rankEntries, tokenize, type SearchEntry } from "../../src/tools/search-course.js";
 import { SearchCourseSchema } from "../../src/tools/schemas.js";
 import { ApiError } from "../../src/api/index.js";
 
@@ -136,7 +136,7 @@ interface Harness {
 }
 
 function setup(options: {
-  rootModules?: unknown[];
+  rootModules?: unknown[] | (() => unknown[]);
   moduleStructures?: Record<number, unknown[]>;
   news?: unknown[];
   forums?: unknown[] | (() => unknown[]);
@@ -153,7 +153,9 @@ function setup(options: {
   const apiClient = {
     le: (id: number, p: string) => `/d2l/api/le/1.0/${id}${p}`,
     get: vi.fn(async (path: string) => {
-      if (path.endsWith("/content/root/")) return rootModules;
+      if (path.endsWith("/content/root/")) {
+        return typeof rootModules === "function" ? rootModules() : rootModules;
+      }
       const moduleMatch = path.match(/\/content\/modules\/(\d+)\/structure\/$/);
       if (moduleMatch) {
         const id = Number(moduleMatch[1]);
@@ -278,6 +280,25 @@ describe("search_course partial source failure", () => {
     const body = JSON.parse(result.content[0].text);
     expect(body.note).toBeUndefined();
   });
+
+  it("reports a failing CONTENT source in `note` while still returning announcement/discussion results", async () => {
+    const { call } = setup({
+      rootModules: () => {
+        throw new ApiError(403, "/content/root/", "Forbidden");
+      },
+    });
+
+    const result = await call({ courseId: COURSE_ID, query: "midterm review", limit: 50 });
+    expect(result.isError).toBeUndefined();
+    const body = JSON.parse(result.content[0].text);
+
+    expect(body.note).toBeDefined();
+    expect(body.note).toMatch(/content/i);
+    // Content couldn't be searched, but announcements and discussions still were.
+    expect(body.results.some((r: any) => r.kind === "topic" || r.kind === "module")).toBe(false);
+    expect(body.results.some((r: any) => r.kind === "announcement")).toBe(true);
+    expect(body.results.some((r: any) => r.kind === "discussion")).toBe(true);
+  });
 });
 
 describe("search_course snippet windowing", () => {
@@ -347,5 +368,26 @@ describe("rankEntries (pure)", () => {
   it("returns an empty array when nothing matches", () => {
     const entries: SearchEntry[] = [{ kind: "topic", id: 1, title: "Unrelated", body: "" }];
     expect(rankEntries(entries, "midterm", 10)).toEqual([]);
+  });
+
+  it("matches an accented query against the same accented term in an entry", () => {
+    const entries: SearchEntry[] = [
+      { kind: "topic", id: 1, title: "Réunion du café", body: "" },
+      { kind: "topic", id: 2, title: "Unrelated", body: "" },
+    ];
+    const results = rankEntries(entries, "café", 10);
+    expect(results.map((r) => r.id)).toEqual([1]);
+  });
+});
+
+describe("tokenize", () => {
+  it("splits on Unicode-aware word boundaries, keeping accented letters intact", () => {
+    expect(tokenize("Réunion du café")).toEqual(["réunion", "du", "café"]);
+  });
+
+  it("drops single-character residue terms", () => {
+    // "l'école" splits on the apostrophe; the leftover "l" is too short to
+    // carry any search signal and should be dropped.
+    expect(tokenize("l'école")).toEqual(["école"]);
   });
 });
