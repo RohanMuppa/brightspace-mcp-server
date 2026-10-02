@@ -92,6 +92,17 @@ describe("resolved authentication configuration", () => {
     expect((await loadConfig()).courseFilter.activeOnly).toBe(expected);
   });
 
+  it("leaves Microsoft's remember-MFA checkbox alone unless D2L_REMEMBER_MFA opts in", async () => {
+    expect((await loadConfig()).rememberMfa).toBe(false);
+  });
+
+  it.each([
+    ["false", false], ["0", false], ["true", true], ["1", true],
+  ])("reads D2L_REMEMBER_MFA=%j as %s", async (value, expected) => {
+    vi.stubEnv("D2L_REMEMBER_MFA", value);
+    expect((await loadConfig()).rememberMfa).toBe(expected);
+  });
+
   it("treats an empty D2L_HEADLESS as unset so the setup preference applies", async () => {
     vi.stubEnv("D2L_HEADLESS", "");
     fake.store = { headless: false };

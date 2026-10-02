@@ -10,7 +10,9 @@ import { PurdueSSOFlow } from "./purdue-sso.js";
 import { SunySSOFlow, isSunyBrightspace } from "./suny-sso.js";
 import { WesternSSOFlow, isWesternBrightspace } from "./western-sso.js";
 import { TUDelftSSOFlow, isTUDelftBrightspace } from "./tudelft-sso.js";
+import { CunySSOFlow, isCunyBrightspace } from "./cuny-sso.js";
 import { BrowserAuthError } from "../utils/errors.js";
+import type { RememberMfaResult } from "./microsoft-session.js";
 import { AUTH_COMMAND } from "../utils/commands.js";
 
 export type RequestMfaCode = () => Promise<string>;
@@ -54,6 +56,8 @@ export interface SSOFlow {
   hasCredentials(): boolean;
   /** Drive the supported automatic sign-in form, surfacing MFA in terminal logs. */
   login(page: Page): Promise<boolean>;
+  /** What Entra's "Don't ask again" checkbox did during this login, if its MFA page appeared. */
+  rememberMfaResult?(): RememberMfaResult | undefined;
 }
 
 /**
@@ -68,6 +72,7 @@ export function createSSOFlow(config: AppConfig, requestMfaCode?: RequestMfaCode
     password: config.password,
     baseUrl: config.baseUrl,
     headless: config.headless,
+    rememberMfa: config.rememberMfa,
     requestMfaCode,
     onMfaChallenge,
   };
@@ -82,6 +87,10 @@ export function createSSOFlow(config: AppConfig, requestMfaCode?: RequestMfaCode
 
   if (isWesternBrightspace(config.baseUrl)) {
     return new WesternSSOFlow(credentials);
+  }
+
+  if (isCunyBrightspace(config.baseUrl)) {
+    return new CunySSOFlow(credentials);
   }
 
   return new PurdueSSOFlow(credentials);

@@ -3,6 +3,7 @@
 import type { Page } from "playwright";
 import { PurdueSSOFlow } from "./purdue-sso.js";
 import { UnsupportedAuthenticationError } from "./sso-flow.js";
+import type { RememberMfaResult } from "./microsoft-session.js";
 
 const WESTERN_HOST = "westernu.brightspace.com";
 
@@ -24,6 +25,10 @@ export class WesternSSOFlow {
 
   hasCredentials(): boolean {
     return this.common.hasCredentials();
+  }
+
+  rememberMfaResult(): RememberMfaResult | undefined {
+    return this.common.rememberMfaResult();
   }
 
   async prepareLogin(page: Page): Promise<void> {

@@ -13,6 +13,8 @@ import { readEncryptedRecord, saveEncryptedRecord, trashFile, type SecureStoreOp
 
 export type BrowserState = Awaited<ReturnType<BrowserContext["storageState"]>>;
 
+export const BROWSER_STATE_FILE = "storage-state.encrypted.json";
+
 function validState(value: unknown): value is BrowserState {
   const state = value as BrowserState | null;
   return !!state && Array.isArray(state.cookies) && Array.isArray(state.origins)
@@ -28,7 +30,7 @@ export class BrowserStateStore {
   private readonly legacyFile: string;
 
   constructor(private readonly sessionDir: string, private readonly options: SecureStoreOptions = {}) {
-    this.file = path.join(sessionDir, "storage-state.encrypted.json");
+    this.file = path.join(sessionDir, BROWSER_STATE_FILE);
     this.legacyFile = path.join(sessionDir, "storage-state.json");
   }
 
