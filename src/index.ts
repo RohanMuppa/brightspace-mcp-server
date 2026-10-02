@@ -35,6 +35,12 @@ import {
   registerGetVideoTranscript,
   registerGetServerInfo,
 } from "./tools/index.js";
+import {
+  registerWeeklyBriefingPrompt,
+  registerGradeAuditPrompt,
+  registerStudyPlannerPrompt,
+  registerCourseSummaryPrompt,
+} from "./prompts/index.js";
 import { AUTH_COMMAND } from "./utils/commands.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -91,20 +97,35 @@ if (subcommand === 'setup') {
         sessionDir: config.sessionDir,
         baseUrl: config.baseUrl,
         tokenTtl: config.tokenTtl,
+        envAccessToken: config.envAccessToken,
+        envSessionCookie: config.envSessionCookie,
       });
 
-      // Create AuthRunner for auto-reauthentication
-      const authRunner = new AuthRunner({
-        onProgress: (message) => {
-          void server.sendLoggingMessage({ level: "info", logger: "brightspace-auth", data: message }).catch(() => {});
-        },
-      });
+      // D2L_ACCESS_TOKEN / D2L_SESSION_COOKIE are opt-in browser-free sign-in
+      // escape hatches (Docker, headless Linux, WSL, hardware-key MFA
+      // tenants). When either is set, AuthRunner is never created: there is
+      // no stored credential to drive a browser login from, and a rejected
+      // pasted credential should fail with a clear "paste a fresh one"
+      // message rather than spawning auth-cli.
+      const envAuthActive = Boolean(config.envAccessToken || config.envSessionCookie);
+      const authRunner = envAuthActive
+        ? undefined
+        : new AuthRunner({
+            onProgress: (message) => {
+              void server.sendLoggingMessage({ level: "info", logger: "brightspace-auth", data: message }).catch(() => {});
+            },
+          });
 
       // Create D2L API Client with auto-reauth support
       const apiClient = new D2LApiClient({
         baseUrl: config.baseUrl,
         tokenManager,
-        onAuthExpired: () => authRunner.run(),
+        onAuthExpired: authRunner ? () => authRunner.run() : undefined,
+        authExpiredMessage: config.envAccessToken
+          ? "D2L_ACCESS_TOKEN was rejected by Brightspace (expired or invalid). Issue a fresh token and update the environment variable; this server does not fall back to a browser login while D2L_ACCESS_TOKEN is set."
+          : config.envSessionCookie
+            ? "The pasted D2L_SESSION_COOKIE has expired. Copy a fresh d2lSessionVal/d2lSecureSessionVal pair from a logged-in browser and update the environment variable; this server does not fall back to a browser login while D2L_SESSION_COOKIE is set."
+            : undefined,
       });
 
       // Nothing here reaches Brightspace. API versions are discovered by the
@@ -145,14 +166,24 @@ if (subcommand === 'setup') {
       registerGetSyllabus(server, apiClient);
       registerGetDiscussions(server, apiClient);
       registerGetVideoTranscript(server, apiClient);
-      registerGetServerInfo(server, config, PKG_VERSION);
+      registerGetServerInfo(server, config, PKG_VERSION, apiClient);
       log("DEBUG", "MCP tools registered (16 tools)");
+
+      // Register MCP prompts — surfaced in clients (e.g. Claude Desktop) as a
+      // picker, distinct from tools. Each one is a canned user message that
+      // names our own tools by name, so a client with no idea what to ask
+      // for still gets a one-click starting point.
+      registerWeeklyBriefingPrompt(server);
+      registerGradeAuditPrompt(server);
+      registerStudyPlannerPrompt(server);
+      registerCourseSummaryPrompt(server);
+      log("DEBUG", "MCP prompts registered (4 prompts)");
 
       // Connect stdio transport
       const transport = new StdioServerTransport();
       await server.connect(transport);
 
-      log("INFO", "Brightspace MCP Server by Rohan Muppa — running on stdio (16 tools registered)");
+      log("INFO", "Brightspace MCP Server by Rohan Muppa — running on stdio (16 tools, 4 prompts registered)");
       log("INFO", "Setup: see README.md for MCP client configuration (Claude Desktop, ChatGPT Desktop, Cursor, etc.)");
     } catch (error) {
       log("ERROR", "MCP Server failed to start", error);

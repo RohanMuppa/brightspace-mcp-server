@@ -60,6 +60,13 @@ export async function loadConfig(): Promise<AppConfig> {
     ?? store?.activeOnly
     ?? true;
 
+  // D2L_ACCESS_TOKEN beats D2L_SESSION_COOKIE beats the normal stored-credential
+  // browser flow; both are validated whenever present regardless of which one
+  // wins, so a typo in the losing variable still fails loudly at startup.
+  const envAccessToken = readEnvSecret(process.env.D2L_ACCESS_TOKEN, "D2L_ACCESS_TOKEN");
+  const rawSessionCookie = readEnvSecret(process.env.D2L_SESSION_COOKIE, "D2L_SESSION_COOKIE");
+  const envSessionCookie = rawSessionCookie ? parseSessionCookieEnv(rawSessionCookie) : undefined;
+
   const configuredUrl = new URL(process.env.D2L_BASE_URL || store?.baseUrl || "https://purdue.brightspace.com");
   if (configuredUrl.protocol !== "https:" || configuredUrl.username || configuredUrl.password) {
     throw new Error("The Brightspace URL must be an HTTPS school URL without embedded credentials.");
@@ -82,6 +89,8 @@ export async function loadConfig(): Promise<AppConfig> {
     username,
     password,
     campus: process.env.D2L_CAMPUS || store?.campus,
+    envAccessToken,
+    envSessionCookie,
     courseFilter: {
       includeCourseIds,
       excludeCourseIds,
@@ -123,6 +132,83 @@ function envBoolean(value: string | undefined, source: string): boolean | undefi
   if (["false", "0", "no", "off"].includes(text)) return false;
   console.error(`[config] Ignoring ${source}=${JSON.stringify(value)}: expected true or false`);
   return undefined;
+}
+
+/** CR, LF, or NUL in a header value enables request smuggling / header injection. */
+const CONTROL_CHAR_PATTERN = /[\r\n\0]/;
+
+/**
+ * Validate a pasted auth secret (D2L_SESSION_COOKIE or D2L_ACCESS_TOKEN).
+ * Unlike positiveSeconds/envBoolean above, a bad value here is never silently
+ * ignored: both env vars exist specifically to skip the browser, so a typo
+ * must fail loudly at startup rather than fall back to a sign-in flow the
+ * user deliberately avoided. Returns undefined only when the variable is
+ * genuinely unset (absent or empty), matching the other env helpers' treatment
+ * of "".
+ *
+ * The CR/LF/NUL check is adapted from the injection guard in
+ * JhostinAleck/brightspace-mcp (MIT), AccessToken.ts:10-19. Surrounding
+ * whitespace is rejected rather than trimmed: a trailing newline or space is
+ * exactly the kind of thing a terminal paste or `export FOO=$(cat file)`
+ * leaves behind, and silently stripping it would hide the mistake instead of
+ * surfacing it.
+ */
+export function readEnvSecret(value: string | undefined, varName: string): string | undefined {
+  if (value === undefined || value === "") return undefined;
+  if (CONTROL_CHAR_PATTERN.test(value)) {
+    throw new Error(
+      `${varName} contains a carriage return, line feed, or NUL character. Paste the value as a single line with no embedded newlines.`
+    );
+  }
+  if (value !== value.trim()) {
+    throw new Error(`${varName} has leading or trailing whitespace. Remove it and try again.`);
+  }
+  return value;
+}
+
+const D2L_SESSION_VAL = "d2lSessionVal";
+const D2L_SECURE_SESSION_VAL = "d2lSecureSessionVal";
+
+const SESSION_COOKIE_FORMAT_ERROR =
+  'D2L_SESSION_COOKIE must be either "d2lSessionVal=...; d2lSecureSessionVal=..." ' +
+  "(the cookie header copied from a logged-in browser) or the two cookie values " +
+  "separated by a semicolon, in that order (d2lSessionVal;d2lSecureSessionVal).";
+
+/**
+ * Normalize D2L_SESSION_COOKIE into the "d2lSessionVal=...; d2lSecureSessionVal=..."
+ * header D2L's API expects. Accepts a full cookie-header fragment (extra
+ * cookies alongside the two named ones are ignored, order doesn't matter) or
+ * the two raw values separated by a semicolon with no cookie names, in which
+ * case the first is d2lSessionVal and the second d2lSecureSessionVal.
+ */
+export function parseSessionCookieEnv(raw: string): string {
+  const segments = raw.split(";").map((part) => part.trim()).filter((part) => part.length > 0);
+  const named: Partial<Record<string, string>> = {};
+  // The form is decided by whether a segment is NAMED d2lSessionVal/
+  // d2lSecureSessionVal (its name before the first "="), not by whether any
+  // "=" appears at all -- the two-raw-values form's second value can itself
+  // contain "=" (base64 padding), which must not be mistaken for a name.
+  let anyNamed = false;
+  for (const segment of segments) {
+    const eq = segment.indexOf("=");
+    if (eq === -1) continue;
+    const name = segment.slice(0, eq).trim();
+    if (name === D2L_SESSION_VAL || name === D2L_SECURE_SESSION_VAL) {
+      anyNamed = true;
+      named[name] = segment.slice(eq + 1).trim();
+    }
+  }
+
+  if (anyNamed) {
+    if (named[D2L_SESSION_VAL] && named[D2L_SECURE_SESSION_VAL]) {
+      return `${D2L_SESSION_VAL}=${named[D2L_SESSION_VAL]}; ${D2L_SECURE_SESSION_VAL}=${named[D2L_SECURE_SESSION_VAL]}`;
+    }
+  } else if (segments.length === 2) {
+    const [sessionVal, secureSessionVal] = segments;
+    return `${D2L_SESSION_VAL}=${sessionVal}; ${D2L_SECURE_SESSION_VAL}=${secureSessionVal}`;
+  }
+
+  throw new Error(SESSION_COOKIE_FORMAT_ERROR);
 }
 
 function expandTilde(filePath: string): string {
