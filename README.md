@@ -71,25 +71,16 @@ School-specific quirks: [docs/sign-in.md](docs/sign-in.md#per-school-notes).
 | Lecture videos | "What did the professor say about pinch-off in Tuesday's recording?" (Kaltura and YouTube) |
 | Calendar | "When is my midterm?" · "Is lab cancelled on Thursday?" |
 
-Apps with a prompt picker (like Claude Desktop) also offer four ready-made prompts: `weekly_briefing`, `grade_audit`, `study_planner`, and `course_summary`.
+## Prompts
 
-## What it can do
+Apps with a prompt picker (like Claude Desktop) also offer four ready-made prompts, so you can start from one click instead of typing a question:
 
-Nineteen read-only tools behind those questions. The ones worth knowing about:
-
-- **Grades** — every course's gradebook with instructor comments, and the hidden "exam" items that only appear in the gradebook.
-- **Assignments** — due dates with a plain-words `dueIn` ("in 3 days"), your submissions and the feedback on them, rubric names, and quizzes with attempt counts. While sign-in is still pending it says so instead of returning an empty list.
-- **Rubrics** — the full criteria, levels, and points for an assignment, plus your own graded outcome per criterion when your school exposes it.
-- **Due dates and calendar** — upcoming deadlines from assignments, quizzes, graded discussions, and the course calendar (exams, labs, review sessions).
-- **Announcements** — with attachments you can read or save.
-- **Course content** — modules and topics as markdown, file download (PDF, Office, and more), and release windows: it tells you when something opens, has ended, or is hidden instead of a bare error.
-- **Search** — content, announcements, and discussions by keyword in one call.
-- **Lecture videos** — transcripts for Kaltura and YouTube embeds.
-- **People** — roster, instructor and TA emails, and your project or lab groups.
-- **Discussions** — forums and topics.
-- **Diagnostics** — `get_server_info`: version, timezone, who you're signed in as, whether Microsoft remembered your device, and request counters, all without touching Brightspace.
-
-Sign-in is automatic: silent renewal most days, the MFA number shown in-chat when needed, Duo and authenticator-code support, a visible-browser mode for anything else, an opt-in "remember this device" for Microsoft, and a browser-free mode (paste a session cookie or token) for Docker, WSL, and hardware-key accounts. Links in course content have D2L's session tokens stripped before they reach the AI.
+| Prompt | Arguments | What it asks for |
+|--------|-----------|------------------|
+| `weekly_briefing` | — | A 7-day rollup of what's due, what's new, and what changed in your grades, across every course |
+| `grade_audit` | `courseId` (optional) | Analyzes grades for one course, or all of them, and flags missing or low-scoring items |
+| `study_planner` | `daysAhead` (optional, default 7) | Plans study time from upcoming due dates and calendar events |
+| `course_summary` | `courseId` (required) | Syllabus, content outline, assignments, and grades for one course |
 
 ## Settings you might want
 
@@ -120,10 +111,6 @@ How often you're asked is up to your school, not this tool. Everything else abou
 - **It works in the terminal but not in the app:** the app starts it separately and may not see your password store yet — see [docs/troubleshooting.md](docs/troubleshooting.md).
 - **Which version do I have?** Ask your AI "which version of the Brightspace server am I running?"
 - **Still stuck?** [Open an issue](https://github.com/RohanMuppa/brightspace-mcp-server/issues) and paste what the terminal printed.
-
-## Is it safe?
-
-Your password is kept in your operating system's password store, never in a plain file. Saved sign-in state is encrypted. Your second factor (the phone tap or code) stays on your phone — this tool never sees or stores it. And it can only read your courses, never change them.
 
 ## For developers
 
