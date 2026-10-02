@@ -148,8 +148,16 @@ Registered in `src/tools/index.ts`, schemas in `src/tools/schemas.ts`:
 | `get_announcement_files` | Read the files attached to an announcement (prompts, rubric, updated schedule) and return their text |
 | `get_video_transcript` | Transcript of a video embedded in course content (Kaltura, YouTube), with timestamps |
 | `get_server_info` | Running version, Node runtime, platform, config and session paths, school URL, whether a credential is stored, the server's local timezone and UTC offset (`localTimezone`, `utcOffsetMinutes`), `signedInAs` (`uniqueName`/`displayName`) once known, `microsoftSession` (what Microsoft remembered) once a browser sign-in is saved, and `requests` (lightweight API client counters) — no network call, no secrets |
+| `get_dropbox_folders` | Every assignment (dropbox) folder in a course, with due dates, submission type, visibility, and whether rubrics are attached |
+| `get_dropbox_submissions` | Instructor/TA: every student's (or group's) submission to a dropbox folder — submitter, submitted date, late status, files, and feedback/grading status |
+| `get_dropbox_user_submissions` | Instructor/TA: all submissions made by one specific student (or group) in a dropbox folder |
+| `get_dropbox_feedback` | Instructor/TA: feedback already saved for a user or group in a dropbox folder — score, graded state, feedback text, rubric assessment |
+| `get_rubrics_for_object` | The full rubric table (criteria, levels, points) attached to a dropbox folder |
+| `download_dropbox_submission_file` | Instructor/TA: download one file from a student's (or group's) dropbox submission |
 
-These nineteen are the whole surface. An available-update notice, when there is one, rides along as a second text block on the first successful result.
+These twenty-five are the whole surface. An available-update notice, when there is one, rides along as a second text block on the first successful result.
+
+Of the `get_dropbox_*`/`download_dropbox_submission_file` tools above, `get_dropbox_submissions`, `get_dropbox_user_submissions`, `get_dropbox_feedback`, and `download_dropbox_submission_file` are instructor/TA-side: they read every student's submissions and feedback for a course, which Brightspace only grants to course staff. A student account calling one of those gets a clear "Instructor or TA access required for this course" note (403) rather than a generic or broken-looking error. `get_dropbox_folders` and `get_rubrics_for_object` read the same folder-listing endpoint a student's own client uses, so they are not gated the same way. A 404 (no folders, no submissions, folder not found) comes back as an empty list/null with an explanatory `note`, not a failure. They are read-only — there is no tool in this server that posts a grade or feedback back to Brightspace.
 
 `search_course` reuses the same fetchers as `get_course_content`, `get_announcements`, and `get_discussions` (`fetchRootContent`/`buildContentTree`, `fetchCourseNews`, `fetchForums`/`fetchForumTopics`) rather than hitting the API a second way, so results share their cache. It scores in-memory term matches, case-insensitive and tokenized on non-alphanumerics: a result matching every query term always outranks one matching only some, and within that tier a title match outranks a body-only match. One source failing (e.g. a 403 on discussions) is skipped rather than failing the whole search, and named in the response's `note`.
 

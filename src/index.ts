@@ -37,6 +37,12 @@ import {
   registerGetVideoTranscript,
   registerGetServerInfo,
   registerSearchCourse,
+  registerGetDropboxFolders,
+  registerGetDropboxSubmissions,
+  registerGetDropboxUserSubmissions,
+  registerGetDropboxFeedback,
+  registerGetRubricsForObject,
+  registerDownloadDropboxSubmissionFile,
 } from "./tools/index.js";
 import {
   registerWeeklyBriefingPrompt,
@@ -173,7 +179,14 @@ if (subcommand === 'setup') {
       registerGetVideoTranscript(server, apiClient);
       registerGetServerInfo(server, config, PKG_VERSION, apiClient);
       registerSearchCourse(server, apiClient);
-      log("DEBUG", "MCP tools registered (19 tools)");
+      // Instructor / TA dropbox tools (read-only) — 403 for a student account.
+      registerGetDropboxFolders(server, apiClient);
+      registerGetDropboxSubmissions(server, apiClient);
+      registerGetDropboxUserSubmissions(server, apiClient);
+      registerGetDropboxFeedback(server, apiClient);
+      registerGetRubricsForObject(server, apiClient);
+      registerDownloadDropboxSubmissionFile(server, apiClient);
+      log("DEBUG", "MCP tools registered (25 tools)");
 
       // Register MCP prompts — surfaced in clients (e.g. Claude Desktop) as a
       // picker, distinct from tools. Each one is a canned user message that
@@ -189,7 +202,7 @@ if (subcommand === 'setup') {
       const transport = new StdioServerTransport();
       await server.connect(transport);
 
-      log("INFO", "Brightspace MCP Server by Rohan Muppa — running on stdio (19 tools, 4 prompts registered)");
+      log("INFO", "Brightspace MCP Server by Rohan Muppa — running on stdio (25 tools, 4 prompts registered)");
       log("INFO", "Setup: see README.md for MCP client configuration (Claude Desktop, ChatGPT Desktop, Cursor, etc.)");
     } catch (error) {
       log("ERROR", "MCP Server failed to start", error);

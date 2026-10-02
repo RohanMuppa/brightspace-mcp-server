@@ -72,6 +72,7 @@ School-specific quirks: [docs/sign-in.md](docs/sign-in.md#per-school-notes).
 | Discussions | "Summarize the latest posts in the final project thread" |
 | Lecture videos | "What did the professor say about pinch-off in Tuesday's recording?" (Kaltura and YouTube) |
 | Calendar | "When is my midterm?" · "Is lab cancelled on Thursday?" |
+| For instructors and TAs | "Which students haven't submitted Lab 4 yet?" · "What feedback did I leave on this student's homework?" · "Download that student's submitted PDF" (students see a clear "instructor access required" note) |
 
 ## Prompts
 
