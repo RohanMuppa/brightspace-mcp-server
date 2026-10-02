@@ -4,7 +4,7 @@
  * Licensed under MIT — see LICENSE file for details.
  */
 
-import type { D2LApiClientOptions, ApiVersions, CacheTTLs, TokenData } from "./types.js";
+import type { D2LApiClientOptions, ApiVersions, CacheTTLs, TokenData, ClientStats } from "./types.js";
 import { DEFAULT_CACHE_TTLS } from "./types.js";
 import { TTLCache } from "./cache.js";
 import { TokenBucket } from "./rate-limiter.js";
@@ -89,6 +89,27 @@ export class D2LApiClient {
   private versions: ApiVersions | null = null;
   /** Single in-flight discovery, so concurrent first requests share one fetch. */
   private versionsInFlight: Promise<ApiVersions> | null = null;
+  /**
+   * GETs keyed by the unresolved template path + query (the same string
+   * get() caches under), so a second caller asking for the same resource
+   * while the first is still in flight joins that promise instead of
+   * issuing its own request. Claude Desktop fans out tool calls in
+   * parallel and our tools fan out per course, so identical paths are
+   * often requested within milliseconds of each other. One client, one
+   * token manager, so every GET it issues already shares one auth
+   * identity — nothing further to key on.
+   *
+   * Adapted from JhostinAleck/brightspace-mcp (MIT) — RequestCoalescer.ts.
+   */
+  private readonly pendingGets = new Map<string, Promise<unknown>>();
+  private readonly statsData: ClientStats = {
+    statusClasses: { "2xx": 0, "401": 0, "403": 0, "404": 0, "429": 0, "5xx": 0, other: 0 },
+    networkErrors: 0,
+    cacheHits: 0,
+    cacheMisses: 0,
+    coalescedJoins: 0,
+    tokenRefreshes: 0,
+  };
 
   constructor(options: D2LApiClientOptions) {
     // HTTPS-only enforcement, on a parsed URL rather than a string prefix so
@@ -220,19 +241,37 @@ export class D2LApiClient {
       const age = this.cache.ageOf(path);
       if (age !== undefined && age <= options.ttl) {
         log("DEBUG", `Cache hit: ${path}`);
+        this.statsData.cacheHits++;
         return this.cache.get(path) as T;
       }
+      this.statsData.cacheMisses++;
     }
 
-    const resolved = await this.resolvePath(path);
-    const data = await this.withAuthentication(resolved, token => this.makeRequest<T>(resolved, token));
-
-    if (options?.ttl) {
-      this.cache.set(path, data, options.ttl);
-      log("DEBUG", `Cached response for ${path} (TTL: ${options.ttl}ms)`);
+    // Join an identical GET already in flight rather than issuing a second
+    // one. Keyed on the same unresolved path the cache above uses, so the
+    // join happens before version discovery or a token is even touched.
+    const pending = this.pendingGets.get(path) as Promise<T> | undefined;
+    if (pending) {
+      this.statsData.coalescedJoins++;
+      log("DEBUG", `Coalescing GET onto an in-flight request: ${path}`);
+      return pending;
     }
 
-    return data;
+    const inFlight = (async (): Promise<T> => {
+      const resolved = await this.resolvePath(path);
+      const data = await this.withAuthentication(resolved, token => this.makeRequest<T>(resolved, token));
+
+      if (options?.ttl) {
+        this.cache.set(path, data, options.ttl);
+        log("DEBUG", `Cached response for ${path} (TTL: ${options.ttl}ms)`);
+      }
+
+      return data;
+    })().finally(() => {
+      if (this.pendingGets.get(path) === inFlight) this.pendingGets.delete(path);
+    });
+    this.pendingGets.set(path, inFlight);
+    return inFlight;
   }
 
   /**
@@ -271,6 +310,7 @@ export class D2LApiClient {
     // TokenRefreshError propagates here, so a temporary outage never starts MFA.
     const fresh = await this.tokenManager.getToken(token.accessToken);
     if (fresh && fresh.accessToken !== token.accessToken) {
+      this.statsData.tokenRefreshes++;
       try {
         return await send(fresh);
       } catch (error) {
@@ -279,7 +319,20 @@ export class D2LApiClient {
     }
 
     const loggedIn = await this.tryAutoReauth(path, fresh?.accessToken ?? token.accessToken);
+    this.statsData.tokenRefreshes++;
     return send(loggedIn);
+  }
+
+  /** Buckets one observed HTTP status into statsData.statusClasses. */
+  private recordStatus(status: number): void {
+    const classes = this.statsData.statusClasses;
+    if (status >= 200 && status < 300) classes["2xx"]++;
+    else if (status === 401) classes["401"]++;
+    else if (status === 403) classes["403"]++;
+    else if (status === 404) classes["404"]++;
+    else if (status === 429) classes["429"]++;
+    else if (status >= 500) classes["5xx"]++;
+    else classes.other++;
   }
 
   /** One rate limiter token per attempt. */
@@ -335,6 +388,7 @@ export class D2LApiClient {
         headers,
         signal: AbortSignal.timeout(this.timeoutMs),
       });
+      this.recordStatus(response.status);
 
       // Preserve cookie material: a 401 only rejects this access token.
       if (response.status === 401) {
@@ -397,6 +451,7 @@ export class D2LApiClient {
       }
 
       // Wrap network/fetch errors
+      this.statsData.networkErrors++;
       const message = error instanceof Error ? error.message : String(error);
       throw new NetworkError(
         `Request to ${path} failed: ${message}`,
@@ -423,6 +478,7 @@ export class D2LApiClient {
         headers,
         signal: AbortSignal.timeout(this.timeoutMs),
       });
+      this.recordStatus(response.status);
 
       // Preserve cookie material for the shared HTTP refresh path.
       if (response.status === 401) {
@@ -489,6 +545,7 @@ export class D2LApiClient {
       }
 
       // Wrap network/fetch errors
+      this.statsData.networkErrors++;
       const message = error instanceof Error ? error.message : String(error);
       throw new NetworkError(
         `Request to ${path} failed: ${message}`,
@@ -566,5 +623,22 @@ export class D2LApiClient {
    */
   get cacheSize(): number {
     return this.cache.size;
+  }
+
+  /**
+   * Read-only snapshot of this client's lightweight request counters. A
+   * fresh object every call, so a caller holding onto it never sees later
+   * updates and can't mutate the client's own counts. Never carries a URL,
+   * username, or token.
+   */
+  stats(): ClientStats {
+    return {
+      statusClasses: { ...this.statsData.statusClasses },
+      networkErrors: this.statsData.networkErrors,
+      cacheHits: this.statsData.cacheHits,
+      cacheMisses: this.statsData.cacheMisses,
+      coalescedJoins: this.statsData.coalescedJoins,
+      tokenRefreshes: this.statsData.tokenRefreshes,
+    };
   }
 }
