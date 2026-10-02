@@ -372,6 +372,12 @@ export class PurdueSSOFlow {
     let resendNotFoundWarned = false;
     try {
       while (Date.now() < deadline) {
+        // A verified session outranks whatever challenge controls linger on
+        // screen: answering them would prompt or announce for nothing.
+        if (await this.isAuthenticated(page)) {
+          log("INFO", "Login successful - verified Brightspace home");
+          return;
+        }
         if (await this.duoMfa.handle(page)) challenged = true;
         if (await this.submitMfaCode(page)) challenged = true;
         const number = await this.readNumberMatch(page);
@@ -399,10 +405,6 @@ export class PurdueSSOFlow {
         if (number) {
           numberVanishedAt = null;
           resendNotFoundWarned = false;
-        }
-        if (await this.isAuthenticated(page)) {
-          log("INFO", "Login successful - verified Brightspace home");
-          return;
         }
         // Fix 2: Entra's number-match request itself times out (or the user
         // taps Deny) well before the 5-minute budget above. Once that has
