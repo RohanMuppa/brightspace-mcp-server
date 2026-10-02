@@ -85,11 +85,18 @@ interface RubricAssessmentOutcomeDto {
 
 interface RubricAssessmentDto {
   RubricId: number;
+  // The documented Dropbox myFeedback shape (D2L's "RubricAssessment" block)
+  // carries the overall outcome as three flat fields rather than a nested
+  // object, and may omit CriteriaOutcome entirely. OverallOutcome itself is
+  // a shape seen from a different endpoint; both are accepted.
   OverallOutcome?: {
     LevelId?: number | null;
     Score?: number | null;
     Feedback?: RichText | null;
   } | null;
+  OverallScore?: number | null;
+  OverallLevel?: number | null;
+  OverallFeedback?: RichText | null;
   CriteriaOutcome?: RubricAssessmentOutcomeDto[];
 }
 
@@ -137,10 +144,22 @@ interface OutputRubric {
   name: string;
   description?: string;
   scoringMethod?: number;
+  scoringMethodName?: string;
   criteriaGroups: OutputGroup[];
   totalPoints?: number;
   rubricAssessment?: OutputAssessment;
 }
+
+// D2L's documented SCORING_M enumeration
+// (https://docs.valence.desire2learn.com/res/assessment.html). Only values
+// that source confirms are named; an unrecognized value is left as the raw
+// number with no scoringMethodName.
+const SCORING_METHOD_NAMES: Record<number, string> = {
+  0: "TextOnly",
+  1: "Points",
+  2: "TextAndNumeric",
+  3: "CustomPoints",
+};
 
 export interface GetAssignmentRubricResult {
   rubrics: OutputRubric[];
@@ -258,7 +277,14 @@ function toOutputAssessment(
 
   const out: OutputAssessment = { criteria: [] };
 
-  const overall = assessment.OverallOutcome;
+  // Documented Dropbox RubricAssessment carries OverallScore/OverallLevel/
+  // OverallFeedback instead of a nested OverallOutcome; fall back to those
+  // when OverallOutcome itself is absent.
+  const overall = assessment.OverallOutcome ?? {
+    Score: assessment.OverallScore,
+    LevelId: assessment.OverallLevel,
+    Feedback: assessment.OverallFeedback,
+  };
   if (overall) {
     if (typeof overall.Score === "number") out.score = overall.Score;
     const levelName = overall.LevelId != null ? levelNames.get(overall.LevelId) : undefined;
@@ -293,7 +319,11 @@ function toOutputRubric(rubric: RubricDto, assessment?: RubricAssessmentDto): Ou
 
   const description = textOf(rubric.Description);
   if (description) out.description = description;
-  if (typeof rubric.ScoringMethod === "number") out.scoringMethod = rubric.ScoringMethod;
+  if (typeof rubric.ScoringMethod === "number") {
+    out.scoringMethod = rubric.ScoringMethod;
+    const name = SCORING_METHOD_NAMES[rubric.ScoringMethod];
+    if (name) out.scoringMethodName = name;
+  }
 
   const totalPoints = totalPointsOf(criteriaGroups);
   if (totalPoints !== undefined) out.totalPoints = totalPoints;
@@ -326,10 +356,16 @@ export async function fetchAssignmentRubrics(
       { ttl: DEFAULT_CACHE_TTLS.assignments }
     );
   } catch (error) {
-    if (error instanceof ApiError && (error.status === 403 || error.status === 404)) {
+    if (error instanceof ApiError && error.status === 403) {
       return {
         rubrics: [],
-        note: "Could not access this assignment. It may not exist, or you may not have permission to view it.",
+        note: "You do not have permission to view this assignment.",
+      };
+    }
+    if (error instanceof ApiError && error.status === 404) {
+      return {
+        rubrics: [],
+        note: "This assignment was not found. It may not exist or may have been removed.",
       };
     }
     throw error;
@@ -372,9 +408,10 @@ export async function fetchAssignmentRubrics(
         assessmentsByRubricId.set(assessment.RubricId, assessment);
       }
     }
-  } catch (error: any) {
-    if (error?.status !== 404 && error?.status !== 403) {
+  } catch (error) {
+    if (!(error instanceof ApiError && (error.status === 403 || error.status === 404))) {
       log("DEBUG", `Failed to fetch rubric assessment feedback for assignment ${assignmentId}`, error);
+      throw error;
     }
   }
 

@@ -3,6 +3,7 @@ import {
   registerGetAssignmentRubric,
   fetchAssignmentRubrics,
 } from "../../src/tools/get-assignment-rubric.js";
+import { ApiError } from "../../src/api/errors.js";
 
 /**
  * get_assignments only ever surfaced rubric NAMES. This tool answers "what
@@ -17,8 +18,13 @@ import {
 const COURSE = 101;
 const FOLDER = 7001;
 
-const notFound = () => Object.assign(new Error("Not Found"), { status: 404 });
-const forbidden = () => Object.assign(new Error("Forbidden"), { status: 403 });
+// These must actually THROW (not return) an error when invoked as a thunk,
+// so that a mocked route truly rejects instead of "succeeding" with an Error
+// object as its resolved value — a prior version of this helper returned
+// the error instead of throwing it, which let the 403/404 tests below pass
+// without ever exercising the tool's catch block.
+const notFound = (): never => { throw new ApiError(404, "/dropbox/folders", "Not Found"); };
+const forbidden = (): never => { throw new ApiError(403, "/dropbox/folders", "Forbidden"); };
 
 const rubric = (overrides: Record<string, unknown> = {}) => ({
   RubricId: 8001,
@@ -191,22 +197,22 @@ describe("get_assignment_rubric: fallback to the rubrics endpoint", () => {
 });
 
 describe("get_assignment_rubric: access failures never surface as errors", () => {
-  it("403 on the folder returns empty rubrics with a note", async () => {
+  it("403 on the folder returns empty rubrics with a permission-specific note", async () => {
     const { call } = setup({ folderResult: forbidden });
 
     const result = await call({ courseId: COURSE, assignmentId: FOLDER });
     expect(result.isError).toBeFalsy();
     const payload = parse(result);
     expect(payload.rubrics).toEqual([]);
-    expect(payload.note).toBeTruthy();
+    expect(payload.note).toMatch(/permission/i);
   });
 
-  it("404 on the folder returns empty rubrics with a note", async () => {
+  it("404 on the folder returns empty rubrics with a not-found note", async () => {
     const { call } = setup({ folderResult: notFound });
 
     const payload = parse(await call({ courseId: COURSE, assignmentId: FOLDER }));
     expect(payload.rubrics).toEqual([]);
-    expect(payload.note).toBeTruthy();
+    expect(payload.note).toMatch(/not found/i);
   });
 });
 
@@ -242,6 +248,59 @@ describe("get_assignment_rubric: student's own outcome", () => {
     });
   });
 
+  it("merges the documented flat OverallScore/OverallLevel/OverallFeedback shape", async () => {
+    // D2L's documented Dropbox RubricAssessment carries the overall outcome
+    // as flat fields rather than a nested OverallOutcome object.
+    const { call } = setup({
+      folderResult: folderWith({ Rubrics: [rubric()] }),
+      feedbackResult: {
+        Score: 5,
+        Feedback: null,
+        RubricAssessments: [
+          {
+            RubricId: 8001,
+            OverallScore: 5,
+            OverallLevel: 8201,
+            OverallFeedback: { Text: "", Html: "<p>Nice work.</p>" },
+            CriteriaOutcome: [
+              { CriterionId: 8301, LevelId: 8201, Score: 5, Feedback: { Text: "", Html: "" } },
+            ],
+          },
+        ],
+      },
+    });
+
+    const payload = parse(await call({ courseId: COURSE, assignmentId: FOLDER }));
+    const assessment = payload.rubrics[0].rubricAssessment;
+
+    expect(assessment).toEqual({
+      levelName: "Excellent",
+      score: 5,
+      feedback: "Nice work.",
+      criteria: [
+        { criterionName: "Identifies issues", levelName: "Excellent", score: 5 },
+      ],
+    });
+  });
+
+  it("tolerates a flat-shape assessment with no CriteriaOutcome at all", async () => {
+    const { call } = setup({
+      folderResult: folderWith({ Rubrics: [rubric()] }),
+      feedbackResult: {
+        RubricAssessments: [
+          { RubricId: 8001, OverallScore: 5, OverallLevel: 8201, OverallFeedback: null },
+        ],
+      },
+    });
+
+    const payload = parse(await call({ courseId: COURSE, assignmentId: FOLDER }));
+    const assessment = payload.rubrics[0].rubricAssessment;
+
+    expect(assessment.score).toBe(5);
+    expect(assessment.levelName).toBe("Excellent");
+    expect(assessment.criteria).toEqual([]);
+  });
+
   it("omits rubricAssessment entirely when myFeedback has none", async () => {
     const { call } = setup({
       folderResult: folderWith({ Rubrics: [rubric()] }),
@@ -260,6 +319,47 @@ describe("get_assignment_rubric: student's own outcome", () => {
 
     await call({ courseId: COURSE, assignmentId: FOLDER });
     expect(requested.some((p) => p.includes("/unstable/"))).toBe(false);
+  });
+
+  it("swallows a 403/404 on myFeedback but rethrows anything else (e.g. a network error)", async () => {
+    const { call } = setup({
+      folderResult: folderWith({ Rubrics: [rubric()] }),
+      feedbackResult: () => {
+        throw new Error("socket hang up");
+      },
+    });
+
+    const result = await call({ courseId: COURSE, assignmentId: FOLDER });
+    expect(result.isError).toBe(true);
+  });
+});
+
+describe("get_assignment_rubric: scoringMethodName", () => {
+  it("names the known D2L SCORING_M values", async () => {
+    const cases: [number, string][] = [
+      [0, "TextOnly"],
+      [1, "Points"],
+      [2, "TextAndNumeric"],
+      [3, "CustomPoints"],
+    ];
+
+    for (const [value, name] of cases) {
+      const { call } = setup({
+        folderResult: folderWith({ Rubrics: [rubric({ ScoringMethod: value })] }),
+      });
+      const payload = parse(await call({ courseId: COURSE, assignmentId: FOLDER }));
+      expect(payload.rubrics[0].scoringMethod).toBe(value);
+      expect(payload.rubrics[0].scoringMethodName).toBe(name);
+    }
+  });
+
+  it("omits scoringMethodName for an unrecognized value, keeping the raw number", async () => {
+    const { call } = setup({
+      folderResult: folderWith({ Rubrics: [rubric({ ScoringMethod: 99 })] }),
+    });
+    const payload = parse(await call({ courseId: COURSE, assignmentId: FOLDER }));
+    expect(payload.rubrics[0].scoringMethod).toBe(99);
+    expect(payload.rubrics[0].scoringMethodName).toBeUndefined();
   });
 });
 
