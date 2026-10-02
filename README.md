@@ -28,14 +28,14 @@ Works with Claude Desktop, Claude Code, Cursor, ChatGPT Desktop, Windsurf, and a
    It asks for your school's Brightspace address, your username and password, and how you normally do two-factor sign-in (phone approval, authenticator code, or a browser window). Your password goes into your computer's own password store (Keychain on Mac, Credential Manager on Windows), never into a file. At the end it connects itself to Claude Desktop, Cursor, Codex, or Claude Code if you have them.
 3. **Restart your AI app and ask it something** — the first question signs you in. If your phone asks you to approve a sign-in, approve it and ask again.
 
-At one of these schools, add the flag and skip typing the address: `--purdue`, `--suny`, `--western`, `--tudelft`, `--cuny`, `--leiden`.
+At one of these schools, add the flag and skip typing the address: `--purdue`, `--suny`, `--western`, `--tudelft`, `--cuny`, `--leiden`, `--javeriana`.
 
 **Rather have the AI install it for you?** Paste this into Claude Code, Cursor, Windsurf, Copilot, or Codex:
 
 ```
 Install brightspace-mcp-server for me by following
 https://github.com/RohanMuppa/brightspace-mcp-server/blob/main/LLMs.md
-(use --purdue at Purdue, --suny at SUNY, --tudelft at TU Delft, --cuny at CUNY, or --leiden at Leiden).
+(use --purdue at Purdue, --suny at SUNY, --tudelft at TU Delft, --cuny at CUNY, --leiden at Leiden, or --javeriana at Javeriana Cali).
 ```
 
 Using a different AI app? Add the command `npx -y brightspace-mcp-server@latest` to its MCP settings (on Windows: `cmd /c npx -y brightspace-mcp-server@latest`). Exact steps for each app: [docs/troubleshooting.md](docs/troubleshooting.md).
@@ -52,6 +52,7 @@ If your school uses D2L Brightspace, yes. These have automatic sign-in built in:
 | TU Delft | NetID (no two-factor) | `--tudelft` |
 | CUNY | CUNY Login, authenticator code each time | `--cuny` |
 | Leiden University | SURFconext → Microsoft | `--leiden` |
+| Javeriana Cali | OneGate (password + authenticator code) | `--javeriana` |
 | Any other D2L school | Paste your Brightspace address; if the login page isn't recognized, a browser window opens so you can sign in by hand | none |
 
 School-specific quirks: [docs/sign-in.md](docs/sign-in.md#per-school-notes).
@@ -65,11 +66,12 @@ School-specific quirks: [docs/sign-in.md](docs/sign-in.md#per-school-notes).
 | Assignments and rubrics | "What does the lab 4 spec actually ask for?" · "Why did I lose points on the analysis criterion?" |
 | Quizzes and exams | "Which quizzes close this week?" · "Is there a midterm in the gradebook that isn't on my assignments list?" |
 | Announcements | "Did any professor post something important today?" · "Read the file attached to today's announcement" |
-| Course content | "Find the midterm review slides" · "Download every PDF from Module 5" · "Search this course for office hours" |
+| Course content | "Find the midterm review slides" · "Download every PDF from Module 5" · "Search this course for office hours" · or just read a file inline instead of saving it |
 | People | "Who are the TAs for ECE 264?" · "Who is in my project group?" |
 | Discussions | "Summarize the latest posts in the final project thread" |
 | Lecture videos | "What did the professor say about pinch-off in Tuesday's recording?" (Kaltura and YouTube) |
 | Calendar | "When is my midterm?" · "Is lab cancelled on Thursday?" |
+| For instructors and TAs | "Which students haven't submitted Lab 4 yet?" · "What feedback did I leave on this student's homework?" · "Download that student's submitted PDF" (students see a clear "instructor access required" note) |
 
 ## Prompts
 
@@ -108,6 +110,7 @@ How often you're asked is up to your school, not this tool. Everything else abou
 
 ## Something not working?
 
+- Run `npx -y brightspace-mcp-server@latest doctor` first — it checks your Node version, saved setup, credential store, Brightspace connectivity, saved sign-in, and installed version, and tells you exactly what to fix.
 - **It works in the terminal but not in the app:** the app starts it separately and may not see your password store yet — see [docs/troubleshooting.md](docs/troubleshooting.md).
 - **Which version do I have?** Ask your AI "which version of the Brightspace server am I running?"
 - **Still stuck?** [Open an issue](https://github.com/RohanMuppa/brightspace-mcp-server/issues) and paste what the terminal printed.
