@@ -10,9 +10,10 @@ import { fetchAllItems } from "../api/paginate.js";
 import {
   GetMyGradesSchema,
 } from "./schemas.js";
-import { toolResponse, sanitizeError } from "./tool-helpers.js";
+import { toolResponse, sanitizeError, errorResponse } from "./tool-helpers.js";
 import { log } from "../utils/logger.js";
 import { applyCourseFilter } from "../utils/course-filter.js";
+import { gradebookUrl } from "../utils/deep-links.js";
 import type { AppConfig } from "../types/index.js";
 
 interface GradeValue {
@@ -69,9 +70,28 @@ export function registerGetMyGrades(
         // Single course case
         if (courseId) {
           const path = apiClient.le(courseId, "/grades/values/myGradeValues/");
-          const gradeValues = await apiClient.get<GradeValue[]>(path, {
-            ttl: DEFAULT_CACHE_TTLS.grades,
-          });
+          let gradeValues: GradeValue[];
+          try {
+            gradeValues = await apiClient.get<GradeValue[]>(path, {
+              ttl: DEFAULT_CACHE_TTLS.grades,
+            });
+          } catch (error: any) {
+            // A 403 here means the tenant restricts the grade API for this
+            // course (an institutional policy, not a bug). The error shape
+            // stays the same plain isError text result every other tool
+            // error uses -- only the text itself changes, naming the
+            // gradebook URL so the student can see their grade there
+            // instead.
+            if (error?.status === 403) {
+              const url = gradebookUrl(config.baseUrl, courseId);
+              log("INFO", `get_my_grades: 403 for course ${courseId} - grade API access restricted`);
+              return errorResponse(
+                "Your institution restricts grade API access for this course. " +
+                `View your grades directly in Brightspace: ${url}`
+              );
+            }
+            throw error;
+          }
 
           // Map to clean objects
           const grades = gradeValues.map((gv) => ({
@@ -141,36 +161,50 @@ export function registerGetMyGrades(
             }));
 
             return {
+              restricted: false as const,
               courseId: item.OrgUnit.Id,
               courseName: item.OrgUnit.Name,
               grades,
             };
           } catch (error: any) {
-            // 403 means no access (past course, etc) - log and skip
+            // A 403 means the tenant restricts the grade API for this course
+            // (an institutional policy, not missing access like a dropped
+            // past course). Rather than dropping the course with no trace,
+            // it is surfaced in a separate, purely additive
+            // `restrictedCourses` array; `courses` itself is unaffected.
             if (error?.status === 403) {
               log(
                 "DEBUG",
-                `get_my_grades: 403 Forbidden for course ${item.OrgUnit.Id} (${item.OrgUnit.Name}) - skipping`
+                `get_my_grades: 403 Forbidden for course ${item.OrgUnit.Id} (${item.OrgUnit.Name}) - grade API access restricted`
               );
-              return null;
+              return {
+                restricted: true as const,
+                courseId: item.OrgUnit.Id,
+                courseName: item.OrgUnit.Name,
+                gradeUrl: gradebookUrl(config.baseUrl, item.OrgUnit.Id),
+              };
             }
             throw error; // Re-throw other errors
           }
         });
 
         const results = await Promise.allSettled(gradePromises);
-        const courses = results
-          .filter(
-            (r): r is PromiseFulfilledResult<any> =>
-              r.status === "fulfilled" && r.value !== null
-          )
+        const settled = results
+          .filter((r): r is PromiseFulfilledResult<any> => r.status === "fulfilled")
           .map((r) => r.value);
+        const courses = settled
+          .filter((r) => !r.restricted)
+          .map(({ restricted: _restricted, ...rest }) => rest);
+        const restrictedCourses = settled
+          .filter((r) => r.restricted)
+          .map(({ restricted: _restricted, ...rest }) => rest);
 
         log(
           "INFO",
-          `get_my_grades: Retrieved grades for ${courses.length} courses (out of ${enrollmentItems.length} enrolled)`
+          `get_my_grades: Retrieved grades for ${courses.length} courses, ` +
+          `${restrictedCourses.length} restricted (out of ${enrollmentItems.length} enrolled)`
         );
-        return toolResponse({ courses });
+        return toolResponse({ courses, restrictedCourses });
       } catch (error) {
         return sanitizeError(error);
       }

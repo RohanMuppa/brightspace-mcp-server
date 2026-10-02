@@ -17,6 +17,13 @@ import { dueIn } from "../utils/due-in.js";
 import type { AppConfig } from "../types/index.js";
 
 // D2L Dropbox API types
+// Adapted from LunaParker/brightspace-mcp-server (MIT).
+interface DropboxLinkAttachment {
+  LinkId?: number;
+  Title?: string | null;
+  Href?: string | null;
+}
+
 interface DropboxFolder {
   Id: number;
   CategoryId: number | null;
@@ -43,6 +50,9 @@ interface DropboxFolder {
   } | null;
   GroupTypeId: number | null; // null = individual, non-null = group
   SubmissionType: number | null;
+  // Instructor-provided URL links attached to the folder (e.g. a spec doc
+  // hosted elsewhere, a starter repo). Absent on tenants/folders with none.
+  LinkAttachments?: DropboxLinkAttachment[] | null;
 }
 
 interface DropboxSubmission {
@@ -326,6 +336,14 @@ export async function fetchCourseAssignments(
         }
       }
 
+      // Instructor-provided URL links attached to the folder. Omitted
+      // entirely (rather than an empty array) when the folder has none, to
+      // keep the common case's shape exactly as it was.
+      // Adapted from LunaParker/brightspace-mcp-server (MIT).
+      const linkAttachments = (folder.LinkAttachments ?? [])
+        .filter((l): l is DropboxLinkAttachment & { Href: string } => Boolean(l.Href))
+        .map((l) => ({ name: l.Title ?? null, url: l.Href }));
+
       // Build assignment object
       const assignment = {
         type: "assignment",
@@ -339,6 +357,7 @@ export async function fetchCourseAssignments(
         dueIn: dueIn(folder.DueDate),
         points: folder.Assessment?.ScoreDenominator ?? null,
         isGroup: folder.GroupTypeId !== null,
+        ...(linkAttachments.length > 0 ? { linkAttachments } : {}),
         rubric: folder.Assessment?.Rubrics?.map((r) => ({
           name: r.Name,
           criteria: r.Criteria?.map((c) => ({
