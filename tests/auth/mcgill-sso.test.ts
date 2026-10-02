@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createSSOFlow } from "../../src/auth/sso-flow.js";
+import { createSSOFlow, UnsupportedAuthenticationError } from "../../src/auth/sso-flow.js";
 import { McgillSSOFlow, isMcgillBrightspace } from "../../src/auth/mcgill-sso.js";
 import type { AppConfig } from "../../src/types/index.js";
 
@@ -13,9 +13,13 @@ describe("McGill sign-in entry point", () => {
   });
 
   it("navigates to the SAML endpoint from McGill's login page", async () => {
-    const goto = vi.fn(async () => {});
+    // A healthy SAML endpoint redirects off mycourses2.mcgill.ca to Entra.
+    let currentUrl = `${MCGILL_URL}/d2l/login`;
+    const goto = vi.fn(async () => {
+      currentUrl = "https://login.microsoftonline.com/common/login";
+    });
     const page = {
-      url: () => `${MCGILL_URL}/d2l/login`,
+      url: () => currentUrl,
       goto,
     };
     await new McgillSSOFlow({ baseUrl: MCGILL_URL }).prepareLogin(page as never);
@@ -34,6 +38,24 @@ describe("McGill sign-in entry point", () => {
     const page = { url: () => "https://mycourses2.mcgill.ca.example.com/d2l/login", goto };
     await new McgillSSOFlow({ baseUrl: MCGILL_URL }).prepareLogin(page as never);
     expect(goto).not.toHaveBeenCalled();
+  });
+
+  it("does not navigate from an http:// page even on the McGill host and login path", async () => {
+    const goto = vi.fn(async () => {});
+    const page = { url: () => "http://mycourses2.mcgill.ca/d2l/login", goto };
+    await new McgillSSOFlow({ baseUrl: MCGILL_URL }).prepareLogin(page as never);
+    expect(goto).not.toHaveBeenCalled();
+  });
+
+  it("throws when the SAML endpoint fails to redirect off mycourses2.mcgill.ca", async () => {
+    let currentUrl = `${MCGILL_URL}/d2l/login`;
+    const goto = vi.fn(async (target: string) => {
+      currentUrl = target;
+    });
+    const page = { url: () => currentUrl, goto };
+    await expect(new McgillSSOFlow({ baseUrl: MCGILL_URL }).prepareLogin(page as never))
+      .rejects.toBeInstanceOf(UnsupportedAuthenticationError);
+    expect(goto).toHaveBeenCalledWith(`${MCGILL_URL}/d2l/lp/auth/saml/login`, expect.any(Object));
   });
 
   it("does not throw on an unparseable or blank URL", async () => {

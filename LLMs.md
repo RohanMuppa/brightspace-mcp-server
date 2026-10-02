@@ -54,7 +54,7 @@ npx -y brightspace-mcp-server@latest setup --cuny
 
 The wizard:
 
-- prompts for the school's Brightspace URL (skipped with `--purdue`, `--suny`, or `--cuny`)
+- prompts for the school's Brightspace URL (skipped with `--purdue`, `--suny`, `--western`, `--tudelft`, `--cuny`, `--leiden`, or `--mcgill`)
 - asks whether MFA uses device approval, terminal code entry, or a visible browser, then authenticates accordingly
 - saves the password in the native credential store and public settings in `~/.brightspace-mcp/config.json` (0600)
 - writes the encrypted session below `~/.d2l-session/accounts/<account-hash>/` (AES-256-GCM)

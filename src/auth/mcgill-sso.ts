@@ -6,6 +6,7 @@
 
 import type { Page } from "playwright";
 import { PurdueSSOFlow } from "./purdue-sso.js";
+import { UnsupportedAuthenticationError } from "./sso-flow.js";
 import type { RememberMfaResult } from "./microsoft-session.js";
 
 const MCGILL_HOST = "mycourses2.mcgill.ca";
@@ -67,11 +68,28 @@ export class McgillSSOFlow {
     } catch {
       return;
     }
-    if (current.hostname.toLowerCase() !== MCGILL_HOST || !current.pathname.includes("/d2l/login")) return;
+    if (current.protocol !== "https:" || current.hostname.toLowerCase() !== MCGILL_HOST || !current.pathname.includes("/d2l/login")) return;
 
     await page.goto(`${current.origin}/d2l/lp/auth/saml/login`, {
       waitUntil: "domcontentloaded",
       timeout: 30000,
     });
+
+    // A healthy SAML endpoint redirects off mycourses2.mcgill.ca towards
+    // Microsoft Entra. If the host is unchanged, the endpoint 404'd or
+    // otherwise failed to redirect — fail fast with a clear message instead
+    // of letting the inner Microsoft sign-in flow time out looking for
+    // fields that will never appear.
+    let afterGoto: URL;
+    try {
+      afterGoto = new URL(page.url());
+    } catch {
+      return;
+    }
+    if (afterGoto.hostname.toLowerCase() === MCGILL_HOST) {
+      throw new UnsupportedAuthenticationError(
+        "McGill sign-in could not reach the SAML endpoint (mycourses2.mcgill.ca/d2l/lp/auth/saml/login stayed on the same host) — myCourses may have changed its login flow."
+      );
+    }
   }
 }
