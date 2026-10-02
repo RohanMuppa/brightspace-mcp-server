@@ -1,17 +1,17 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
-  "name": "io.github.rohanmuppa/brightspace",
+  "name": "io.github.RohanMuppa/brightspace",
   "description": "D2L Brightspace MCP server: grades, due dates, assignments, announcements and files. Any school.",
   "repository": {
     "url": "https://github.com/RohanMuppa/brightspace-mcp-server",
     "source": "github"
   },
-  "version": "3.10.1",
+  "version": "3.10.2",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "brightspace-mcp-server",
-      "version": "3.10.1",
+      "version": "3.10.2",
       "transport": {
         "type": "stdio"
       },
