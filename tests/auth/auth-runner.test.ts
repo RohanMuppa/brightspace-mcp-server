@@ -387,5 +387,36 @@ describe("AuthRunner", () => {
 
       expect(settled).toBe(false);
     });
+
+    it("answers by 55 seconds into the call when the challenge arrives late", async () => {
+      const result = new AuthRunner().run(() => {});
+      const failure = expect(result).rejects.toMatchObject({ kind: "mfaPending", numberMatch: "47" });
+      await vi.advanceTimersByTimeAsync(30000);
+      child.stdout.write("MFA_NUMBER:47\n");
+      await vi.advanceTimersByTimeAsync(25000);
+      await failure;
+    });
+
+    it("is still waiting just before 55 seconds into the call when the challenge arrives late", async () => {
+      let settled = false;
+      void new AuthRunner().run(() => {}).then(() => { settled = true; }, () => { settled = true; });
+      await vi.advanceTimersByTimeAsync(30000);
+      child.stdout.write("MFA_NUMBER:47\n");
+      await vi.advanceTimersByTimeAsync(24000);
+
+      expect(settled).toBe(false);
+    });
+
+    it("answers at once without waiting when the challenge arrives after 55 seconds", async () => {
+      const onChallenge = vi.fn();
+      const result = new AuthRunner().run(onChallenge);
+      const failure = expect(result).rejects.toMatchObject({ kind: "mfaPending", numberMatch: "47" });
+      await vi.advanceTimersByTimeAsync(56000);
+      child.stdout.write("MFA_NUMBER:47\n");
+      await vi.advanceTimersByTimeAsync(0);
+      await failure;
+
+      expect(onChallenge).not.toHaveBeenCalled();
+    });
   });
 });
