@@ -43,6 +43,8 @@ import {
   registerGetDropboxFeedback,
   registerGetRubricsForObject,
   registerDownloadDropboxSubmissionFile,
+  relayMfaChallenges,
+  currentMfaAnnouncer,
 } from "./tools/index.js";
 import {
   registerWeeklyBriefingPrompt,
@@ -131,7 +133,7 @@ if (subcommand === 'setup') {
       const apiClient = new D2LApiClient({
         baseUrl: config.baseUrl,
         tokenManager,
-        onAuthExpired: authRunner ? () => authRunner.run() : undefined,
+        onAuthExpired: authRunner ? () => authRunner.run(currentMfaAnnouncer()) : undefined,
         authExpiredMessage: config.envAccessToken
           ? "D2L_ACCESS_TOKEN was rejected by Brightspace (expired or invalid). Issue a fresh token and update the environment variable; this server does not fall back to a browser login while D2L_ACCESS_TOKEN is set."
           : config.envSessionCookie
@@ -161,7 +163,10 @@ if (subcommand === 'setup') {
         });
       }
 
-      // Register MCP tools
+      // Register MCP tools. Each one, when its client sends a progress token,
+      // shows an MFA challenge mid-call and waits for the approval instead of
+      // asking to be called again (see relayMfaChallenges).
+      relayMfaChallenges(server);
       registerGetMyCourses(server, apiClient, config);
       registerGetUpcomingDueDates(server, apiClient, config);
       registerGetCalendarEvents(server, apiClient, config);

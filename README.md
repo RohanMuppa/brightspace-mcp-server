@@ -102,7 +102,7 @@ All optional, set in your AI app's MCP `env` config or your shell. The full list
 
 ## When it asks you to sign in
 
-There's no separate login — asking a question signs you in, and it stays signed in on its own most days. When your school wants two-factor again, the number to approve shows up right in the answer; approve it on your phone and ask again. If it ever gets stuck, run this in a terminal:
+There's no separate login — asking a question signs you in, and it stays signed in on its own most days. When your school wants two-factor again, the number to approve shows up right in the answer; approve it on your phone and ask again. If your AI client shows tool progress messages, the number appears while the question is still running instead, and approving within 45 seconds finishes the original answer without asking again. If it ever gets stuck, run this in a terminal:
 
 ```bash
 npx -y brightspace-mcp-server@latest auth
