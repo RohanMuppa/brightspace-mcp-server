@@ -6,8 +6,6 @@
 [![License: MIT](https://img.shields.io/github/license/RohanMuppa/brightspace-mcp-server.svg)](LICENSE)
 [![Node >= 20](https://img.shields.io/node/v/brightspace-mcp-server.svg)](package.json)
 
-**Official repo:** github.com/RohanMuppa/brightspace-mcp-server · [npm](https://www.npmjs.com/package/brightspace-mcp-server) — forks of this README are not maintained.
-
 > **By [Rohan Muppa](https://github.com/rohanmuppa), ECE @ Purdue**
 
 Lets your AI see your Brightspace classes, so you can just ask:
