@@ -75,6 +75,38 @@ School-specific quirks: [docs/sign-in.md](docs/sign-in.md#per-school-notes).
 
 Apps with a prompt picker (like Claude Desktop) also offer four ready-made prompts: `weekly_briefing`, `grade_audit`, `study_planner`, and `course_summary`.
 
+## What it can do
+
+Nineteen read-only tools behind those questions. The ones worth knowing about:
+
+- **Grades** — every course's gradebook with instructor comments, and the hidden "exam" items that only appear in the gradebook.
+- **Assignments** — due dates with a plain-words `dueIn` ("in 3 days"), your submissions and the feedback on them, rubric names, and quizzes with attempt counts. While sign-in is still pending it says so instead of returning an empty list.
+- **Rubrics** — the full criteria, levels, and points for an assignment, plus your own graded outcome per criterion when your school exposes it.
+- **Due dates and calendar** — upcoming deadlines from assignments, quizzes, graded discussions, and the course calendar (exams, labs, review sessions).
+- **Announcements** — with attachments you can read or save.
+- **Course content** — modules and topics as markdown, file download (PDF, Office, and more), and release windows: it tells you when something opens, has ended, or is hidden instead of a bare error.
+- **Search** — content, announcements, and discussions by keyword in one call.
+- **Lecture videos** — transcripts for Kaltura and YouTube embeds.
+- **People** — roster, instructor and TA emails, and your project or lab groups.
+- **Discussions** — forums and topics.
+- **Diagnostics** — `get_server_info`: version, timezone, who you're signed in as, whether Microsoft remembered your device, and request counters, all without touching Brightspace.
+
+Sign-in is automatic: silent renewal most days, the MFA number shown in-chat when needed, Duo and authenticator-code support, a visible-browser mode for anything else, an opt-in "remember this device" for Microsoft, and a browser-free mode (paste a session cookie or token) for Docker, WSL, and hardware-key accounts. Links in course content have D2L's session tokens stripped before they reach the AI.
+
+## Settings you might want
+
+All optional, set in your AI app's MCP `env` config or your shell. The full list is in [LLMs.md](LLMs.md).
+
+| Setting | What it does |
+|---------|--------------|
+| `D2L_REMEMBER_MFA=true` | Tick Microsoft's "Don't ask again" box so later sign-ins skip the second factor (off by default; not for shared computers) |
+| `D2L_HEADLESS=false` | Show the browser window during sign-in, for MFA methods that need a click |
+| `D2L_DUO_PASSCODE=1` | On Duo, type a passcode instead of waiting for a push |
+| `D2L_SESSION_COOKIE` / `D2L_ACCESS_TOKEN` | Skip the browser entirely with a pasted cookie or token ([how](docs/sign-in.md#no-browser-paste-a-session-cookie-or-token)) |
+| `D2L_INCLUDE_COURSES` / `D2L_EXCLUDE_COURSES` | Limit which courses the AI sees, by course id |
+| `D2L_ACTIVE_ONLY=false` | Include courses whose enrollment has ended |
+| `D2L_NO_UPDATE_CHECK=1` | Turn off the new-version notice |
+
 ## When it asks you to sign in
 
 There's no separate login — asking a question signs you in, and it stays signed in on its own most days. When your school wants two-factor again, the number to approve shows up right in the answer; approve it on your phone and ask again. If it ever gets stuck, run this in a terminal:
