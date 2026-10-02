@@ -308,9 +308,15 @@ export class D2LApiClient {
     // A rejected JWT does not prove its underlying cookie is expired. Read a
     // token written by another process or mint over HTTP before opening login.
     // TokenRefreshError propagates here, so a temporary outage never starts MFA.
+    // One 401-recovery cascade counts as one refresh even when it takes both a
+    // mint attempt and a browser login to land a token the server accepts --
+    // `refreshed` tracks whether this cascade has already been counted so the
+    // fallback to tryAutoReauth below doesn't count it a second time.
     const fresh = await this.tokenManager.getToken(token.accessToken);
+    let refreshed = false;
     if (fresh && fresh.accessToken !== token.accessToken) {
       this.statsData.tokenRefreshes++;
+      refreshed = true;
       try {
         return await send(fresh);
       } catch (error) {
@@ -319,7 +325,7 @@ export class D2LApiClient {
     }
 
     const loggedIn = await this.tryAutoReauth(path, fresh?.accessToken ?? token.accessToken);
-    this.statsData.tokenRefreshes++;
+    if (!refreshed) this.statsData.tokenRefreshes++;
     return send(loggedIn);
   }
 
