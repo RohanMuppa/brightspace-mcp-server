@@ -157,4 +157,11 @@ export const GetRosterSchema = z.object({
     .describe("Maximum users to return. Default 100. The response reports the true total and whether it was truncated."),
 });
 
+export const GetAssignmentRubricSchema = z.object({
+  courseId: z.coerce.number().int().positive()
+    .describe("Course ID the assignment belongs to."),
+  assignmentId: z.coerce.number().int().positive()
+    .describe("Assignment (dropbox folder) ID, as returned by get_assignments."),
+});
+
 export const GetServerInfoSchema = z.object({});

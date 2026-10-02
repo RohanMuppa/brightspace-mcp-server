@@ -11,6 +11,7 @@ export { registerGetCalendarEvents } from "./get-calendar-events.js";
 export { registerGetMyGrades } from "./get-my-grades.js";
 export { registerGetAnnouncements } from "./get-announcements.js";
 export { registerGetAssignments } from "./get-assignments.js";
+export { registerGetAssignmentRubric } from "./get-assignment-rubric.js";
 export { registerGetAssignmentFiles } from "./get-assignment-files.js";
 export { registerGetAnnouncementFiles } from "./get-announcement-files.js";
 export { registerGetCourseContent } from "./get-course-content.js";

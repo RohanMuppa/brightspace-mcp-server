@@ -127,6 +127,7 @@ Run it from your home folder — macOS blocks `npx` from Documents, Desktop, or 
 | Assignments | "What's due in the next 48 hours?" · "Summarize every assignment I haven't turned in yet" · "Give me the link to submit HW 4" |
 | Quizzes | "Which quizzes close this week?" · "Is Quiz 3 timed, and does it have a grace period?" |
 | Assignment files | "What does the lab 4 spec actually ask for?" · "Summarize the rubric attached to the project" |
+| Rubrics | "What does the rubric for Lab 4 actually want?" · "Why did I lose points on the analysis criterion?" — `get_assignment_rubric` returns the full criteria groups, levels, and point values for a dropbox assignment, plus your own graded outcome per criterion once it's released |
 | Exams | "Is there a midterm in the gradebook that isn't on my assignments list?" |
 | Announcements | "Did any professor post something important today?" · "What did my CS prof announce this week?" · "Any announcements since last Monday?" · "Read the file attached to today's announcement" · "Save the rubric my prof attached to that announcement" |
 | Course content | "Find the midterm review slides" · "Download every PDF from Module 5" · "What's new in this course since I last checked?" |
