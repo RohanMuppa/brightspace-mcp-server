@@ -43,9 +43,18 @@ they attend, which lets sign-in skip SUNY's shared campus picker:
 npx -y brightspace-mcp-server@latest setup --suny
 ```
 
+If the user is at a CUNY campus, use the CUNY preset. Their username is the
+full CUNY Login address, and sign-in asks in the terminal for the code from
+their authenticator app. CUNY requires that code on every full sign-in, so
+when the Brightspace session ends the user reruns `auth` in a terminal:
+
+```bash
+npx -y brightspace-mcp-server@latest setup --cuny
+```
+
 The wizard:
 
-- prompts for the school's Brightspace URL (skipped with `--purdue` or `--suny`)
+- prompts for the school's Brightspace URL (skipped with `--purdue`, `--suny`, or `--cuny`)
 - asks whether MFA uses device approval, terminal code entry, or a visible browser, then authenticates accordingly
 - saves the password in the native credential store and public settings in `~/.brightspace-mcp/config.json` (0600)
 - writes the encrypted session below `~/.d2l-session/accounts/<account-hash>/` (AES-256-GCM)
@@ -85,6 +94,8 @@ The number can change mid-wait: if the request times out or is denied before app
 
 On a Duo tenant, a device-trust prompt ("Is this your device?") gating the push is answered yes automatically, which also makes Duo skip its device check on later logins from this machine — worth mentioning to a user signing in from a shared computer. `D2L_DUO_PASSCODE` switches from waiting for a push to typing a Duo Mobile passcode.
 
+On Microsoft Entra's MFA page (number match or verification code, on `login.microsoftonline.com` only), the "Don't ask again for N days" checkbox is ticked once when `D2L_REMEMBER_MFA=true` is set, before the number is announced or a code is asked for, and an already-checked box is left alone. This is opt-in and off by default: without the variable the box is left alone and the outcome is recorded as `off`. The window is the tenant's setting; a tenant that never shows the box simply keeps asking. A sign-in that fails after Entra renewed its cookies still saves the browser state when those cookies are strictly newer than the saved ones; any other failure leaves the saved state untouched. `get_server_info` reports `microsoftSession` — `staySignedIn`, `staySignedInExpires`, `rememberMfa` (`ticked`, `already`, `absent`, `unknown`, or `off`), `rememberMfaAt` — read from a plain summary (`microsoft-session.json`, no cookie values) beside the browser state, and omits it when no browser state is saved.
+
 Visible mode applies to the manual `auth` command, whose window remains open for up to five minutes when automatic credential handling is unavailable or the identity provider needs direct interaction. Automatic recovery spawned by `AuthRunner` runs headless unless `D2L_HEADLESS` is set explicitly. Rerunning setup preserves the existing hidden or visible preference as the default choice.
 
 ```bash
@@ -112,7 +123,7 @@ Registered in `src/tools/index.ts`, schemas in `src/tools/schemas.ts`:
 | `get_assignment_files` | Read the files attached to an assignment (spec, rubric, starter workbook) and return their text |
 | `get_announcement_files` | Read the files attached to an announcement (prompts, rubric, updated schedule) and return their text |
 | `get_video_transcript` | Transcript of a video embedded in course content (Kaltura, YouTube), with timestamps |
-| `get_server_info` | Running version, Node runtime, platform, config and session paths, school URL, and whether a credential is stored — no network call, no secrets |
+| `get_server_info` | Running version, Node runtime, platform, config and session paths, school URL, whether a credential is stored, and `microsoftSession` (what Microsoft remembered) once a browser sign-in is saved — no network call, no secrets |
 
 These sixteen are the whole surface. An available-update notice, when there is one, rides along as a second text block on the first successful result.
 
@@ -158,6 +169,7 @@ src/
     sso-flow.ts             Picks the login flow for the configured host
     purdue-sso.ts           Default SSO handler (Shibboleth, CAS, Entra forms)
     suny-sso.ts             SUNY campus selection
+    cuny-sso.ts             CUNY Login (Oracle OAM) credentials and authenticator code
     session-store.ts        AES-256-GCM token persistence and v1 migration
     browser-state-store.ts  Encrypted cookie and browser storage persistence
     credential-store.ts     Native password and encryption-key storage
@@ -185,6 +197,7 @@ src/
 | `npx -y brightspace-mcp-server@latest setup` | Interactive setup wizard |
 | `npx -y brightspace-mcp-server@latest setup --purdue` | Setup with Purdue preset |
 | `npx -y brightspace-mcp-server@latest setup --suny` | Setup with SUNY preset (also asks for campus) |
+| `npx -y brightspace-mcp-server@latest setup --cuny` | Setup with CUNY preset |
 | `npx -y brightspace-mcp-server@latest auth` | Manual reauth |
 | `npx -y brightspace-mcp-server@latest` | Run the MCP server (registered in AI client config) |
 | `npm run build` | Compile TypeScript to `build/` |

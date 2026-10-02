@@ -6,7 +6,7 @@ Talk to your Brightspace courses with AI. Ask about grades, due dates, quizzes, 
 
 This is an [MCP (Model Context Protocol)](https://modelcontextprotocol.io) server that connects your AI to D2L Brightspace so it can pull your grades, assignments, syllabus, and course content on demand.
 
-Connects to D2L Brightspace. Automatic login supports Purdue's Microsoft Entra flow, SUNY campus selection, Western University, and TU Delft NetID via SURFconext. Other schools need a compatible automated sign-in flow; unsupported login pages return an actionable error.
+Connects to D2L Brightspace. Automatic login supports Purdue's Microsoft Entra flow, SUNY campus selection, Western University, TU Delft NetID via SURFconext, and CUNY Login. Other schools need a compatible automated sign-in flow; unsupported login pages return an actionable error.
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/RohanMuppa/brightspace-mcp-server/main/docs/how-it-works.svg" alt="Architecture diagram" width="100%">
@@ -28,7 +28,7 @@ Paste this into Claude Code, Cursor, Windsurf, Copilot, Codex, or any AI coding 
 ```
 Install brightspace-mcp-server for me by following
 https://github.com/RohanMuppa/brightspace-mcp-server/blob/main/LLMs.md
-(use --purdue at Purdue, --suny at SUNY, or --tudelft at TU Delft).
+(use --purdue at Purdue, --suny at SUNY, --tudelft at TU Delft, or --cuny at CUNY).
 ```
 
 **Option 2: Run it yourself**
@@ -57,6 +57,16 @@ npx -y brightspace-mcp-server@latest setup --tudelft
 ```
 
 Use your NetID rather than your student email address. The TU Delft flow is headless NetID username and password sign-in only, including automatic re-authentication when the saved session expires; it does not support MFA or any other interactive step. If your account requires one, [open an issue](https://github.com/RohanMuppa/brightspace-mcp-server/issues) — that tenant isn't supported yet.
+
+CUNY students can add `--cuny`. Sign in with your full CUNY Login address
+(`firstname.lastname01@login.cuny.edu`); authentication asks in the terminal
+for the 6-digit code from your authenticator app. CUNY asks for that code on
+every full sign-in, so when your Brightspace session ends, run
+`npx -y brightspace-mcp-server@latest auth` in a terminal again:
+
+```bash
+npx -y brightspace-mcp-server@latest setup --cuny
+```
 
 The wizard saves your password in the native credential store and asks how you'll complete MFA: wait for approval or number matching, enter a terminal code from Google Authenticator or another app, or use a visible browser for other interactive methods. It can also configure Claude Desktop, Cursor, Codex Desktop and CLI, and Claude Code when installed — restart your AI client when it finishes.
 
@@ -99,7 +109,7 @@ There's no login step — asking a question signs you in.
 
 **Normal days:** tokens renew over HTTPS, and a background browser silently replays your saved Microsoft session (silent SSO) if it lapses.
 
-**When MFA is asked:** the number to approve shows up right in the tool's response, and sign-in finishes in the background — approve it, call the tool again, and use the newest number if one goes stale. TOTP apps (Google Authenticator, etc.) get prompted via the terminal; visible-browser mode opens a window instead, though automatic recovery during a tool call still runs headless unless you set `D2L_HEADLESS=false`. On Duo, sign-in auto-answers "Is this your device?" with **yes**, since a headless run has nobody to click it — this also makes Duo remember the device, so skip it on shared machines. Set `D2L_DUO_PASSCODE` to swap the push for a typed passcode.
+**When MFA is asked:** the number to approve shows up right in the tool's response, and sign-in finishes in the background — approve it, call the tool again, and use the newest number if one goes stale. TOTP apps (Google Authenticator, etc.) get prompted via the terminal; visible-browser mode opens a window instead, though automatic recovery during a tool call still runs headless unless you set `D2L_HEADLESS=false`. On Duo, sign-in auto-answers "Is this your device?" with **yes**, since a headless run has nobody to click it — this also makes Duo remember the device, so skip it on shared machines. Set `D2L_DUO_PASSCODE` to swap the push for a typed passcode. On Microsoft's MFA page, setting `D2L_REMEMBER_MFA=true` makes the server tick "Don't ask again" when your school offers it, so later sign-ins can skip the second factor; how long that lasts is the school's setting, not the server's. It is off by default — leave it off on a shared machine — and `get_server_info` shows whether the box was ticked, offered, or left alone.
 
 **If it gets stuck:** a missed MFA approval pauses automatic sign-in for 5 minutes. This retries immediately, takes over a stuck sign-in, or asks for a code:
 
@@ -123,7 +133,7 @@ Run it from your home folder — macOS blocks `npx` from Documents, Desktop, or 
 | Roster | "Who are the TAs for ECE 264?" · "Get me my instructor's email" |
 | Discussions | "What are people saying in the final project thread?" · "Summarize the latest discussion posts" |
 | Video transcripts | "What did the professor say about pinch-off in Tuesday's lecture recording?" · "Summarize last week's BoilerCast video" — works for Kaltura and YouTube embeds; other platforms report that they aren't supported yet |
-| Troubleshooting | "Which version of the Brightspace server am I running?" · "Where is my Brightspace config file?" — `get_server_info` reports the version, Node runtime, platform, config and session paths, school URL, and whether a credential is stored, without contacting Brightspace or revealing secrets |
+| Troubleshooting | "Which version of the Brightspace server am I running?" · "Where is my Brightspace config file?" — `get_server_info` reports the version, Node runtime, platform, config and session paths, school URL, whether a credential is stored, and what Microsoft remembered (`microsoftSession`: stay-signed-in and its expiry, plus whether "Don't ask again" was ticked, already on, not offered, or left off because `D2L_REMEMBER_MFA` isn't set), without contacting Brightspace or revealing secrets |
 | Calendar | "When is my midterm?" · "What's on my calendar this week?" · "Is lab cancelled on Thursday?" — reads exams, labs, review sessions, and deadlines instructors put only on the course calendar |
 | Planning | "Build me a study schedule based on my upcoming due dates" · "Which class needs the most attention right now?" — pulls from assignments, quizzes, graded discussion topics (any topic with a due date), and course calendar events such as exams and labs |
 
