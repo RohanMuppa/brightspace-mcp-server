@@ -160,7 +160,7 @@ if (subcommand === 'setup') {
       registerGetSyllabus(server, apiClient);
       registerGetDiscussions(server, apiClient);
       registerGetVideoTranscript(server, apiClient);
-      registerGetServerInfo(server, config, PKG_VERSION);
+      registerGetServerInfo(server, config, PKG_VERSION, apiClient);
       log("DEBUG", "MCP tools registered (16 tools)");
 
       // Connect stdio transport

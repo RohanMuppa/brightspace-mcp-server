@@ -113,4 +113,23 @@ describe("v2 authentication recovery", () => {
     await expect(state.client.get(path)).rejects.toMatchObject({ status: 401 });
     expect(state.authenticate).toHaveBeenCalledTimes(1);
   });
+
+  it("counts one token refresh, not two, when the minted retry also 401s before login", async () => {
+    const mint = vi.fn(async () => ({ ok: true, accessToken: "mint-jwt" }) as const);
+    const state = fixture(mint);
+    await state.manager.setToken({ ...token(), expiresAt: Date.now() + 3600000 });
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("Unauthorized", { status: 401 })) // the stale token
+      .mockResolvedValueOnce(new Response("Unauthorized", { status: 401 })) // the minted retry
+      .mockResolvedValueOnce(Response.json({ Identifier: "42" })); // the post-login token
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await state.client.get(path);
+
+    expect(result).toEqual({ Identifier: "42" });
+    expect(mint).toHaveBeenCalledTimes(1);
+    expect(state.authenticate).toHaveBeenCalledTimes(1);
+    expect(state.client.stats().tokenRefreshes).toBe(1);
+  });
 });

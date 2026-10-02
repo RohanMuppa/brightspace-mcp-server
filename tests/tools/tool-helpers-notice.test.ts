@@ -23,7 +23,7 @@ async function seedNotice() {
     fetchImpl: vi.fn(async () => okJson("99.0.0")) as unknown as typeof fetch,
     env: {},
     installedVersion: "1.0.0",
-    runningFromNpxCache: false,
+    installKind: "npm-install",
   });
 }
 
