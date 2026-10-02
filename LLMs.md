@@ -234,3 +234,7 @@ Build paths with `apiClient.lp()`, `le()`, or `leGlobal()` and nothing else. The
 Publishing is automated by GitHub Actions on push to `main` when `version` in `package.json` changes, after the reusable CI matrix passes on macOS, Windows, and Linux. Keep `package.json`, the lockfile, and `server.json` versions aligned. Create the GitHub release only from the verified published commit.
 
 Always bump `version` in `package.json` in the same commit as any code or docs change. The Action skips publish if the version is unchanged, which means users will not receive the update via `npx ...@latest`.
+
+## Stability guarantees
+
+Before renaming a tool, removing or renaming a response field, or changing a CLI flag, an env var, or an on-disk path, read [STABILITY.md](./STABILITY.md). It lists exactly what outside integrations and PRs may rely on; changes there need to be additive.

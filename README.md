@@ -103,6 +103,8 @@ Claude Desktop uses a separate configuration, which the setup wizard can update 
 
 </details>
 
+Building against this server or opening a PR? See [STABILITY.md](STABILITY.md) for what's safe to rely on and what counts as a breaking change.
+
 ## Session Expired?
 
 There's no login step — asking a question signs you in.
@@ -118,6 +120,14 @@ npx -y brightspace-mcp-server@latest auth
 ```
 
 Run it from your home folder — macOS blocks `npx` from Documents, Desktop, or Downloads without Files and Folders permission (`EPERM`). Grant access in System Settings → Privacy & Security → Files and Folders, or run elsewhere.
+
+## Troubleshooting
+
+**Where to find logs:** MCP clients log the server's stderr themselves. On **macOS**, Claude Desktop writes to `~/Library/Logs/Claude/mcp*.log` (one file per server, plus `mcp.log` for the client itself). On **Windows**, it's `%APPDATA%\Claude\logs`. Other clients vary — check their own logs or output panel for the `brightspace-mcp-server` process.
+
+**Works in a terminal but not in the client:** the client launches the server as its own subprocess, which doesn't inherit your shell's environment. Common causes: the native credential store is locked (a GUI app started before you unlocked your keyring or logged into macOS won't get a Keychain prompt the way a terminal does), `HOME` or `PATH` differ for GUI-launched processes versus your shell, or `npx` resolves a different cached version than the one on your `PATH`. To check, run the exact registered command (`npx -y brightspace-mcp-server@latest`, or `cmd /c npx -y brightspace-mcp-server@latest` on Windows) from a fresh terminal with no extra environment set, and compare.
+
+**Which version am I running:** ask the assistant anything that calls `get_server_info` — it reports the running version, Node runtime, and config/session paths with no network call. If you're on a source checkout instead of the published npm package, that version comes from the local `build/` output, so it only reflects your latest `npm run build`, not what's on npm.
 
 ## What You Can Ask About
 
