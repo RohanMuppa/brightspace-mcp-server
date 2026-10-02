@@ -1,17 +1,17 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.rohanmuppa/brightspace",
-  "description": "MCP server for D2L Brightspace. Check grades, assignments, due dates, and announcements.",
+  "description": "D2L Brightspace MCP server: grades, assignments, due dates, quizzes, announcements, syllabus, roster, calendar and course files. Browser SSO for Purdue, SUNY, Western, TU Delft, CUNY and Leiden; any school.",
   "repository": {
     "url": "https://github.com/RohanMuppa/brightspace-mcp-server",
     "source": "github"
   },
-  "version": "3.9.7",
+  "version": "3.9.8",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "brightspace-mcp-server",
-      "version": "3.9.7",
+      "version": "3.9.8",
       "transport": {
         "type": "stdio"
       },

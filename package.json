@@ -1,6 +1,6 @@
 {
   "name": "brightspace-mcp-server",
-  "version": "3.9.7",
+  "version": "3.9.8",
   "mcpName": "io.github.rohanmuppa/brightspace",
   "description": "MCP server for Brightspace (D2L). Check grades, due dates, assignments, announcements, syllabus, rosters and more via Claude, ChatGPT, Cursor, Windsurf, or any MCP client.",
   "type": "module",
@@ -83,6 +83,12 @@
     "ai",
     "duo",
     "sso",
-    "d2l-brightspace"
+    "d2l-brightspace",
+    "claude-code",
+    "due-dates",
+    "suny",
+    "tu-delft",
+    "cuny",
+    "leiden"
   ]
 }

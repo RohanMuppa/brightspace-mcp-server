@@ -1,0 +1,17 @@
+# brightspace-mcp-server
+
+> MCP server connecting an AI client to D2L Brightspace: grades, assignments, due dates, quizzes,
+> announcements, syllabus, roster, discussions, and course content.
+
+An MCP (Model Context Protocol) server that lets Claude, ChatGPT, Cursor, Windsurf, and any other
+MCP client read a student's Brightspace courses on demand, with browser-driven SSO for Purdue,
+SUNY, Western University, TU Delft, CUNY, Leiden University, and any other D2L school.
+
+Install: `npx -y brightspace-mcp-server@latest setup`
+
+## Docs
+
+- [README](https://github.com/RohanMuppa/brightspace-mcp-server/blob/main/README.md): what it does, install steps, supported schools, FAQ
+- [LLMs.md](https://github.com/RohanMuppa/brightspace-mcp-server/blob/main/LLMs.md): agent guide — install steps, auth semantics, codebase map, full tool list
+- [STABILITY.md](https://github.com/RohanMuppa/brightspace-mcp-server/blob/main/STABILITY.md): what outside integrations and PRs may rely on
+- [Available tools](https://github.com/RohanMuppa/brightspace-mcp-server/blob/main/LLMs.md#available-tools): the full list of MCP tools this server registers
