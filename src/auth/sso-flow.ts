@@ -12,6 +12,7 @@ import { WesternSSOFlow, isWesternBrightspace } from "./western-sso.js";
 import { TUDelftSSOFlow, isTUDelftBrightspace } from "./tudelft-sso.js";
 import { CunySSOFlow, isCunyBrightspace } from "./cuny-sso.js";
 import { LeidenSSOFlow, isLeidenBrightspace } from "./leiden-sso.js";
+import { JaverianaSSOFlow, isJaverianaBrightspace } from "./javeriana-sso.js";
 import { BrowserAuthError } from "../utils/errors.js";
 import type { RememberMfaResult } from "./microsoft-session.js";
 import { AUTH_COMMAND } from "../utils/commands.js";
@@ -98,6 +99,10 @@ export function createSSOFlow(config: AppConfig, requestMfaCode?: RequestMfaCode
 
   if (isCunyBrightspace(config.baseUrl)) {
     return new CunySSOFlow(credentials);
+  }
+
+  if (isJaverianaBrightspace(config.baseUrl)) {
+    return new JaverianaSSOFlow(credentials);
   }
 
   return new PurdueSSOFlow(credentials);

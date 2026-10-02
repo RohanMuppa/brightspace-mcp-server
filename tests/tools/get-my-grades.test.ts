@@ -135,3 +135,78 @@ describe("get_my_grades all-courses course resolution", () => {
     expect(requested.some((p) => p.includes("/enrollments/"))).toBe(false);
   });
 });
+
+/**
+ * A 403 on a course's /grades/values/myGradeValues/ means the tenant
+ * restricts the grade API for that course (a common institutional policy,
+ * not a bug). Dropping the course from `courses` with no trace left a
+ * student unable to tell "no grades yet" apart from "the server couldn't see
+ * this course at all". A new, purely additive `restrictedCourses` array
+ * carries exactly the courses that 403'd, each with a link back into the
+ * Brightspace gradebook; `courses` itself is unchanged.
+ */
+const forbidden = () => Object.assign(new Error("Forbidden"), { status: 403 });
+
+describe("get_my_grades grade-restricted courses", () => {
+  it("lists a 403'd course in restrictedCourses and leaves courses otherwise unchanged", async () => {
+    const { call } = setup((path) => {
+      if (path.includes("/enrollments/")) {
+        return { Items: [enrollmentPage(COURSE_A, true).Items[0], enrollmentPage(COURSE_B, true).Items[0]] };
+      }
+      if (path.includes(`/${COURSE_A.Id}/grades/`)) throw forbidden();
+      if (path.includes(`/${COURSE_B.Id}/grades/`)) return [grade("Quiz 2")];
+      return [];
+    });
+
+    const payload = parse(await call({}));
+
+    expect(payload.courses).toEqual([
+      { courseId: COURSE_B.Id, courseName: COURSE_B.Name, grades: [grade("Quiz 2")].map((gv) => ({
+        name: gv.GradeObjectName,
+        displayGrade: gv.DisplayedGrade,
+        pointsNumerator: gv.PointsNumerator,
+        pointsDenominator: gv.PointsDenominator,
+        weightedNumerator: gv.WeightedNumerator,
+        weightedDenominator: gv.WeightedDenominator,
+        comments: null,
+        lastModified: gv.LastModified,
+      })) },
+    ]);
+    expect(payload.restrictedCourses).toEqual([
+      {
+        courseId: COURSE_A.Id,
+        courseName: COURSE_A.Name,
+        gradeUrl: "https://brightspace.example.edu/d2l/lms/grades/my_grades/main.d2l?ou=101",
+      },
+    ]);
+  });
+
+  it("emits an empty restrictedCourses array, not an omitted field, when nothing 403'd", async () => {
+    const { call } = setup((path) => {
+      if (path.includes("/enrollments/")) return enrollmentPage(COURSE_A, true);
+      if (path.includes(`/${COURSE_A.Id}/grades/`)) return [grade("Exam 1")];
+      return [];
+    });
+
+    const payload = parse(await call({}));
+
+    expect(payload).toHaveProperty("restrictedCourses");
+    expect(payload.restrictedCourses).toEqual([]);
+  });
+
+  it("names the gradebook URL in the single-course 403 error without changing the error shape", async () => {
+    const { call } = setup(() => {
+      throw forbidden();
+    });
+
+    const result = await call({ courseId: COURSE_A.Id });
+
+    // Shape is unchanged: still a plain isError result with one text block.
+    expect(result.isError).toBe(true);
+    expect(result.content).toHaveLength(1);
+    expect(result.content[0].type).toBe("text");
+    expect(result.content[0].text).toContain(
+      "https://brightspace.example.edu/d2l/lms/grades/my_grades/main.d2l?ou=101"
+    );
+  });
+});
