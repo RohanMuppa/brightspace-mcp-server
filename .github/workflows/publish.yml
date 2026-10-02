@@ -14,6 +14,8 @@ jobs:
     permissions:
       contents: read
       id-token: write
+    outputs:
+      published: ${{ steps.publish.outputs.published }}
     steps:
       - uses: actions/checkout@v4
 
@@ -27,14 +29,61 @@ jobs:
       - run: npm run build
 
       - name: Publish if version changed
+        id: publish
         run: |
           CURRENT=$(node -p "require('./package.json').version")
           PUBLISHED=$(npm view brightspace-mcp-server version 2>/dev/null || echo "0.0.0")
           if [ "$CURRENT" != "$PUBLISHED" ]; then
             npm publish --provenance --access public
             echo "Published v$CURRENT"
+            echo "published=true" >> "$GITHUB_OUTPUT"
           else
             echo "Version $CURRENT already published, skipping"
+            echo "published=false" >> "$GITHUB_OUTPUT"
           fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  # Mirrors the npm release into the official MCP registry (registry.modelcontextprotocol.io)
+  # so this server is discoverable there, not just on npm. Runs only after an actual npm
+  # publish (see the `publish` job's `published` output) and never blocks npm publishing:
+  # `continue-on-error` means a registry outage or an mcp-publisher failure shows up as a
+  # yellow/failed `registry` job without failing the workflow overall.
+  #
+  # Docs followed: https://github.com/modelcontextprotocol/registry ->
+  #   docs/modelcontextprotocol-io/github-actions.mdx (OIDC workflow + mcp-publisher install)
+  #   docs/reference/cli/commands.md (mcp-publisher login/publish CLI reference)
+  #   docs/contributing/add-package-registry.md (npm ownership verification via `mcpName`)
+  registry:
+    needs: publish
+    if: needs.publish.outputs.published == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    continue-on-error: true
+    env:
+      # Pin to a specific mcp-publisher release; bump deliberately, not via `latest`, so a
+      # registry-side change can't silently alter CI behavior.
+      MCP_PUBLISHER_VERSION: v1.8.1
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify server.json version matches package.json
+        run: |
+          PKG_VERSION=$(jq -r '.version' package.json)
+          SERVER_VERSION=$(jq -r '.version' server.json)
+          if [ "$PKG_VERSION" != "$SERVER_VERSION" ]; then
+            echo "::error::server.json version ($SERVER_VERSION) does not match package.json version ($PKG_VERSION) -- the registry rejects a version that doesn't match the published npm package, and will reject re-publishing a version it already has."
+            exit 1
+          fi
+
+      - name: Install mcp-publisher
+        run: |
+          curl -fsSL "https://github.com/modelcontextprotocol/registry/releases/download/${MCP_PUBLISHER_VERSION}/mcp-publisher_linux_amd64.tar.gz" | tar xz mcp-publisher
+
+      - name: Authenticate to MCP Registry (GitHub OIDC)
+        run: ./mcp-publisher login github-oidc
+
+      - name: Publish server.json to MCP Registry
+        run: ./mcp-publisher publish
