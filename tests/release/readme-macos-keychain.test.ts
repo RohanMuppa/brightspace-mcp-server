@@ -8,7 +8,8 @@ import { resolve } from "node:path";
  * where users set up and sign in, and in troubleshooting.
  */
 
-const readme = readFileSync(resolve(__dirname, "..", "..", "README.md"), "utf-8");
+// Windows checkouts may convert the README to CRLF; match on LF regardless.
+const readme = readFileSync(resolve(__dirname, "..", "..", "README.md"), "utf-8").replace(/\r\n/g, "\n");
 
 /** Body of the `## <heading>` section, up to the next `## ` heading. */
 function section(heading: string): string {
