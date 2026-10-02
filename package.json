@@ -83,6 +83,12 @@
     "ai",
     "duo",
     "sso",
-    "d2l-brightspace"
+    "d2l-brightspace",
+    "claude-code",
+    "due-dates",
+    "suny",
+    "tu-delft",
+    "cuny",
+    "leiden"
   ]
 }

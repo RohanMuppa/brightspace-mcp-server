@@ -1,5 +1,21 @@
 # Brightspace MCP Server
 
+[![npm version](https://img.shields.io/npm/v/brightspace-mcp-server.svg)](https://www.npmjs.com/package/brightspace-mcp-server)
+[![npm downloads](https://img.shields.io/npm/dm/brightspace-mcp-server.svg)](https://www.npmjs.com/package/brightspace-mcp-server)
+[![CI](https://img.shields.io/github/actions/workflow/status/RohanMuppa/brightspace-mcp-server/ci.yml?branch=main)](https://github.com/RohanMuppa/brightspace-mcp-server/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/github/license/RohanMuppa/brightspace-mcp-server.svg)](LICENSE)
+[![Node >= 20](https://img.shields.io/node/v/brightspace-mcp-server.svg)](package.json)
+
+**Official repo:** github.com/RohanMuppa/brightspace-mcp-server · [npm](https://www.npmjs.com/package/brightspace-mcp-server) — forks of this README are not maintained.
+
+**Contents:** [Try It](#try-it) · [Install](#install) · [Supported schools](#supported-schools) ·
+[Session Expired?](#session-expired) · [No browser?](#no-browser-paste-a-session-cookie-or-token) ·
+[Troubleshooting](#troubleshooting) ·
+[Does it work with ChatGPT, Cursor, Windsurf or Claude Code?](#does-it-work-with-chatgpt-cursor-windsurf-or-claude-code) ·
+[Is my password safe?](#is-my-password-safe) · [Does my school work?](#does-my-school-work) ·
+[Why do I have to approve MFA sometimes?](#why-do-i-have-to-approve-mfa-sometimes) ·
+[What You Can Ask About](#what-you-can-ask-about)
+
 > **By [Rohan Muppa](https://github.com/rohanmuppa), ECE @ Purdue**
 
 Talk to your Brightspace courses with AI. Ask about grades, due dates, quizzes, announcements, and more. Works with Claude Desktop, Claude Code, Cursor, ChatGPT Desktop, Windsurf, and any MCP client.
@@ -115,6 +131,18 @@ Building against this server or opening a PR? See [STABILITY.md](STABILITY.md) f
 
 **Running from a source checkout or fork?** When a newer release is published, the server tells a source checkout to `git pull` and `npm run build` rather than to install the npm package. For a fork you maintain, set `D2L_NO_UPDATE_CHECK=1` in the server's environment to turn off upstream update notices.
 
+## Supported schools
+
+| School | Login flow | Setup preset |
+|--------|-----------|--------------|
+| Purdue | Microsoft Entra (number matching, authenticator code, or visible browser) | `--purdue` |
+| SUNY | Shared tenant with a campus picker | `--suny` |
+| Western University | Microsoft Entra | `--western` |
+| TU Delft | NetID via SURFconext (headless, no MFA) | `--tudelft` |
+| CUNY | CUNY Login, with an authenticator code on every full sign-in | `--cuny` |
+| Leiden University | SURFconext → Microsoft Entra | `--leiden` |
+| Any other D2L school | Paste your Brightspace URL; unsupported login pages fall back to the visible browser | run `setup` with no flag |
+
 ## Session Expired?
 
 There's no login step — asking a question signs you in.
@@ -159,6 +187,39 @@ If this is a Docker or other headless setup with no `~/.brightspace-mcp/config.j
 **Works in a terminal but not in the client:** the client launches the server as its own subprocess, which doesn't inherit your shell's environment. Common causes: the native credential store is locked (a GUI app started before you unlocked your keyring or logged into macOS won't get a Keychain prompt the way a terminal does), `HOME` or `PATH` differ for GUI-launched processes versus your shell, or `npx` resolves a different cached version than the one on your `PATH`. To check, run the exact registered command (`npx -y brightspace-mcp-server@latest`, or `cmd /c npx -y brightspace-mcp-server@latest` on Windows) from a fresh terminal with no extra environment set, and compare.
 
 **Which version am I running:** ask the assistant anything that calls `get_server_info` — it reports the running version, Node runtime, and config/session paths with no network call. If you're on a source checkout instead of the published npm package, that version comes from the local `build/` output, so it only reflects your latest `npm run build`, not what's on npm.
+
+## Does it work with ChatGPT, Cursor, Windsurf or Claude Code?
+
+Yes — it's a standard MCP server, so it works with Claude Desktop, Claude Code, Cursor, ChatGPT Desktop,
+Windsurf, Codex, and any other MCP client. The setup wizard auto-configures Claude Desktop, Cursor, and
+Codex Desktop/CLI, and uses `claude mcp add` for Claude Code, when it detects them on your machine. Any
+other client just needs the same `npx -y brightspace-mcp-server@latest` command added to its MCP config
+(see "Using a different client?" above for exact steps).
+
+## Is my password safe?
+
+Your password is saved in your operating system's native credential store (macOS Keychain, Windows
+Credential Manager, or Linux Secret Service) — never in a plaintext file. Session state on disk is
+encrypted with AES-256-GCM. None of the server's tools submit, edit, or delete anything in your
+courses; they only read grades, assignments, and course content. The second factor itself (an
+approval tap, a number match, or a TOTP code) stays on your phone or authenticator app — the server
+never sees or stores it.
+
+## Does my school work?
+
+If your school runs D2L Brightspace, yes. Purdue, SUNY, Western University, TU Delft, CUNY, and Leiden
+have dedicated setup presets with automated sign-in; see [Supported schools](#supported-schools) above
+for which flag to use. Any other Brightspace school works too — run `setup` without a flag and paste
+your school's Brightspace URL, and an unsupported login page falls back to a visible browser window
+you complete by hand.
+
+## Why do I have to approve MFA sometimes?
+
+How often you're asked is your school's sign-in frequency setting, not something this server controls —
+the same approval you'd see signing in through a regular browser. Set `D2L_REMEMBER_MFA=true` to have
+the server tick Microsoft's "Don't ask again" box during sign-in so later logins can skip the second
+factor for as long as your school's tenant allows; it's opt-in and off by default, so leave it off on a
+shared machine.
 
 ## What You Can Ask About
 
