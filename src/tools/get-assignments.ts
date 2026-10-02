@@ -672,11 +672,6 @@ export function registerGetAssignments(
         });
 
         const results = await Promise.allSettled(assignmentPromises);
-        const hardFailure = results.find(
-          (r): r is PromiseRejectedResult => r.status === "rejected"
-        );
-        if (hardFailure) throw hardFailure.reason;
-
         const settled = results
           .filter(
             (r): r is PromiseFulfilledResult<any> =>

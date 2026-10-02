@@ -436,6 +436,22 @@ describe("get_assignments across all courses", () => {
     await call({});
     expect(requested[0]).toContain("isActive=true");
   });
+
+  it("still returns the other courses when one course fails for a non-auth reason", async () => {
+    const { call } = setupTool((path) => {
+      if (path.includes("/enrollments/")) {
+        return { Items: [enrollmentItem(COURSE_A), enrollmentItem(COURSE_B)] };
+      }
+      // A malformed dropbox payload makes this course's fetch throw a TypeError.
+      if (path.endsWith(`/le/1.0/${COURSE_B.Id}/dropbox/folders/`)) return null;
+      return courseWork(path);
+    }, allCoursesConfig(true));
+
+    const result = await call({});
+
+    expect(result.isError).toBeUndefined();
+    expect(body(result).courses.map((c: any) => c.courseId)).toEqual([COURSE_A.Id]);
+  });
 });
 
 /**
