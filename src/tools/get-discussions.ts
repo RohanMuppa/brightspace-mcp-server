@@ -12,7 +12,7 @@ import { convertHtmlToMarkdown } from "../utils/html-converter.js";
 import { log } from "../utils/logger.js";
 
 // D2L Discussion API response types
-interface D2LForum {
+export interface D2LForum {
   ForumId: number;
   Name: string;
   Description: { Text: string; Html: string } | null;
@@ -24,7 +24,7 @@ interface D2LForum {
   RequiresApproval: boolean;
 }
 
-interface D2LTopic {
+export interface D2LTopic {
   ForumId: number;
   TopicId: number;
   Name: string;
@@ -58,6 +58,38 @@ interface D2LPost {
   WordCount: number;
   AttachmentCount: number;
   IsRead: boolean;
+}
+
+/**
+ * Fetch a course's discussion forums. Shared with search_course so both
+ * tools hit the same endpoint (and cache entry) instead of duplicating it.
+ */
+export async function fetchForums(
+  apiClient: D2LApiClient,
+  courseId: number
+): Promise<D2LForum[]> {
+  const forumsPath = apiClient.le(courseId, "/discussions/forums/");
+  return apiClient.get<D2LForum[]>(forumsPath, {
+    ttl: DEFAULT_CACHE_TTLS.courseContent,
+  });
+}
+
+/**
+ * Fetch the topics for a single forum. Shared with search_course, same
+ * reasoning as fetchForums above.
+ */
+export async function fetchForumTopics(
+  apiClient: D2LApiClient,
+  courseId: number,
+  forumId: number
+): Promise<D2LTopic[]> {
+  const topicsPath = apiClient.le(
+    courseId,
+    `/discussions/forums/${forumId}/topics/`
+  );
+  return apiClient.get<D2LTopic[]>(topicsPath, {
+    ttl: DEFAULT_CACHE_TTLS.courseContent,
+  });
 }
 
 /**
@@ -114,10 +146,7 @@ async function getForumsOverview(
   apiClient: D2LApiClient,
   courseId: number
 ): Promise<any> {
-  const forumsPath = apiClient.le(courseId, "/discussions/forums/");
-  const forums = await apiClient.get<D2LForum[]>(forumsPath, {
-    ttl: DEFAULT_CACHE_TTLS.courseContent,
-  });
+  const forums = await fetchForums(apiClient, courseId);
 
   const result = [];
 
@@ -125,13 +154,7 @@ async function getForumsOverview(
     // Fetch topics for each forum
     let topics: D2LTopic[] = [];
     try {
-      const topicsPath = apiClient.le(
-        courseId,
-        `/discussions/forums/${forum.ForumId}/topics/`
-      );
-      topics = await apiClient.get<D2LTopic[]>(topicsPath, {
-        ttl: DEFAULT_CACHE_TTLS.courseContent,
-      });
+      topics = await fetchForumTopics(apiClient, courseId, forum.ForumId);
     } catch (error: any) {
       if (error?.status === 403) {
         log("DEBUG", `No access to topics for forum ${forum.ForumId}, skipping`);

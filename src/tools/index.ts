@@ -21,6 +21,7 @@ export { registerGetSyllabus } from "./get-syllabus.js";
 export { registerGetDiscussions } from "./get-discussions.js";
 export { registerGetVideoTranscript } from "./get-video-transcript.js";
 export { registerGetServerInfo } from "./get-server-info.js";
+export { registerSearchCourse } from "./search-course.js";
 
 // Re-export shared helpers and schemas for convenience
 export { toolResponse, errorResponse, sanitizeError } from "./tool-helpers.js";

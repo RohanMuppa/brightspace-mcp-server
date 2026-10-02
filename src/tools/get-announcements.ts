@@ -92,6 +92,19 @@ export function newestFirst(
 }
 
 /**
+ * Fetch the raw news items for a course. Shared with search_course so both
+ * tools hit the same endpoint (and cache entry) instead of duplicating it.
+ */
+export async function fetchCourseNews(
+  apiClient: D2LApiClient,
+  courseId: number
+): Promise<NewsItem[]> {
+  return apiClient.get<NewsItem[]>(apiClient.le(courseId, "/news/"), {
+    ttl: DEFAULT_CACHE_TTLS.announcements,
+  });
+}
+
+/**
  * Map a raw D2L news item to a clean announcement object.
  */
 export function mapNewsItem(item: NewsItem) {
@@ -138,10 +151,7 @@ export function registerGetAnnouncements(
 
         // Single course case
         if (courseId) {
-          const path = apiClient.le(courseId, "/news/");
-          const newsItems = await apiClient.get<NewsItem[]>(path, {
-            ttl: DEFAULT_CACHE_TTLS.announcements,
-          });
+          const newsItems = await fetchCourseNews(apiClient, courseId);
 
           // Drop drafts, then map to clean objects
           const published = newsItems.filter(isPublishedNewsItem).map(mapNewsItem);
@@ -201,10 +211,7 @@ export function registerGetAnnouncements(
         const announcementPromises = filteredEnrollments.map(
           async (item) => {
             try {
-              const path = apiClient.le(item.OrgUnit.Id, "/news/");
-              const newsItems = await apiClient.get<NewsItem[]>(path, {
-                ttl: DEFAULT_CACHE_TTLS.announcements,
-              });
+              const newsItems = await fetchCourseNews(apiClient, item.OrgUnit.Id);
 
               return newsItems
                 .filter(isPublishedNewsItem)

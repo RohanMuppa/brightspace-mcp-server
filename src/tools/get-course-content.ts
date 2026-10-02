@@ -14,7 +14,7 @@ import { log } from "../utils/logger.js";
 import { contentAvailability, type ContentAvailability } from "./content-availability.js";
 
 // D2L Content API response type
-interface ContentObject {
+export interface ContentObject {
   Id: number;
   Title: string;
   ShortTitle: string | null;
@@ -73,6 +73,42 @@ function matchesTypeFilter(item: ContentObject, filter: string): boolean {
 }
 
 /**
+ * Fetch the root content modules for a course. Shared with search_course so
+ * both tools walk the exact same tree (and share its cache entry) instead of
+ * each hand-rolling the `/content/root/` call.
+ */
+export async function fetchRootContent(
+  apiClient: D2LApiClient,
+  courseId: number
+): Promise<ContentObject[]> {
+  return apiClient.get<ContentObject[]>(
+    apiClient.le(courseId, '/content/root/'),
+    { ttl: DEFAULT_CACHE_TTLS.courseContent }
+  );
+}
+
+/**
+ * Fetch a single module's structure, or null when the dedicated endpoint
+ * fails (locked module, transient error) so the caller can fall back to
+ * whatever structure the parent listing already embedded.
+ */
+export async function fetchModuleStructure(
+  apiClient: D2LApiClient,
+  courseId: number,
+  moduleId: number
+): Promise<ContentObject[] | null> {
+  try {
+    return await apiClient.get<ContentObject[]>(
+      apiClient.le(courseId, `/content/modules/${moduleId}/structure/`),
+      { ttl: DEFAULT_CACHE_TTLS.courseContent }
+    );
+  } catch (e) {
+    log('DEBUG', `Failed to fetch children for module ${moduleId}: falling back to the embedded structure`);
+    return null;
+  }
+}
+
+/**
  * How deep the tree builder will descend when the caller names no maxDepth.
  * A module structure that lists itself is a cycle, and without a ceiling the
  * recursion would never come back.
@@ -100,7 +136,7 @@ function availabilityFields(availability: ContentAvailability): Record<string, u
 /**
  * Recursively build the content tree with progress tracking.
  */
-async function buildContentTree(
+export async function buildContentTree(
   apiClient: D2LApiClient,
   courseId: number,
   modules: ContentObject[],
@@ -128,15 +164,7 @@ async function buildContentTree(
         // what the parent already handed us. Falling through to an empty list
         // made a locked or erroring module look like an empty one, and under a
         // typeFilter it dropped the module from the tree with no trace.
-        let children: ContentObject[] | null = null;
-        try {
-          children = await apiClient.get<ContentObject[]>(
-            apiClient.le(courseId, `/content/modules/${item.Id}/structure/`),
-            { ttl: DEFAULT_CACHE_TTLS.courseContent }
-          );
-        } catch (e) {
-          log('DEBUG', `Failed to fetch children for module ${item.Id}: falling back to the embedded structure`);
-        }
+        let children = await fetchModuleStructure(apiClient, courseId, item.Id);
 
         if (!Array.isArray(children)) {
           children = Array.isArray(item.Structure) ? item.Structure : [];
@@ -291,10 +319,7 @@ export function registerGetCourseContent(
         const { courseId, typeFilter = 'all', moduleTitle, maxDepth, modifiedSince } = GetCourseContentSchema.parse(args);
 
         // Fetch root modules
-        let rootModules = await apiClient.get<ContentObject[]>(
-          apiClient.le(courseId, '/content/root/'),
-          { ttl: DEFAULT_CACHE_TTLS.courseContent }
-        );
+        let rootModules = await fetchRootContent(apiClient, courseId);
 
         // Filter root modules by title if specified
         if (moduleTitle) {

@@ -157,4 +157,13 @@ export const GetRosterSchema = z.object({
     .describe("Maximum users to return. Default 100. The response reports the true total and whether it was truncated."),
 });
 
+export const SearchCourseSchema = z.object({
+  courseId: z.coerce.number().int().positive()
+    .describe("Course ID to search within."),
+  query: z.string().min(2).max(200)
+    .describe("Keyword(s) to search for, e.g. 'midterm review slides' or 'office hours'."),
+  limit: z.coerce.number().int().positive().max(50).default(10)
+    .describe("Maximum number of results to return, highest scoring first."),
+});
+
 export const GetServerInfoSchema = z.object({});
