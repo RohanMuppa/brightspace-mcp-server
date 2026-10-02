@@ -119,6 +119,20 @@ describe("server registration — prompts capability", () => {
     expect(serverToolNames).toContain("get_my_courses");
     expect(serverToolNames.length).toBeGreaterThan(10);
   });
+
+  it("reports study_planner's daysAhead as not required", () => {
+    const prompt = promptsList.find((p) => p.name === "study_planner");
+    const daysAhead = prompt?.arguments?.find((a) => a.name === "daysAhead");
+    expect(daysAhead).toBeDefined();
+    expect(daysAhead?.required).toBe(false);
+  });
+
+  it("reports grade_audit's courseId as not required", () => {
+    const prompt = promptsList.find((p) => p.name === "grade_audit");
+    const courseId = prompt?.arguments?.find((a) => a.name === "courseId");
+    expect(courseId).toBeDefined();
+    expect(courseId?.required).toBe(false);
+  });
 });
 
 /** Every token in a prompt's rendered text that looks like one of our tool names. */
@@ -138,6 +152,17 @@ describe("weekly_briefing prompt", () => {
     for (const name of mentioned) {
       expect(serverToolNames).toContain(name);
     }
+  });
+
+  it("renders when the request omits the arguments field entirely", async () => {
+    // Some MCP clients omit `arguments` rather than sending `{}` for a
+    // zero-argument prompt. weekly_briefing has no argsSchema at all, so the
+    // SDK takes its no-args path and never validates `arguments` — this must
+    // not throw.
+    const result = await client.getPrompt({ name: "weekly_briefing" });
+    expect(result.messages).toHaveLength(1);
+    const text = (result.messages[0].content as { text: string }).text;
+    expect(mentionedToolNames(text).length).toBeGreaterThan(0);
   });
 });
 
@@ -199,6 +224,19 @@ describe("study_planner prompt", () => {
     await expect(
       client.getPrompt({ name: "study_planner", arguments: { daysAhead: "soon" } })
     ).rejects.toThrow();
+  });
+
+  it("rejects (via the SDK's own argument validation, not a callback crash) a " +
+    "request that omits the arguments field entirely", async () => {
+    // study_planner (unlike weekly_briefing) still declares `daysAhead` via
+    // argsSchema so it shows up, correctly marked optional, in prompts/list.
+    // That keeps the SDK's own `arguments` validation in play for every call,
+    // so a GetPrompt request omitting `arguments` entirely is rejected by the
+    // SDK before our callback runs — the same as any prompt with a declared
+    // argument. What the callback's `args ?? {}` guard buys us is that it can
+    // never crash with a raw TypeError on `args.daysAhead` if `args` itself
+    // ever arrives undefined, rather than closing this SDK-level gap.
+    await expect(client.getPrompt({ name: "study_planner" })).rejects.toThrow();
   });
 });
 

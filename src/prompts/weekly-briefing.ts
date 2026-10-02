@@ -20,7 +20,12 @@ export function registerWeeklyBriefingPrompt(server: McpServer): void {
       title: "Weekly Briefing",
       description:
         "A 7-day rollup of what's due, what's new, and what's changed in grades across every enrolled course.",
-      argsSchema: {},
+      // No argsSchema: this prompt takes no arguments. An empty `argsSchema: {}`
+      // would make the SDK validate `request.params.arguments` against
+      // z.object({}), which rejects a GetPrompt call that omits `arguments`
+      // entirely (some MCP clients do). Omitting argsSchema takes the SDK's
+      // no-args path instead, which accepts both a missing and an empty
+      // `arguments` field.
     },
     async () => ({
       messages: [
