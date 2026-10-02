@@ -481,7 +481,7 @@ describe("get_assignments while sign-in is pending", () => {
     expect(parsed.unavailableCourseIds).toEqual([COURSE_A.Id]);
     expect(parsed.notice).toContain("Approve the sign-in request");
     expect(parsed.courses).toEqual([
-      { courseId: COURSE_A.Id, courseName: COURSE_A.Name, authPending: true },
+      { courseId: COURSE_A.Id, courseName: COURSE_A.Name, assignments: [], authPending: true },
     ]);
   });
 
@@ -533,6 +533,6 @@ describe("get_assignments while sign-in is pending", () => {
     expect(answered.authPending).toBeUndefined();
 
     const pending = parsed.courses.find((c: any) => c.courseId === COURSE_B.Id);
-    expect(pending).toEqual({ courseId: COURSE_B.Id, courseName: COURSE_B.Name, authPending: true });
+    expect(pending).toEqual({ courseId: COURSE_B.Id, courseName: COURSE_B.Name, assignments: [], authPending: true });
   });
 });

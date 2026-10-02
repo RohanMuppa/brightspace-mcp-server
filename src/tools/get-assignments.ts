@@ -695,10 +695,18 @@ export function registerGetAssignments(
           `(out of ${enrollmentItems.length} enrolled${pending.length > 0 ? `, ${pending.length} pending sign-in` : ""})`
         );
 
+        // Pending courses keep `assignments: []` so callers that read
+        // `courses[i].assignments` still get an array; authPending marks it
+        // as unchecked rather than empty.
         const response: Record<string, unknown> = {
           courses: [
             ...courses,
-            ...pending.map(({ courseId, courseName }) => ({ courseId, courseName, authPending: true as const })),
+            ...pending.map(({ courseId, courseName }) => ({
+              courseId,
+              courseName,
+              assignments: [],
+              authPending: true as const,
+            })),
           ],
         };
         if (pending.length > 0) {
