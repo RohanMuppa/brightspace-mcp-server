@@ -20,6 +20,9 @@ import type { AppConfig } from "../types/index.js";
 // Adapted from LunaParker/brightspace-mcp-server (MIT).
 interface DropboxLinkAttachment {
   LinkId?: number;
+  // D2L's documented field is `LinkName`; `Title` is carried too since some
+  // tenants/older API versions have been observed using it instead.
+  LinkName?: string | null;
   Title?: string | null;
   Href?: string | null;
 }
@@ -340,9 +343,12 @@ export async function fetchCourseAssignments(
       // entirely (rather than an empty array) when the folder has none, to
       // keep the common case's shape exactly as it was.
       // Adapted from LunaParker/brightspace-mcp-server (MIT).
+      // D2L's field for the link's display text is `LinkName`; `Title` is
+      // kept as a fallback for tenants observed sending that spelling
+      // instead. Adapted from JhostinAleck/brightspace-mcp (MIT).
       const linkAttachments = (folder.LinkAttachments ?? [])
         .filter((l): l is DropboxLinkAttachment & { Href: string } => Boolean(l.Href))
-        .map((l) => ({ name: l.Title ?? null, url: l.Href }));
+        .map((l) => ({ name: l.LinkName ?? l.Title ?? l.Href ?? null, url: l.Href }));
 
       // Build assignment object
       const assignment = {

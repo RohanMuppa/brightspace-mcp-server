@@ -680,6 +680,27 @@ describe("fetchCourseAssignments link attachments", () => {
     expect(assignment).not.toHaveProperty("linkAttachments");
   });
 
+  it("prefers LinkName over Title, D2L's documented field for the link's display text", async () => {
+    const apiClient = makeDropboxClient({
+      Id: 55,
+      Name: "HW 1",
+      DueDate: null,
+      IsHidden: false,
+      GroupTypeId: null,
+      LinkAttachments: [
+        { LinkId: 1, LinkName: "Project spec", Title: "Ignored title", Href: "https://example.com/spec.pdf" },
+        { LinkId: 2, LinkName: "Starter repo", Href: "https://example.com/repo" },
+      ],
+    });
+
+    const [assignment] = await fetchCourseAssignments(apiClient as any, COURSE_ID);
+
+    expect(assignment.linkAttachments).toEqual([
+      { name: "Project spec", url: "https://example.com/spec.pdf" },
+      { name: "Starter repo", url: "https://example.com/repo" },
+    ]);
+  });
+
   it("drops a link entry with no Href rather than emitting a null url", async () => {
     const apiClient = makeDropboxClient({
       Id: 55,

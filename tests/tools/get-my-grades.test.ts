@@ -181,6 +181,19 @@ describe("get_my_grades grade-restricted courses", () => {
     ]);
   });
 
+  it("emits an empty restrictedCourses array, not an omitted field, when nothing 403'd", async () => {
+    const { call } = setup((path) => {
+      if (path.includes("/enrollments/")) return enrollmentPage(COURSE_A, true);
+      if (path.includes(`/${COURSE_A.Id}/grades/`)) return [grade("Exam 1")];
+      return [];
+    });
+
+    const payload = parse(await call({}));
+
+    expect(payload).toHaveProperty("restrictedCourses");
+    expect(payload.restrictedCourses).toEqual([]);
+  });
+
   it("names the gradebook URL in the single-course 403 error without changing the error shape", async () => {
     const { call } = setup(() => {
       throw forbidden();
