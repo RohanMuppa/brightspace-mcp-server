@@ -166,6 +166,8 @@ points; each renders a single user message that names the tools above by their r
 
 Quiz attempt counts are unavailable to students on the Purdue tenant: `/quizzes/{id}/attempts/` answers 403. Those quizzes carry `attemptsAvailable: false` with null counts rather than a fabricated zero.
 
+Assignment rows additionally carry `submissionStatus` (`"submitted"` / `"not_submitted"` / `"unknown"`) and quiz rows carry `attemptStatus` (`"known"` / `"unknown"`), with a `submissionStatusNote`/`attemptStatusNote` set only when unknown: any non-404 failure on the submission lookup (a 403, a 5xx, …), or a `ContentMetadataOnly` quiz whose attempts route is never called at all, means Brightspace simply did not return the data — not that nothing was submitted or attempted — so these additive fields separate a genuine empty answer from one Brightspace never gave.
+
 Assignments, quizzes, and due dates each carry a `url` field that deep-links into Brightspace. `get_assignments` also returns `gradeOnly` items for gradebook columns that match no assignment or quiz, such as a proctored exam. `get_upcoming_due_dates` reads `DueDate` from assignments, `DueDate ?? EndDate` from quizzes,, `DueDate` from discussion topics (`type: "discussion"`), and each course's calendar events (`type: "event"`, `dueDate` = the event's start, plus `endDate` and `location` when set). A topic with no `DueDate` is an ungraded forum and is excluded. Brightspace generates a calendar event for every dated assignment, quiz, and discussion; an event generated from an item already in the list is dropped, so each deadline appears once, while hand-made events (exams, labs) always stay.
 
 `get_assignment_rubric` takes `courseId` and `assignmentId` (the dropbox folder id `get_assignments` already returns). It reads the folder's embedded `Assessment.Rubrics` first, falling back to the `/rubrics?objectType=Dropbox&objectId=` listing when a tenant omits them there. The student's own graded outcome is read from the same `myFeedback` route `get_assignments` already calls — never the unstable per-assessment rubric route — and is merged in per criterion when the tenant exposes it. A folder that 403s or 404s, or carries no rubric at all, answers `{ rubrics: [], note }` rather than an error.
@@ -268,6 +270,8 @@ src/
 | Native operating-system credential store | Password and random encryption key | OS access controls |
 
 Environment values override stored configuration. An environment password is native-store input; the application does not rewrite the user's `.env` or client configuration. Account hashes bind saved state to school and username. Legacy unnamed state stays in the session root and is not replayed for a newly configured account. On upgrade, v1 secrets migrate only after verified secure writes. Retired v1 browser data may remain recoverable in Trash.
+
+A `config.json` that is corrupt or unreadable (bad permissions, truncated write, hand-edited garbage) does not crash the server at startup: `loadConfig()` logs a `[config] WARN` naming the file and the failure, then continues as if no config.json existed, so environment variables still configure the server.
 
 ## Adding a school
 
