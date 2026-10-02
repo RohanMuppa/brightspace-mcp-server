@@ -57,6 +57,13 @@ export const SCHOOL_PRESETS: Record<string, SchoolPreset> = {
     mfaNote: "NetID sign-in normally runs headlessly without MFA.",
     usernameHint: "Use your NetID, not your student email address.",
   },
+  leiden: {
+    name: "Leiden University",
+    baseUrl: "https://brightspace.universiteitleiden.nl",
+    usernameLabel: "Leiden University username",
+    mfaNote: "Leiden usually asks for a code from your authenticator app, which you can type here.",
+    usernameHint: "Use the full address you sign in to Microsoft with, e.g. s1234567@vuw.leidenuniv.nl.",
+  },
   purdue: {
     name: "Purdue University",
     baseUrl: "https://purdue.brightspace.com",
