@@ -91,22 +91,11 @@ export function registerGetMyGroups(
           throw error;
         }
 
-        // Best-effort classlist for member names. A course where the current
-        // user lacks classlist access still returns groups, just with
-        // member names left null instead of failing the whole request.
-        let classlistById = new Map<number, ClasslistUser>();
-        try {
-          const classlist = await fetchClasslistUsers(apiClient, courseId);
-          classlistById = new Map(classlist.map((u) => [u.Identifier, u]));
-        } catch (error) {
-          if (isMissingOrForbidden(error)) {
-            log("INFO", "get_my_groups: Classlist not accessible, member names will be null", { courseId });
-          } else {
-            throw error;
-          }
-        }
-
-        const groups: MyGroup[] = [];
+        // Membership is determined first, from GroupDto.Enrollments alone —
+        // no classlist needed for that. The classlist (for member names) is
+        // fetched lazily, only once we know the user is actually in at least
+        // one group, so a user in no groups never pays for a roster fetch.
+        const matches: { category: GroupCategoryDto; group: GroupDto }[] = [];
 
         for (const category of categories) {
           let categoryGroups: GroupDto[];
@@ -129,22 +118,53 @@ export function registerGetMyGroups(
           for (const group of categoryGroups) {
             const enrollments = group.Enrollments ?? [];
             if (!enrollments.includes(myId)) continue;
-
-            const members: GroupMember[] = enrollments.map((userId) => ({
-              userId,
-              name: classlistById.get(userId)?.DisplayName ?? null,
-            }));
-
-            groups.push({
-              categoryId: category.GroupCategoryId,
-              categoryName: category.Name,
-              groupId: group.GroupId,
-              groupName: group.Name,
-              ...(group.Code ? { groupCode: group.Code } : {}),
-              members,
-            });
+            matches.push({ category, group });
           }
         }
+
+        if (matches.length === 0) {
+          log("INFO", `get_my_groups: User is not a member of any group in course ${courseId}`);
+          return toolResponse({
+            courseId,
+            groups: [],
+            note: "Group categories exist for this course, but the current user is not a member of any group.",
+          });
+        }
+
+        // Best-effort classlist for member names. A course where the current
+        // user lacks classlist access still returns groups, just with
+        // member names left null instead of failing the whole request.
+        // Identifier comes back from D2L as a string on real tenants, even
+        // though it looks numeric, so it must be coerced before it can be
+        // used as a key alongside the numeric Enrollments ids.
+        let classlistById = new Map<number, ClasslistUser>();
+        try {
+          const classlist = await fetchClasslistUsers(apiClient, courseId);
+          classlistById = new Map(classlist.map((u) => [Number(u.Identifier), u]));
+        } catch (error) {
+          if (isMissingOrForbidden(error)) {
+            log("INFO", "get_my_groups: Classlist not accessible, member names will be null", { courseId });
+          } else {
+            throw error;
+          }
+        }
+
+        const groups: MyGroup[] = matches.map(({ category, group }) => {
+          const enrollments = group.Enrollments ?? [];
+          const members: GroupMember[] = enrollments.map((userId) => ({
+            userId,
+            name: classlistById.get(userId)?.DisplayName ?? null,
+          }));
+
+          return {
+            categoryId: category.GroupCategoryId,
+            categoryName: category.Name,
+            groupId: group.GroupId,
+            groupName: group.Name,
+            ...(group.Code ? { groupCode: group.Code } : {}),
+            members,
+          };
+        });
 
         log("INFO", `get_my_groups: Found ${groups.length} groups for course ${courseId}`);
         return toolResponse({ courseId, groups });

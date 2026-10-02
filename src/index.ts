@@ -148,13 +148,13 @@ if (subcommand === 'setup') {
       registerGetDiscussions(server, apiClient);
       registerGetVideoTranscript(server, apiClient);
       registerGetServerInfo(server, config, PKG_VERSION);
-      log("DEBUG", "MCP tools registered (16 tools)");
+      log("DEBUG", "MCP tools registered (17 tools)");
 
       // Connect stdio transport
       const transport = new StdioServerTransport();
       await server.connect(transport);
 
-      log("INFO", "Brightspace MCP Server by Rohan Muppa — running on stdio (16 tools registered)");
+      log("INFO", "Brightspace MCP Server by Rohan Muppa — running on stdio (17 tools registered)");
       log("INFO", "Setup: see README.md for MCP client configuration (Claude Desktop, ChatGPT Desktop, Cursor, etc.)");
     } catch (error) {
       log("ERROR", "MCP Server failed to start", error);

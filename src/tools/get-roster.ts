@@ -14,7 +14,10 @@ import { toolResponse, sanitizeError } from "./tool-helpers.js";
 import { log } from "../utils/logger.js";
 
 export interface ClasslistUser {
-  Identifier: number;
+  // D2L returns this as a string on real tenants even though it is
+  // numeric-looking; callers that need to match it against a numeric id
+  // (e.g. get_my_groups resolving Enrollments) must coerce with Number().
+  Identifier: number | string;
   DisplayName: string;
   Email: string | null;
   FirstName: string | null;

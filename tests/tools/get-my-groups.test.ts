@@ -14,7 +14,7 @@ const CLASSLIST_PATH = `${LE_PREFIX}/${COURSE_ID}/classlist/paged/`;
 const groupsPath = (categoryId: number) =>
   `${LP_PREFIX}/${COURSE_ID}/groupcategories/${categoryId}/groups/`;
 
-const classlistUser = (id: number, name: string) => ({
+const classlistUser = (id: number | string, name: string) => ({
   Identifier: id,
   DisplayName: name,
   Email: `${name}@example.edu`,
@@ -123,6 +123,25 @@ describe("get_my_groups happy path", () => {
     // "Group B" never contained the current user and must not appear.
     expect(payload.groups.some((g: any) => g.groupId === 11)).toBe(false);
   });
+
+  it("resolves member names when D2L returns Identifier as a string", async () => {
+    const { call } = setup({
+      categories: [{ GroupCategoryId: 1, Name: "Project Groups" }],
+      groups: { 1: [{ GroupId: 10, Name: "Group A", Enrollments: [MY_ID, 7] }] },
+      classlist: {
+        // Real tenants send Identifier as a numeric-looking string, not a number.
+        Objects: [classlistUser(String(MY_ID), "Ada Lovelace"), classlistUser(String(7), "Grace Hopper")],
+        Next: null,
+      },
+    });
+
+    const payload = parse(await call({ courseId: COURSE_ID }));
+
+    expect(payload.groups[0].members).toEqual([
+      { userId: MY_ID, name: "Ada Lovelace" },
+      { userId: 7, name: "Grace Hopper" },
+    ]);
+  });
 });
 
 describe("get_my_groups classlist access", () => {
@@ -167,6 +186,25 @@ describe("get_my_groups missing group data", () => {
 
     expect(payload.groups).toEqual([]);
     expect(payload.note).toMatch(/no groups/i);
+  });
+});
+
+describe("get_my_groups user in no group", () => {
+  it("notes the user isn't a member of any group, distinct from no groups being visible, and never fetches the classlist", async () => {
+    const { call, requested } = setup({
+      categories: [{ GroupCategoryId: 1, Name: "Project Groups" }],
+      groups: { 1: [{ GroupId: 10, Name: "Group A", Enrollments: [7, 8] }] },
+    });
+
+    const payload = parse(await call({ courseId: COURSE_ID }));
+
+    expect(payload.courseId).toBe(COURSE_ID);
+    expect(payload.groups).toEqual([]);
+    expect(payload.note).toMatch(/not a member/i);
+    expect(payload.note).not.toMatch(/no groups are visible/i);
+    // No match was found, so the classlist (needed only for member names)
+    // must never be fetched.
+    expect(requested).not.toContain(CLASSLIST_PATH);
   });
 });
 
