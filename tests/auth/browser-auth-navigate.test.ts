@@ -349,6 +349,34 @@ describe("BrowserAuth.navigateAndLogin", () => {
     expect(ssoFlow.login).not.toHaveBeenCalled();
   });
 
+  it("lets the flow answer a federation's account picker during the silent poll", async () => {
+    const { page } = makePage({
+      url: "https://engine.surfconext.nl/authentication/idp/single-sign-on",
+    });
+    const selectIdentityProvider = vi.fn(async () => {
+      // A live Entra cookie takes the chosen account straight back to Brightspace.
+      Object.assign(page, {
+        url: () => `${BASE_URL}/d2l/home`,
+        context: () => ({ cookies: async () => LIVE_SESSION.cookies }),
+        evaluate: async () => true,
+      });
+    });
+    (ssoFlow as any).selectIdentityProvider = selectIdentityProvider;
+
+    await expect(navigate(page)).resolves.toBe(true);
+    expect(selectIdentityProvider).toHaveBeenCalledOnce();
+    expect(ssoFlow.login).not.toHaveBeenCalled();
+  });
+
+  it("does not offer Microsoft pages to the account-picker hook", async () => {
+    const { page } = makePage({ url: "https://login.microsoftonline.com/common/login" });
+    const selectIdentityProvider = vi.fn(async () => {});
+    (ssoFlow as any).selectIdentityProvider = selectIdentityProvider;
+
+    await expect(navigate(page)).rejects.toBeInstanceOf(BrowserAuthTransportError);
+    expect(selectIdentityProvider).not.toHaveBeenCalled();
+  });
+
   it("leaves #idSIButton9 alone when nothing proves the page is the KMSI page", async () => {
     const { page, clicks } = makePage({
       url: "https://login.microsoftonline.com/common/login",

@@ -29,6 +29,21 @@ export interface TokenManagerOptions {
   mint?: typeof mintAccessToken;
   /** Persistence injection keeps unit tests independent of native credentials. */
   sessionStore?: Pick<SessionStore, "load" | "save" | "clear" | "saveIfCurrent" | "clearIfCurrent">;
+  /**
+   * Pre-issued Bearer token from D2L_ACCESS_TOKEN. When set, getToken() hands
+   * it back directly on every call — no disk, no mint, no browser — and takes
+   * precedence over envSessionCookie.
+   */
+  envAccessToken?: string;
+  /**
+   * Normalized "d2lSessionVal=...; d2lSecureSessionVal=..." from
+   * D2L_SESSION_COOKIE. When set (and envAccessToken is not), getToken()
+   * returns it wrapped in the client's existing "cookie:" passthrough auth
+   * (see D2LApiClient.buildAuthHeaders) rather than minting a Bearer JWT: the
+   * mint endpoint requires a CSRF token that only a live browser page can
+   * produce, which a pasted cookie never carries.
+   */
+  envSessionCookie?: string;
 }
 
 /**
@@ -41,6 +56,8 @@ export class TokenManager {
   private readonly baseUrl?: string;
   private readonly tokenTtl: number;
   private readonly mint: typeof mintAccessToken;
+  private readonly envAccessToken?: string;
+  private readonly envSessionCookie?: string;
   /** Single in-flight mint, so concurrent callers share one request. */
   private mintInFlight: Promise<TokenData | null> | null = null;
   private rejectedAccessToken: string | null = null;
@@ -57,6 +74,8 @@ export class TokenManager {
     this.baseUrl = options.baseUrl ? new URL(options.baseUrl).origin : undefined;
     this.tokenTtl = options.tokenTtl ?? DEFAULT_TOKEN_TTL_SECONDS;
     this.mint = options.mint ?? mintAccessToken;
+    this.envAccessToken = options.envAccessToken;
+    this.envSessionCookie = options.envSessionCookie;
   }
 
   /**
@@ -66,6 +85,23 @@ export class TokenManager {
    */
   async getToken(rejectedAccessToken?: string): Promise<TokenData | null> {
     if (rejectedAccessToken) this.rejectedAccessToken = rejectedAccessToken;
+
+    // D2L_ACCESS_TOKEN / D2L_SESSION_COOKIE bypass disk, mint, and the browser
+    // entirely: every call hands back the same env-derived token. The only
+    // way this "expires" is Brightspace rejecting it, which the caller
+    // reports back as rejectedAccessToken — at that point there is nothing
+    // fresher to offer, so this returns null rather than the same rejected
+    // value again. (See D2LApiClient.tryAutoReauth / authExpiredMessage for
+    // the user-facing "paste a fresh one" error this produces.)
+    if (this.envAccessToken || this.envSessionCookie) {
+      const token = this.buildEnvToken();
+      if (rejectedAccessToken && token.accessToken === rejectedAccessToken) {
+        log("DEBUG", "The env-provided credential was rejected; no replacement is available");
+        return null;
+      }
+      return token;
+    }
+
     // Check memory cache first
     if (this.cachedToken && this.isUsable(this.cachedToken)) {
       log("DEBUG", "Returning cached token");
@@ -92,6 +128,37 @@ export class TokenManager {
 
     log("DEBUG", "No valid token available");
     return null;
+  }
+
+  /**
+   * Build the token for D2L_ACCESS_TOKEN or D2L_SESSION_COOKIE;
+   * D2L_ACCESS_TOKEN wins when both are set. expiresAt is pushed far into the
+   * future: a pasted credential has no known lifetime, and isValid()'s
+   * refresh-buffer check must never be the thing that discards it — only
+   * Brightspace actually rejecting it (a 401) should.
+   */
+  private buildEnvToken(): TokenData {
+    const now = Date.now();
+    const FAR_FUTURE_MS = 10 * 365 * 24 * 60 * 60 * 1000; // 10 years
+    if (this.envAccessToken) {
+      return {
+        accessToken: this.envAccessToken,
+        tenantOrigin: this.baseUrl,
+        capturedAt: now,
+        expiresAt: now + FAR_FUTURE_MS,
+        source: "env",
+      };
+    }
+    return {
+      // Reuses the client's existing "cookie:" passthrough (see
+      // D2LApiClient.buildAuthHeaders) instead of minting a Bearer JWT.
+      accessToken: `cookie:${this.envSessionCookie}`,
+      tenantOrigin: this.baseUrl,
+      capturedAt: now,
+      expiresAt: now + FAR_FUTURE_MS,
+      source: "env",
+      cookieHeader: this.envSessionCookie,
+    };
   }
 
   /**

@@ -11,11 +11,16 @@ export interface TokenData {
   tenantOrigin?: string;
   capturedAt: number; // Unix timestamp ms
   expiresAt: number; // Unix timestamp ms
-  source: "browser" | "cache";
+  /** "env" is a pasted D2L_SESSION_COOKIE or D2L_ACCESS_TOKEN; never persisted to disk. */
+  source: "browser" | "cache" | "env";
   /**
    * "d2lSessionVal=...; d2lSecureSessionVal=...", harvested at login.
    * Present only when both cookies were found. With csrfToken it lets the
    * token manager mint a fresh JWT instead of relaunching the browser.
+   * Also set, with no csrfToken, when D2L_SESSION_COOKIE supplies the pair
+   * directly — that cookie is then used as-is (see buildAuthHeaders'
+   * "cookie:" prefix), never minted, since minting needs a CSRF token only a
+   * live browser page can produce.
    */
   cookieHeader?: string;
   /** D2L XSRF token; the mint answers 403 without it. */
@@ -53,6 +58,18 @@ export interface AppConfig {
   password?: string;
   /** Campus within a shared multi-campus Brightspace instance. */
   campus?: string;
+  /**
+   * Pre-issued Bearer token from D2L_ACCESS_TOKEN. When set, it is used
+   * directly on every request and no browser or auth-cli is ever launched.
+   * Takes precedence over envSessionCookie.
+   */
+  envAccessToken?: string;
+  /**
+   * Normalized "d2lSessionVal=...; d2lSecureSessionVal=..." cookie header
+   * from D2L_SESSION_COOKIE. When set (and envAccessToken is not), it is sent
+   * as-is on every request and no browser or auth-cli is ever launched.
+   */
+  envSessionCookie?: string;
   courseFilter: CourseFilterConfig;
 }
 

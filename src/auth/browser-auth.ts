@@ -541,7 +541,10 @@ export class BrowserAuth {
       return;
     }
 
-    if (!url.includes("login.microsoftonline.com")) return;
+    if (!url.includes("login.microsoftonline.com")) {
+      await this.ssoFlow.selectIdentityProvider?.(page);
+      return;
+    }
 
     // The page must PROVE it is the "Stay signed in?" page before this click:
     // #idSIButton9 is Microsoft's id for the primary button on EVERY sign-in
