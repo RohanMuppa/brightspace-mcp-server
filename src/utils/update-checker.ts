@@ -18,6 +18,10 @@
  * caller happens to read it first. A one-shot notice is invisible in practice:
  * it gets swallowed by a single background tool call and never seen again.
  *
+ * A source checkout gets different advice: installing the npm package would
+ * update some other copy, and for a fork it would mean leaving its changes
+ * behind. Such a checkout is told to pull and rebuild, or to opt out.
+ *
  * Set D2L_NO_UPDATE_CHECK to any value to switch the check off entirely.
  */
 
@@ -72,8 +76,19 @@ export function ownNpxCacheDir(root: string = projectRoot): string | null {
   return match ? resolve(match[1]) : null;
 }
 
-function isNpxCache(): boolean {
-  return ownNpxCacheDir() !== null;
+/** How the running copy got onto this machine, which decides how it updates. */
+export type InstallKind = "npx-cache" | "npm-install" | "source-checkout";
+
+/**
+ * Classify the package directory this process runs from. npm only ever puts
+ * the package under a `node_modules` directory, so anything else is a checkout
+ * someone built by hand, possibly a fork.
+ */
+export function installKindOf(root: string = projectRoot): InstallKind {
+  if (ownNpxCacheDir(root) !== null) return "npx-cache";
+  return root.split(sep).join("/").split("/").includes("node_modules")
+    ? "npm-install"
+    : "source-checkout";
 }
 
 /**
@@ -172,7 +187,7 @@ export interface UpdateCheckDeps {
   fetchImpl?: typeof fetch;
   env?: Record<string, string | undefined>;
   installedVersion?: string;
-  runningFromNpxCache?: boolean;
+  installKind?: InstallKind;
   clearCaches?: () => Promise<number>;
 }
 
@@ -186,7 +201,7 @@ export async function initUpdateChecker(deps: UpdateCheckDeps = {}): Promise<voi
     fetchImpl = fetch,
     env = process.env,
     installedVersion = getInstalledVersion(),
-    runningFromNpxCache = isNpxCache(),
+    installKind = installKindOf(),
     clearCaches = () => clearAllNpxCaches(),
   } = deps;
 
@@ -203,13 +218,17 @@ export async function initUpdateChecker(deps: UpdateCheckDeps = {}): Promise<voi
     const headline = `Update available: v${from} to v${to}.`;
     let text: string;
 
-    if (runningFromNpxCache) {
+    if (installKind === "npx-cache") {
       const count = await clearCaches();
       const cleanup = count > 0
         ? `Cleared ${count} stale npx cache director${count === 1 ? "y" : "ies"} for ${PACKAGE_NAME} ` +
           `(kept the one this server is running from). `
         : "";
       text = `${headline} ${cleanup}Restart your MCP client to pick up v${to}.`;
+    } else if (installKind === "source-checkout") {
+      text = `${headline} This server runs from a source checkout, so update that checkout ` +
+        `(git pull, then npm run build) and restart your MCP client. ` +
+        `If it is a fork you maintain, set D2L_NO_UPDATE_CHECK=1 to turn off upstream update notices.`;
     } else {
       text = `${headline} Run: ${GLOBAL_INSTALL_COMMAND}` +
         `, then ${CLEAR_NPX_CACHE_COMMAND} and restart your MCP client.`;

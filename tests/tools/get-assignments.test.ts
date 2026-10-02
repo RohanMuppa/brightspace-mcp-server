@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { fetchCourseAssignments } from "../../src/tools/get-assignments.js";
 
 /**
@@ -435,5 +435,190 @@ describe("get_assignments across all courses", () => {
 
     await call({});
     expect(requested[0]).toContain("isActive=true");
+  });
+
+  it("still returns the other courses when one course fails for a non-auth reason", async () => {
+    const { call } = setupTool((path) => {
+      if (path.includes("/enrollments/")) {
+        return { Items: [enrollmentItem(COURSE_A), enrollmentItem(COURSE_B)] };
+      }
+      // A malformed dropbox payload makes this course's fetch throw a TypeError.
+      if (path.endsWith(`/le/1.0/${COURSE_B.Id}/dropbox/folders/`)) return null;
+      return courseWork(path);
+    }, allCoursesConfig(true));
+
+    const result = await call({});
+
+    expect(result.isError).toBeUndefined();
+    expect(body(result).courses.map((c: any) => c.courseId)).toEqual([COURSE_A.Id]);
+  });
+});
+
+/**
+ * A sign-in that has not finished is not an empty course. Every route below
+ * get_assignments swallows its own failures so one forbidden endpoint cannot
+ * hide the rest, but an authentication failure means none of them answered.
+ * CLAUDE.md forbids turning a previously successful `{assignments: []}`
+ * response into an error, so the tool keeps the success envelope and adds an
+ * explicit authPending/notice pair a caller can check instead.
+ */
+
+import { AuthProcessError } from "../../src/auth/auth-runner.js";
+import { ApiError } from "../../src/api/errors.js";
+
+const mfaPending = () => new AuthProcessError("mfaPending", "MFA approval pending");
+
+describe("get_assignments while sign-in is pending", () => {
+  it("reports authPending for a single course instead of an empty list read as success", async () => {
+    const { call } = setupTool(() => {
+      throw mfaPending();
+    }, allCoursesConfig(true));
+
+    const result = await call({ courseId: COURSE_A.Id });
+
+    expect(result.isError).toBeUndefined();
+    const parsed = body(result);
+    expect(parsed).toMatchObject({ courseId: COURSE_A.Id, assignments: [], authPending: true });
+    expect(parsed.notice).toContain("Approve the sign-in request");
+  });
+
+  it("reports authPending across all courses when the course routes cannot sign in", async () => {
+    // Enrollments answer from cache, the course routes need a live session.
+    const { call } = setupTool((path) => {
+      if (path.includes("/enrollments/")) return { Items: [enrollmentItem(COURSE_A)] };
+      throw mfaPending();
+    }, allCoursesConfig(true));
+
+    const result = await call({});
+
+    expect(result.isError).toBeUndefined();
+    const parsed = body(result);
+    expect(parsed.authPending).toBe(true);
+    expect(parsed.unavailableCourseIds).toEqual([COURSE_A.Id]);
+    expect(parsed.notice).toContain("Approve the sign-in request");
+    expect(parsed.courses).toEqual([
+      { courseId: COURSE_A.Id, courseName: COURSE_A.Name, assignments: [], authPending: true },
+    ]);
+  });
+
+  it("reports authPending when only the dropbox route is rejected with 401", async () => {
+    const { call } = setupTool((path) => {
+      if (path.endsWith("/dropbox/folders/")) throw new ApiError(401, path, "expired");
+      return courseWork(path);
+    }, allCoursesConfig(true));
+
+    const result = await call({ courseId: COURSE_A.Id });
+
+    expect(result.isError).toBeUndefined();
+    const parsed = body(result);
+    expect(parsed).toMatchObject({ courseId: COURSE_A.Id, assignments: [], authPending: true });
+    expect(parsed.notice).toContain("Authentication expired");
+  });
+
+  it("reports authPending rather than reporting an assignment as unsubmitted", async () => {
+    const { call } = setupTool((path) => {
+      if (path.includes("/mysubmissions/")) throw mfaPending();
+      return courseWork(path);
+    }, allCoursesConfig(true));
+
+    const result = await call({ courseId: COURSE_A.Id });
+
+    expect(result.isError).toBeUndefined();
+    const parsed = body(result);
+    expect(parsed.authPending).toBe(true);
+  });
+
+  it("keeps the courses that answered when only one course's sign-in is pending", async () => {
+    const { call } = setupTool((path) => {
+      if (path.includes("/enrollments/")) {
+        return { Items: [enrollmentItem(COURSE_A), enrollmentItem(COURSE_B)] };
+      }
+      if (path.includes(`/le/1.0/${COURSE_B.Id}/`)) throw mfaPending();
+      return courseWork(path);
+    }, allCoursesConfig(true));
+
+    const result = await call({});
+
+    expect(result.isError).toBeUndefined();
+    const parsed = body(result);
+    expect(parsed.authPending).toBe(true);
+    expect(parsed.unavailableCourseIds).toEqual([COURSE_B.Id]);
+
+    const answered = parsed.courses.find((c: any) => c.courseId === COURSE_A.Id);
+    expect(answered.assignments).toHaveLength(1);
+    expect(answered.authPending).toBeUndefined();
+
+    const pending = parsed.courses.find((c: any) => c.courseId === COURSE_B.Id);
+    expect(pending).toEqual({ courseId: COURSE_B.Id, courseName: COURSE_B.Name, assignments: [], authPending: true });
+  });
+});
+
+/**
+ * dueIn is additive: a relative-time rendering of dueDate so a caller doesn't
+ * have to do its own date math. It rides next to dueDate wherever that field
+ * already appears, and is null wherever dueDate is null (gradeOnly rows).
+ */
+describe("fetchCourseAssignments dueIn", () => {
+  const NOW = new Date("2026-09-02T12:00:00.000Z");
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("adds a relative dueIn next to a dropbox folder's dueDate, leaving dueDate unchanged", async () => {
+    const dueDate = "2026-09-05T12:00:00.000Z"; // 3 days out
+    const apiClient = {
+      le: (orgUnitId: number, p: string) => `/d2l/api/le/1.0/${orgUnitId}${p}`,
+      get: vi.fn(async (path: string) => {
+        if (path.endsWith("/dropbox/folders/")) {
+          return [{ Id: 55, Name: "HW 1", DueDate: dueDate, IsHidden: false, GroupTypeId: null }];
+        }
+        if (path.endsWith("/quizzes/")) return { Objects: [] };
+        if (path.endsWith("/grades/")) return [];
+        if (path.endsWith("/content/toc")) return { Modules: [] };
+        throw notFound();
+      }),
+    };
+
+    const [assignment] = await fetchCourseAssignments(apiClient as any, COURSE_ID, BASE);
+    expect(assignment.dueDate).toBe(dueDate);
+    expect(assignment.dueIn).toBe("in 3 days");
+  });
+
+  it("adds a relative dueIn next to a quiz's dueDate, leaving dueDate unchanged", async () => {
+    const dueDate = "2026-09-01T12:00:00.000Z"; // 1 day in the past
+    const { apiClient } = makeQuizClient(
+      [{ QuizId: 66, Name: "Quiz 1", IsActive: true, DueDate: dueDate }],
+      () => []
+    );
+
+    const [quiz] = quizzesOf(await fetchCourseAssignments(apiClient as any, COURSE_ID));
+    expect(quiz.dueDate).toBe(dueDate);
+    expect(quiz.dueIn).toBe("yesterday");
+  });
+
+  it("keeps dueIn null for a gradeOnly row, same as its always-null dueDate", async () => {
+    const apiClient = {
+      le: (orgUnitId: number, p: string) => `/d2l/api/le/1.0/${orgUnitId}${p}`,
+      get: vi.fn(async (path: string) => {
+        if (path.endsWith("/dropbox/folders/")) return [];
+        if (path.endsWith("/quizzes/")) return { Objects: [] };
+        if (path.endsWith("/content/toc")) return { Modules: [] };
+        if (path.endsWith("/grades/")) {
+          return [{ Id: 9, Name: "Proctored Exam", GradeObjectTypeId: 1, AssociatedTool: null }];
+        }
+        throw notFound();
+      }),
+    };
+
+    const [row] = await fetchCourseAssignments(apiClient as any, COURSE_ID, BASE);
+    expect(row.type).toBe("gradeOnly");
+    expect(row.dueDate).toBeNull();
+    expect(row.dueIn).toBeNull();
   });
 });

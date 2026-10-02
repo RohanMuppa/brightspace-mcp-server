@@ -1,0 +1,24 @@
+version: 2
+updates:
+  # npm dependencies. Minor/patch bumps are grouped into a single PR per
+  # week so the portability matrix (ci.yml) runs once per batch instead of
+  # once per package. Major bumps open their own PR since they're more
+  # likely to need a src/ change.
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 2
+    groups:
+      minor-and-patch:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+
+  # The Actions pinned in ci.yml, publish.yml, and security.yml.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly

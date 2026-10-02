@@ -25,5 +25,6 @@ export type {
   CacheTTLs,
   RateLimitConfig,
   D2LApiClientOptions,
+  ClientStats,
 } from "./types.js";
 export { DEFAULT_CACHE_TTLS } from "./types.js";

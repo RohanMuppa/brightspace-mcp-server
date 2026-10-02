@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PurdueSSOFlow } from "../../src/auth/purdue-sso.js";
 import { MfaApprovalError, UnsupportedAuthenticationError } from "../../src/auth/sso-flow.js";
 import { AUTH_COMMAND } from "../../src/utils/commands.js";
+import { BrowserAuthError } from "../../src/utils/errors.js";
 
 const BASE_URL = "https://purdue.brightspace.com";
 const SIGN_SELECTOR = "#idRichContext_DisplaySign";
@@ -9,6 +10,8 @@ const SIGN_SELECTOR = "#idRichContext_DisplaySign";
 interface PollState {
   number?: string;
   code?: boolean;
+  /** Entra's "You didn't enter the expected verification code" under the field. */
+  codeError?: boolean;
   challenge?: boolean;
   kmsi?: boolean;
   /**
@@ -58,6 +61,7 @@ function makeMfaPage(states: PollState[]) {
       if (selector === SIGN_SELECTOR) return current().number !== undefined;
       if (selector === "#idTxtBx_SAOTCC_OTC" || selector === 'input[name="otc"]') return Boolean(current().code);
       if (selector === "#idSubmit_SAOTCC_Continue") return Boolean(current().code);
+      if (selector === "#idSpan_SAOTCC_Error_OTC") return Boolean(current().codeError);
       if (selector === "#idDiv_SAOTCAS_Title" || selector === "#idDiv_SAOTCC_Title") return Boolean(current().challenge || current().code);
       if (selector === "#KmsiCheckboxField" || selector === "#idSIButton9") return Boolean(current().kmsi);
       if (selector === RESEND_ID_SELECTOR) return Boolean(current().resend);
@@ -267,6 +271,52 @@ describe("Purdue MFA loop ported from Brightspace Bar", () => {
     await handleMFA(page, requestMfaCode);
     expect(requestMfaCode).toHaveBeenCalledOnce();
     expect(fill).toHaveBeenCalledOnce();
+  });
+
+  it("asks for a fresh code after Microsoft rejects one", async () => {
+    const lines = captureWarnings();
+    const requestMfaCode = vi.fn().mockResolvedValueOnce("111111").mockResolvedValueOnce("222222");
+    const { page, fill } = makeMfaPage([
+      { code: true },
+      { code: true, codeError: true },
+      { code: true },
+      { url: `${BASE_URL}/d2l/home`, cookie: true, d2l: true },
+    ]);
+    await handleMFA(page, requestMfaCode);
+    expect(fill.mock.calls).toEqual([["111111"], ["222222"]]);
+    expect(lines.some((line) => line.includes("Microsoft rejected that code"))).toBe(true);
+  });
+
+  it("stops after three rejected codes instead of waiting out the MFA timeout", async () => {
+    const requestMfaCode = vi.fn(async () => "123456");
+    const { page, poll } = makeMfaPage([{ code: true }, { code: true, codeError: true }]);
+    const failure = handleMFA(page, requestMfaCode);
+    await expect(failure).rejects.toBeInstanceOf(BrowserAuthError);
+    await expect(failure).rejects.toThrow("Microsoft rejected 3 authenticator codes");
+    await expect(failure).rejects.not.toBeInstanceOf(MfaApprovalError);
+    expect(requestMfaCode).toHaveBeenCalledTimes(3);
+    // One extra settle poll follows each of the two resubmissions (see the
+    // lingering-span test below), so three rejections take five polls, not three.
+    expect(poll()).toBe(5);
+  });
+
+  it("does not let a lingering rejection span immediately trigger a third prompt", async () => {
+    // The error span from attempt 1's rejection can still be in the DOM on the
+    // very next poll after attempt 2 is resubmitted - Entra hasn't re-rendered
+    // yet. That stale span must not be read as attempt 2 also being rejected.
+    const lines = captureWarnings();
+    const requestMfaCode = vi.fn().mockResolvedValueOnce("111111").mockResolvedValueOnce("222222").mockResolvedValueOnce("333333");
+    const { page, fill } = makeMfaPage([
+      { code: true },
+      { code: true, codeError: true },
+      { code: true, codeError: true }, // stale span from attempt 1's rejection, still showing
+      { code: true }, // Entra has caught up: attempt 2 is pending, no error
+      { url: `${BASE_URL}/d2l/home`, cookie: true, d2l: true },
+    ]);
+    await handleMFA(page, requestMfaCode);
+    expect(fill.mock.calls).toEqual([["111111"], ["222222"]]);
+    expect(requestMfaCode).toHaveBeenCalledTimes(2);
+    expect(lines.filter((line) => line.includes("Microsoft rejected that code"))).toHaveLength(1);
   });
 
   it("submits a visible code form instead of switching to another verification method", async () => {

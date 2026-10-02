@@ -164,4 +164,9 @@ export const GetAssignmentRubricSchema = z.object({
     .describe("Assignment (dropbox folder) ID, as returned by get_assignments."),
 });
 
+export const GetMyGroupsSchema = z.object({
+  courseId: z.coerce.number().int().positive()
+    .describe("Course ID to list the current user's project/discussion groups for."),
+});
+
 export const GetServerInfoSchema = z.object({});

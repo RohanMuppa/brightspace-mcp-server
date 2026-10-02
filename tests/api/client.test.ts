@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { D2LApiClient } from "../../src/api/client.js";
 import { ApiError, RateLimitError, NetworkError } from "../../src/api/errors.js";
+import { TokenManager as RealTokenManager } from "../../src/auth/token-manager.js";
 import type { TokenManager } from "../../src/auth/token-manager.js";
 import type { TokenData } from "../../src/types/index.js";
 
@@ -698,6 +699,365 @@ describe("D2LApiClient", () => {
       client.clearCache();
 
       expect(client.cacheSize).toBe(0);
+    });
+  });
+
+  // Claude Desktop fans out tool calls in parallel and our tools fan out per
+  // course, so the same path is often requested concurrently. A second
+  // caller should join the first's in-flight request rather than issue its
+  // own, and the cache write should happen exactly once.
+  describe("get() - request coalescing", () => {
+    const initVersions = () =>
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => [
+          { ProductCode: "lp", LatestVersion: "1.56" },
+          { ProductCode: "le", LatestVersion: "1.91" },
+        ],
+        headers: new Headers(),
+      });
+
+    it("joins two concurrent GETs for the same path into one fetch, both resolving with the same data", async () => {
+      const client = new D2LApiClient({
+        baseUrl: "https://purdue.brightspace.com",
+        tokenManager: mockTokenManager,
+      });
+
+      initVersions();
+      await client.initialize();
+      await mockTokenManager.setToken(createMockToken());
+
+      const responseData = { Items: [{ id: 1 }] };
+      mockFetch.mockResolvedValueOnce({ ok: true, status: 200, json: async () => responseData, headers: new Headers() });
+
+      const path = "/d2l/api/lp/1.56/users/whoami";
+      const [a, b] = await Promise.all([client.get(path), client.get(path)]);
+
+      expect(a).toEqual(responseData);
+      expect(b).toEqual(responseData);
+      expect(mockFetch).toHaveBeenCalledTimes(2); // 1 init + 1 API call, not 2
+    });
+
+    it("issues separate fetches for two different concurrent paths", async () => {
+      const client = new D2LApiClient({
+        baseUrl: "https://purdue.brightspace.com",
+        tokenManager: mockTokenManager,
+      });
+
+      initVersions();
+      await client.initialize();
+      await mockTokenManager.setToken(createMockToken());
+
+      mockFetch.mockImplementation(async (url: string) => ({
+        ok: true,
+        status: 200,
+        json: async () => (url.endsWith("/pathA") ? { a: 1 } : { b: 2 }),
+        headers: new Headers(),
+      }));
+
+      const [a, b] = await Promise.all([client.get("/pathA"), client.get("/pathB")]);
+
+      expect(a).toEqual({ a: 1 });
+      expect(b).toEqual({ b: 2 });
+      expect(mockFetch).toHaveBeenCalledTimes(3); // 1 init + 2 API calls
+    });
+
+    it("fetches again for a later call once the earlier in-flight one has completed", async () => {
+      const client = new D2LApiClient({
+        baseUrl: "https://purdue.brightspace.com",
+        tokenManager: mockTokenManager,
+      });
+
+      initVersions();
+      await client.initialize();
+      await mockTokenManager.setToken(createMockToken());
+
+      const path = "/d2l/api/lp/1.56/users/whoami";
+      mockFetch.mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ v: 1 }), headers: new Headers() });
+      expect(await client.get(path)).toEqual({ v: 1 });
+
+      mockFetch.mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ v: 2 }), headers: new Headers() });
+      expect(await client.get(path)).toEqual({ v: 2 });
+
+      expect(mockFetch).toHaveBeenCalledTimes(3); // 1 init + 2 separate API calls
+    });
+
+    it("rejects every joined caller when the in-flight request fails, and caches nothing", async () => {
+      const client = new D2LApiClient({
+        baseUrl: "https://purdue.brightspace.com",
+        tokenManager: mockTokenManager,
+        retry: { maxAttempts: 1 },
+      });
+
+      initVersions();
+      await client.initialize();
+      await mockTokenManager.setToken(createMockToken());
+
+      const path = "/d2l/api/lp/1.56/users/whoami";
+      mockFetch.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+
+      const callA = client.get(path, { ttl: 60000 });
+      const callB = client.get(path, { ttl: 60000 });
+
+      await expect(callA).rejects.toThrow(NetworkError);
+      await expect(callB).rejects.toThrow(NetworkError);
+      expect(client.cacheSize).toBe(0);
+
+      // A later call retries instead of reusing a cached rejection.
+      mockFetch.mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ ok: true }), headers: new Headers() });
+      expect(await client.get(path, { ttl: 60000 })).toEqual({ ok: true });
+    });
+  });
+
+  describe("stats()", () => {
+    const zeroStats = {
+      statusClasses: { "2xx": 0, "401": 0, "403": 0, "404": 0, "429": 0, "5xx": 0, other: 0 },
+      networkErrors: 0,
+      cacheHits: 0,
+      cacheMisses: 0,
+      coalescedJoins: 0,
+      tokenRefreshes: 0,
+    };
+
+    const initVersions = () =>
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => [
+          { ProductCode: "lp", LatestVersion: "1.56" },
+          { ProductCode: "le", LatestVersion: "1.91" },
+        ],
+        headers: new Headers(),
+      });
+
+    it("starts at zero and never carries a URL, username, or token", () => {
+      const client = new D2LApiClient({
+        baseUrl: "https://purdue.brightspace.com",
+        tokenManager: mockTokenManager,
+      });
+
+      expect(client.stats()).toEqual(zeroStats);
+    });
+
+    it("counts responses by status class", async () => {
+      const client = new D2LApiClient({
+        baseUrl: "https://purdue.brightspace.com",
+        tokenManager: mockTokenManager,
+        retry: { maxAttempts: 1 },
+      });
+
+      initVersions();
+      await client.initialize();
+      await mockTokenManager.setToken(createMockToken());
+
+      mockFetch.mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({}), headers: new Headers() });
+      await client.get("/path-2xx");
+
+      mockFetch.mockResolvedValueOnce({ ok: false, status: 401, text: async () => "no", headers: new Headers() });
+      await expect(client.get("/path-401")).rejects.toThrow(ApiError);
+
+      mockFetch.mockResolvedValueOnce({ ok: false, status: 403, text: async () => "forbidden", headers: new Headers() });
+      await expect(client.get("/path-403")).rejects.toThrow(ApiError);
+
+      mockFetch.mockResolvedValueOnce({ ok: false, status: 404, text: async () => "missing", headers: new Headers() });
+      await expect(client.get("/path-404")).rejects.toThrow(ApiError);
+
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 429,
+        headers: new Headers({ "Retry-After": "1" }),
+        text: async () => "rate limited",
+      });
+      await expect(client.get("/path-429")).rejects.toThrow(RateLimitError);
+
+      mockFetch.mockResolvedValueOnce({ ok: false, status: 500, text: async () => "boom", headers: new Headers() });
+      await expect(client.get("/path-5xx")).rejects.toThrow(ApiError);
+
+      expect(client.stats().statusClasses).toEqual({
+        "2xx": 1,
+        "401": 1,
+        "403": 1,
+        "404": 1,
+        "429": 1,
+        "5xx": 1,
+        other: 0,
+      });
+    });
+
+    it("counts a network error separately from HTTP status classes", async () => {
+      const client = new D2LApiClient({
+        baseUrl: "https://purdue.brightspace.com",
+        tokenManager: mockTokenManager,
+        retry: { maxAttempts: 1 },
+      });
+
+      initVersions();
+      await client.initialize();
+      await mockTokenManager.setToken(createMockToken());
+
+      mockFetch.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+      await expect(client.get("/flaky")).rejects.toThrow(NetworkError);
+
+      expect(client.stats().networkErrors).toBe(1);
+      expect(client.stats().statusClasses).toEqual(zeroStats.statusClasses);
+    });
+
+    it("counts cache hits and misses", async () => {
+      const client = new D2LApiClient({
+        baseUrl: "https://purdue.brightspace.com",
+        tokenManager: mockTokenManager,
+      });
+
+      initVersions();
+      await client.initialize();
+      await mockTokenManager.setToken(createMockToken());
+
+      const path = "/cached-path";
+      mockFetch.mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ v: 1 }), headers: new Headers() });
+      await client.get(path, { ttl: 60000 }); // miss
+      await client.get(path, { ttl: 60000 }); // hit
+
+      expect(client.stats().cacheMisses).toBe(1);
+      expect(client.stats().cacheHits).toBe(1);
+    });
+
+    it("counts a coalesced join once per joiner, not per originator", async () => {
+      const client = new D2LApiClient({
+        baseUrl: "https://purdue.brightspace.com",
+        tokenManager: mockTokenManager,
+      });
+
+      initVersions();
+      await client.initialize();
+      await mockTokenManager.setToken(createMockToken());
+
+      const path = "/coalesced-path";
+      mockFetch.mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ v: 1 }), headers: new Headers() });
+      await Promise.all([client.get(path), client.get(path), client.get(path)]);
+
+      expect(client.stats().coalescedJoins).toBe(2);
+      expect(mockFetch).toHaveBeenCalledTimes(2); // 1 init + 1 API call
+    });
+
+    it("counts a token refresh when a 401 is recovered with a fresh token", async () => {
+      const client = new D2LApiClient({
+        baseUrl: "https://purdue.brightspace.com",
+        tokenManager: mockTokenManager,
+      });
+
+      initVersions();
+      await client.initialize();
+
+      const staleToken = createMockToken();
+      await mockTokenManager.setToken(staleToken);
+      const freshToken = createMockToken();
+      freshToken.accessToken = "fresh-token-87654321";
+
+      let tokenCallCount = 0;
+      vi.spyOn(mockTokenManager, "getToken").mockImplementation(async () => {
+        tokenCallCount++;
+        return tokenCallCount === 1 ? staleToken : freshToken;
+      });
+
+      mockFetch.mockResolvedValueOnce({ ok: false, status: 401, text: async () => "Unauthorized", headers: new Headers() });
+      mockFetch.mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ success: true }), headers: new Headers() });
+
+      await client.get("/d2l/api/lp/1.56/users/whoami");
+
+      expect(client.stats().tokenRefreshes).toBe(1);
+    });
+  });
+
+  // TokenManager already single-flights its HTTP token mint (see
+  // tests/auth/token-manager.test.ts, "mints once for two concurrent
+  // getToken calls"). This pins the same guarantee one layer up: two
+  // concurrent client.get() calls that both hit a 401 at once must not
+  // mint two tokens.
+  describe("get() - concurrent 401s share one token mint (regression)", () => {
+    it("joins concurrent 401 recoveries onto a single in-flight mint", async () => {
+      let storedToken: TokenData | null = null;
+      const sessionStore = {
+        async load() {
+          return storedToken;
+        },
+        async save(token: TokenData) {
+          storedToken = token;
+        },
+        async clear() {
+          storedToken = null;
+        },
+        async saveIfCurrent(token: TokenData, expected: TokenData) {
+          if (JSON.stringify(storedToken) !== JSON.stringify(expected)) return false;
+          storedToken = token;
+          return true;
+        },
+        async clearIfCurrent(expected: TokenData) {
+          if (JSON.stringify(storedToken) !== JSON.stringify(expected)) return false;
+          storedToken = null;
+          return true;
+        },
+      };
+
+      let resolveMint: (value: { ok: true; accessToken: string }) => void = () => {};
+      const mint = vi.fn(
+        () =>
+          new Promise<{ ok: true; accessToken: string }>((resolve) => {
+            resolveMint = resolve;
+          }),
+      );
+
+      const realTokenManager = new RealTokenManager({
+        sessionStore,
+        baseUrl: "https://purdue.brightspace.com",
+        mint: mint as any,
+      });
+
+      const staleToken: TokenData = {
+        accessToken: "stale-jwt",
+        capturedAt: Date.now(),
+        expiresAt: Date.now() + 3600000,
+        source: "browser",
+        tenantOrigin: "https://purdue.brightspace.com",
+        cookieHeader: "d2lSessionVal=abc",
+        csrfToken: "xsrf-token",
+      };
+      await realTokenManager.setToken(staleToken);
+
+      const client = new D2LApiClient({
+        baseUrl: "https://purdue.brightspace.com",
+        tokenManager: realTokenManager,
+      });
+
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => [
+          { ProductCode: "lp", LatestVersion: "1.56" },
+          { ProductCode: "le", LatestVersion: "1.91" },
+        ],
+        headers: new Headers(),
+      });
+      await client.initialize();
+
+      mockFetch.mockImplementation(async (_url: string, init: { headers: Record<string, string> }) => {
+        if (init.headers["Authorization"] === `Bearer ${staleToken.accessToken}`) {
+          return { ok: false, status: 401, text: async () => "Unauthorized", headers: new Headers() };
+        }
+        return { ok: true, status: 200, json: async () => ({ ok: true }), headers: new Headers() };
+      });
+
+      // Two different paths, so request coalescing above never applies here —
+      // this is purely about the token mint underneath two independent GETs.
+      const both = Promise.all([client.get("/pathA"), client.get("/pathB")]);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      resolveMint({ ok: true, accessToken: "fresh-jwt" });
+
+      const [a, b] = await both;
+
+      expect(mint).toHaveBeenCalledTimes(1);
+      expect(a).toEqual({ ok: true });
+      expect(b).toEqual({ ok: true });
     });
   });
 });

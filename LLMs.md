@@ -102,6 +102,19 @@ Visible mode applies to the manual `auth` command, whose window remains open for
 npx -y brightspace-mcp-server@latest auth
 ```
 
+## Browser-free sign-in (`D2L_SESSION_COOKIE` / `D2L_ACCESS_TOKEN`)
+
+Two opt-in environment variables bypass the Playwright browser entirely, for Docker, headless Linux, WSL without a display, or a tenant whose MFA requires a hardware key. Neither changes anything for a user who doesn't set them.
+
+- **`D2L_ACCESS_TOKEN`** — a pre-issued Bearer token (admin-issued Valence token, or one minted by a TA script). Used directly on every request.
+- **`D2L_SESSION_COOKIE`** — the `d2lSessionVal` and `d2lSecureSessionVal` cookies copied from a logged-in browser. Accepts either the cookie-header form (`"d2lSessionVal=...; d2lSecureSessionVal=..."`, extra cookies and either order are fine) or just the two values separated by a semicolon (`"<d2lSessionVal>;<d2lSecureSessionVal>"`). It is sent on every request via the client's existing cookie-based auth (the `cookie:` prefix in `D2LApiClient.buildAuthHeaders`) rather than minted into a Bearer JWT — minting needs an XSRF token that only a live browser page can produce, which a pasted cookie never carries.
+
+**Precedence:** `D2L_ACCESS_TOKEN` > `D2L_SESSION_COOKIE` > the normal stored-credential browser flow. Both are validated at config load (`src/utils/config.ts`) regardless of which one wins, so a typo in the losing variable still fails loudly at startup rather than silently falling back.
+
+**Validation:** both values are rejected at config load — not silently trimmed or ignored — if they contain a CR, LF, or NUL character, or have leading/trailing whitespace. Neither value is ever logged (see the redaction rules in `src/utils/logger.ts`).
+
+**No renewal, by design:** a token built from either variable is handed back by `TokenManager.getToken()` with a far-future `expiresAt` (there is no real expiry to track) and `source: "env"`. The only thing that can end it is Brightspace itself answering 401, at which point `TokenManager` returns `null` instead of the same rejected value, and `D2LApiClient` throws an error telling the user to paste a fresh cookie or token — it never spawns `AuthRunner`/`auth-cli`, because there is no stored credential to drive a browser login from. `src/index.ts` only wires `AuthRunner` and the normal "session expired" message when neither variable is set.
+
 ## Available tools
 
 Registered in `src/tools/index.ts`, schemas in `src/tools/schemas.ts`:
@@ -119,14 +132,30 @@ Registered in `src/tools/index.ts`, schemas in `src/tools/schemas.ts`:
 | `get_course_content` | Module tree and content topics |
 | `get_discussions` | Discussion forums and recent posts |
 | `get_roster` | Classlist for a course |
+| `get_my_groups` | The current user's project/discussion groups in a course, with each group's members |
 | `get_classlist_emails` | Emails of classmates and instructors |
 | `download_file` | Download a file attachment (PDF, slides, etc.) to disk — course content (`topicId`), a submission (`folderId` + `fileId`), or an announcement attachment (`newsId` + `fileId`) |
 | `get_assignment_files` | Read the files attached to an assignment (spec, rubric, starter workbook) and return their text |
 | `get_announcement_files` | Read the files attached to an announcement (prompts, rubric, updated schedule) and return their text |
 | `get_video_transcript` | Transcript of a video embedded in course content (Kaltura, YouTube), with timestamps |
-| `get_server_info` | Running version, Node runtime, platform, config and session paths, school URL, whether a credential is stored, and `microsoftSession` (what Microsoft remembered) once a browser sign-in is saved — no network call, no secrets |
+| `get_server_info` | Running version, Node runtime, platform, config and session paths, school URL, whether a credential is stored, the server's local timezone and UTC offset (`localTimezone`, `utcOffsetMinutes`), `signedInAs` (`uniqueName`/`displayName`) once known, `microsoftSession` (what Microsoft remembered) once a browser sign-in is saved, and `requests` (lightweight API client counters) — no network call, no secrets |
 
-These seventeen are the whole surface. An available-update notice, when there is one, rides along as a second text block on the first successful result.
+These eighteen are the whole surface. An available-update notice, when there is one, rides along as a second text block on the first successful result.
+
+`get_server_info`'s `requests` field is `D2LApiClient.stats()`: `statusClasses` (counts for `2xx`/`401`/`403`/`404`/`429`/`5xx`, plus `other` for anything outside that list), `networkErrors`, `cacheHits`/`cacheMisses`, `coalescedJoins`, and `tokenRefreshes`. It is a snapshot of this process only (resets on restart), additive to the existing fields, and never carries a URL, username, or token. `coalescedJoins` comes from request coalescing in `D2LApiClient.get()`: a GET already in flight for the same unresolved path is joined instead of issuing a second fetch, which matters because Claude Desktop fans out tool calls in parallel and the tools themselves fan out per course. A TTL'd call that joins an in-flight request for the same path counts as both a cache miss (it wasn't served from the cache) and a coalesced join (it didn't issue its own fetch) -- the two counters overlap rather than partition the calls.
+
+### Available prompts
+
+Registered in `src/prompts/index.ts` (one file per prompt, same shape as `src/tools/`). A client that
+shows server-provided prompts in a picker (e.g. Claude Desktop) surfaces these as one-click starting
+points; each renders a single user message that names the tools above by their real names:
+
+| Prompt | Arguments | What it does |
+|--------|-----------|--------------|
+| `weekly_briefing` | none | 7-day briefing of due dates, new announcements, and grade changes across all courses |
+| `grade_audit` | `courseId` (optional) | Analyzes grades for one course, or all of them, flagging missing/low items |
+| `study_planner` | `daysAhead` (optional, default 7) | Plans study time from upcoming due dates and calendar events |
+| `course_summary` | `courseId` (required) | Syllabus, content outline, assignments, and grades for one course |
 
 `get_video_transcript` takes courseId+topicId (from `get_course_content`) or a direct videoUrl, and pages long transcripts via offset/maxChars the same way `get_assignment_files` pages extracted text. It supports Kaltura (e.g. Purdue's BoilerCast) via an anonymous widget session against the Kaltura API — no Brightspace session is needed or used — and YouTube via its public timedtext endpoint. Panopto, YuJa, Echo360, and Vimeo are detected but not yet implemented: the tool names the platform and says so rather than returning an empty result. A video with no caption track also returns `hasTranscript: false` with an explanation, not an error.
 
@@ -135,6 +164,8 @@ Quiz attempt counts are unavailable to students on the Purdue tenant: `/quizzes/
 Assignments, quizzes, and due dates each carry a `url` field that deep-links into Brightspace. `get_assignments` also returns `gradeOnly` items for gradebook columns that match no assignment or quiz, such as a proctored exam. `get_upcoming_due_dates` reads `DueDate` from assignments, `DueDate ?? EndDate` from quizzes,, `DueDate` from discussion topics (`type: "discussion"`), and each course's calendar events (`type: "event"`, `dueDate` = the event's start, plus `endDate` and `location` when set). A topic with no `DueDate` is an ungraded forum and is excluded. Brightspace generates a calendar event for every dated assignment, quiz, and discussion; an event generated from an item already in the list is dropped, so each deadline appears once, while hand-made events (exams, labs) always stay.
 
 `get_assignment_rubric` takes `courseId` and `assignmentId` (the dropbox folder id `get_assignments` already returns). It reads the folder's embedded `Assessment.Rubrics` first, falling back to the `/rubrics?objectType=Dropbox&objectId=` listing when a tenant omits them there. The student's own graded outcome is read from the same `myFeedback` route `get_assignments` already calls — never the unstable per-assessment rubric route — and is merged in per criterion when the tenant exposes it. A folder that 403s or 404s, or carries no rubric at all, answers `{ rubrics: [], note }` rather than an error.
+
+Every `dueDate`/`DueDate`-style field in `get_assignments` and `get_upcoming_due_dates` carries an additive `dueIn` string next to it — a relative rendering ("in 3 days", "yesterday", "in 2 hours") computed with `Intl.RelativeTimeFormat`, so a caller never has to do its own date math against the raw ISO timestamp. `dueIn` is `null` wherever the due date itself is `null` (e.g. a `gradeOnly` row) or unparseable; `dueDate`/`DueDate` is never modified.
 
 `get_calendar_events` takes optional `courseId`, `from`/`to` (ISO 8601 with offset; default now → now + 7 days), and `includeGenerated` (default `false`). Each event is `{ id, title, courseId, courseName, start, end?, location?, description? (markdown), url, generatedFrom? }`, sorted by `start`; `generatedFrom: { type, id }` marks an event Brightspace generated from another item (`type` is `assignment`, `quiz`, `discussion`, `module`, `topic`, …) and those are hidden unless `includeGenerated` is true. It reads `/calendar/events/myEvents/`, the per-user feed that honours event visibility. A course whose calendar fails to load is skipped; the others still return.
 
@@ -156,6 +187,12 @@ src/
     download-file.ts        Binary download + file-type detection
     content-availability.ts Shared release-window logic (hidden/locked/not_yet_open/ended)
     topic-availability.ts   Explains a download_file failure using topic/TOC availability metadata
+  prompts/
+    index.ts                Prompt registry
+    weekly-briefing.ts      weekly_briefing prompt
+    grade-audit.ts          grade_audit prompt
+    study-planner.ts        study_planner prompt
+    course-summary.ts       course_summary prompt
   api/
     client.ts               HTTP client wrapping the Valence/D2L API. lp()/le()
                             leave the version as a {lp}/{le} placeholder that
@@ -237,3 +274,7 @@ Build paths with `apiClient.lp()`, `le()`, or `leGlobal()` and nothing else. The
 Publishing is automated by GitHub Actions on push to `main` when `version` in `package.json` changes, after the reusable CI matrix passes on macOS, Windows, and Linux. Keep `package.json`, the lockfile, and `server.json` versions aligned. Create the GitHub release only from the verified published commit.
 
 Always bump `version` in `package.json` in the same commit as any code or docs change. The Action skips publish if the version is unchanged, which means users will not receive the update via `npx ...@latest`.
+
+## Stability guarantees
+
+Before renaming a tool, removing or renaming a response field, or changing a CLI flag, an env var, or an on-disk path, read [STABILITY.md](./STABILITY.md). It lists exactly what outside integrations and PRs may rely on; changes there need to be additive.

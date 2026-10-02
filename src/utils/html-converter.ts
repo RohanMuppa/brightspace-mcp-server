@@ -71,8 +71,72 @@ function getTurndownService(): TurndownServiceType {
         return body ? `\n\n${body}\n\n` : "";
       },
     });
+
+    // D2L appends per-session query params (d2lSessionVal, d2lSecureSessionVal,
+    // a `_` cache-buster) to in-content hrefs. Left alone, the markdown we hand
+    // the model echoes a live session token into the chat transcript. These
+    // two rules are unshifted ahead of Turndown's built-in link/image rules
+    // (addRule always inserts at the front of the rule list), so they run
+    // first and the defaults never see the raw attribute.
+    turndownService.addRule("linkSessionTokens", {
+      filter: (node) => node.nodeName === "A" && !!(node as HTMLElement).getAttribute("href"),
+      replacement: (content, node) => {
+        const href = (node as HTMLElement).getAttribute("href") ?? "";
+        // javascript:/data: hrefs aren't content links; drop the link but
+        // keep whatever text was inside it.
+        if (isUnsafeHref(href)) return content;
+        const cleaned = stripSessionParams(href).replace(/([()])/g, "\\$1");
+        const title = (node as HTMLElement).getAttribute("title");
+        const titlePart = title ? ` "${title.replace(/"/g, '\\"')}"` : "";
+        return `[${content}](${cleaned}${titlePart})`;
+      },
+    });
+
+    turndownService.addRule("imageSessionTokens", {
+      filter: "img",
+      replacement: (_content, node) => {
+        const el = node as HTMLElement;
+        const alt = el.getAttribute("alt") ?? "";
+        const src = stripSessionParams(el.getAttribute("src") ?? "");
+        const title = el.getAttribute("title");
+        const titlePart = title ? ` "${title}"` : "";
+        return src ? `![${alt}](${src}${titlePart})` : "";
+      },
+    });
   }
   return turndownService;
+}
+
+const SESSION_QUERY_PARAMS = new Set(["d2lsessionval", "d2lsecuresessionval", "_"]);
+
+/**
+ * Strip D2L's per-session query params (`d2lSessionVal`, `d2lSecureSessionVal`,
+ * and the `_` cache-buster) from a URL. Everything else about the URL --
+ * scheme, path, other params -- is left untouched, including a relative href,
+ * which is returned as-is apart from this filtering.
+ */
+function stripSessionParams(url: string): string {
+  const queryStart = url.indexOf("?");
+  if (queryStart < 0) return url;
+  const earlyHash = url.indexOf("#");
+  if (earlyHash >= 0 && earlyHash < queryStart) {
+    // The "?" falls inside the fragment (e.g. "#frag?x=1"), not a real query
+    // string -- nothing to strip, and treating it as one would mangle the
+    // fragment.
+    return url;
+  }
+  const hashStart = url.indexOf("#", queryStart);
+  const query = url.slice(queryStart + 1, hashStart < 0 ? undefined : hashStart);
+  const hash = hashStart < 0 ? "" : url.slice(hashStart);
+  const kept = query
+    .split("&")
+    .filter((param) => param !== "" && !SESSION_QUERY_PARAMS.has(param.split("=")[0].toLowerCase()));
+  return url.slice(0, queryStart) + (kept.length > 0 ? `?${kept.join("&")}` : "") + hash;
+}
+
+/** True for `javascript:`/`data:` hrefs -- never a legitimate content link. */
+function isUnsafeHref(href: string): boolean {
+  return /^\s*(javascript|data):/i.test(href);
 }
 
 /** A cell's text, flattened so one table cell stays one table cell. */
