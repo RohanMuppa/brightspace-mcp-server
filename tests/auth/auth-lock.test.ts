@@ -18,22 +18,35 @@ beforeEach(async () => {
   moduleUrl = `data:text/javascript;base64,${Buffer.from(compiled).toString("base64")}`;
 });
 
-function child(hold = false): ChildProcessWithoutNullStreams {
+// A winning child holds the lock until its stdin receives data, so the hold
+// never depends on how long the other contenders take to start.
+function child(): ChildProcessWithoutNullStreams {
   const script = `
     const { acquireProcessLock } = await import(process.argv[1]);
     try {
       const release = await acquireProcessLock(process.argv[2]);
       process.stdout.write("locked\\n");
-      if (process.argv[3] === "hold") process.stdin.once("data", async () => { await release(); process.exit(0); });
-      else { await new Promise(r => setTimeout(r, 500)); await release(); }
+      process.stdin.once("data", async () => { await release(); process.exit(0); });
     } catch (error) { process.stdout.write(error.code + "\\n"); process.exitCode = 2; }
   `;
-  return spawn(process.execPath, ["--input-type=module", "-e", script, moduleUrl, lockPath, hold ? "hold" : "finish"], { stdio: "pipe" });
+  return spawn(process.execPath, ["--input-type=module", "-e", script, moduleUrl, lockPath], { stdio: "pipe" });
 }
 
 async function firstLine(process: ChildProcessWithoutNullStreams): Promise<string> {
   const [data] = await once(process.stdout, "data");
   return String(data).trim();
+}
+
+// Starts four contenders at once and returns each one's acquisition result.
+// Winners are released only after every result is in, so a slow-starting
+// contender always meets a held lock.
+async function contend(): Promise<string[]> {
+  const processes = Array.from({ length: 4 }, () => child());
+  const exits = processes.map(process => once(process, "exit"));
+  const messages = await Promise.all(processes.map(firstLine));
+  processes.forEach((process, index) => { if (messages[index] === "locked") process.stdin.write("release\n"); });
+  await Promise.all(exits);
+  return messages;
 }
 
 describe("process-shared authentication lock", () => {
@@ -53,16 +66,13 @@ describe("process-shared authentication lock", () => {
   });
 
   it("allows only one of four real processes to authenticate", async () => {
-    const processes = Array.from({ length: 4 }, () => child());
-    const exits = processes.map(process => once(process, "exit"));
-    const messages = await Promise.all(processes.map(firstLine));
-    await Promise.all(exits);
+    const messages = await contend();
     expect(messages.filter(message => message === "locked")).toHaveLength(1);
     expect(messages.filter(message => message === "AUTH_IN_PROGRESS")).toHaveLength(3);
   });
 
   it("recovers a lock after its actual process dies", async () => {
-    const owner = child(true);
+    const owner = child();
     const exit = once(owner, "exit");
     expect(await firstLine(owner)).toBe("locked");
     owner.kill("SIGKILL");
@@ -74,21 +84,18 @@ describe("process-shared authentication lock", () => {
   });
 
   it("serializes competing processes recovering a dead owner", async () => {
-    const owner = child(true);
+    const owner = child();
     const exit = once(owner, "exit");
     expect(await firstLine(owner)).toBe("locked");
     owner.kill("SIGKILL");
     await exit;
-    const processes = Array.from({ length: 4 }, () => child());
-    const exits = processes.map(process => once(process, "exit"));
-    const messages = await Promise.all(processes.map(firstLine));
-    await Promise.all(exits);
+    const messages = await contend();
     expect(messages.filter(message => message === "locked")).toHaveLength(1);
     expect(messages.filter(message => message === "AUTH_IN_PROGRESS")).toHaveLength(3);
   });
 
   it("recovers when a stale-recovery process also died", async () => {
-    const owner = child(true);
+    const owner = child();
     const exit = once(owner, "exit");
     expect(await firstLine(owner)).toBe("locked");
     owner.kill("SIGKILL");

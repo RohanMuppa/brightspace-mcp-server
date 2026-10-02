@@ -78,10 +78,17 @@ export const SCHOOL_PRESETS: Record<string, SchoolPreset> = {
     mfaNote: "Approve the sign-in request from your MFA app.",
     usernameHint: "Use your full sign-in address if your Western account requires it.",
   },
+  cuny: {
+    name: "CUNY",
+    baseUrl: "https://brightspace.cuny.edu",
+    usernameLabel: "CUNY Login username",
+    mfaNote: "Type the 6-digit code from your authenticator app when prompted.",
+    usernameHint: "Use your full CUNY Login address, e.g. firstname.lastname01@login.cuny.edu",
+  },
 };
 
 /**
- * Pick the school preset named by `--purdue`, `--suny`, `--western`, etc.
+ * Pick the school preset named by `--purdue`, `--suny`, `--western`, `--cuny`, etc.
  *
  * Own properties only: a bare index would make `--constructor` or
  * `--__proto__` resolve to something off `Object.prototype` and hand the
@@ -101,6 +108,39 @@ function ask(rl: readline.Interface, question: string): Promise<string> {
   return new Promise((resolve) => {
     rl.question(question, (answer) => resolve(answer.trim()));
   });
+}
+
+export interface PasswordInput {
+  password: string;
+  /** What to print back: one asterisk per accepted character, or erasures. */
+  echo: string;
+  outcome: "pending" | "submit" | "cancel";
+}
+
+/**
+ * Apply one raw-mode stdin chunk to the password typed so far. A paste
+ * arrives as a single chunk, possibly wrapped in bracketed-paste markers and
+ * ending in a copied newline, so the chunk is read one character at a time
+ * and escape sequences (paste markers, arrow keys) never reach the password.
+ */
+export function readPasswordInput(password: string, chunk: string): PasswordInput {
+  let echo = "";
+  const text = chunk.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "");
+  for (const ch of text) {
+    if (ch === "\x03") return { password, echo, outcome: "cancel" };
+    if (ch === "\r" || ch === "\n") return { password, echo, outcome: "submit" };
+    if (ch === "\x7f" || ch === "\b") {
+      if (password.length > 0) {
+        password = [...password].slice(0, -1).join("");
+        echo += "\b \b";
+      }
+      continue;
+    }
+    if (ch < " ") continue;
+    password += ch;
+    echo += "*";
+  }
+  return { password, echo, outcome: "pending" };
 }
 
 /**
@@ -145,37 +185,20 @@ function askPassword(prompt: string): Promise<string> {
     process.stdin.resume();
 
     const onData = (key: Buffer) => {
-      const ch = key.toString("utf-8");
-      // Ctrl+C
-      if (ch === "\x03") {
-        process.stdout.write = origWrite;
-        process.stdin.setRawMode?.(false);
-        process.stdin.removeListener("data", onData);
-        rl.close();
+      const input = readPasswordInput(password, key.toString("utf-8"));
+      if (input.echo) origWrite(input.echo);
+      password = input.password;
+      if (input.outcome === "pending") return;
+      process.stdout.write = origWrite;
+      process.stdin.setRawMode?.(false);
+      process.stdin.removeListener("data", onData);
+      rl.close();
+      if (input.outcome === "cancel") {
         console.log("");
         process.exit(0);
       }
-      // Enter
-      if (ch === "\r" || ch === "\n") {
-        process.stdout.write = origWrite;
-        process.stdin.setRawMode?.(false);
-        process.stdin.removeListener("data", onData);
-        rl.close();
-        origWrite("\n");
-        resolve(password);
-        return;
-      }
-      // Backspace
-      if (ch === "\x7f" || ch === "\b") {
-        if (password.length > 0) {
-          password = password.slice(0, -1);
-          origWrite("\b \b");
-        }
-        return;
-      }
-      // Normal character
-      password += ch;
-      origWrite("*");
+      origWrite("\n");
+      resolve(password);
     };
 
     process.stdin.on("data", onData);
@@ -495,7 +518,7 @@ async function main(): Promise<void> {
   rl.close();
 
   const passwordPrompt = preset
-    ? `What is your ${preset.usernameLabel.replace("username", "password")}? `
+    ? `What is your ${preset.name} password? `
     : "What is your Brightspace password? ";
   let password = "";
   while (!password) {

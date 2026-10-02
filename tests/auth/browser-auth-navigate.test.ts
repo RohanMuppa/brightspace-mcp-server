@@ -18,6 +18,7 @@ const BASE_URL = "https://brightspace.example.edu";
 const EMAIL_SELECTOR = "input[type=email]";
 const ALTERNATE_EMAIL_SELECTOR = "input[name=loginfmt]";
 const SAOTCC_SELECTOR = "#idDiv_SAOTCC_Title";
+const CUNY_TOTP_SELECTOR = '[id="otpValue|input"]';
 const CAMPUS_SELECTOR = 'a[href*="/d2l/lp/auth/saml/initiate-login"]';
 const KMSI_CHECKBOX = "#KmsiCheckboxField";
 const KMSI_SUBMIT = "#idSIButton9";
@@ -258,6 +259,26 @@ describe("BrowserAuth.navigateAndLogin", () => {
     const { page } = makePage({
       url: "https://login.microsoftonline.com/common/SAS/BeginAuth",
       visible: [SAOTCC_SELECTOR],
+    });
+
+    await expect(navigate(page)).resolves.toBe(false);
+    expect(ssoFlow.login).toHaveBeenCalledOnce();
+  });
+
+  it("passes a resumed CUNY Login code challenge to the school flow", async () => {
+    const { page } = makePage({
+      url: "https://ssologin.cuny.edu/oaa-totp-factor/rui/index.html?cid=1&nonce=2",
+      visible: [CUNY_TOTP_SELECTOR],
+    });
+
+    await expect(navigate(page)).resolves.toBe(false);
+    expect(ssoFlow.login).toHaveBeenCalledOnce();
+  });
+
+  it("passes CUNY Login's text-username password page to the school flow", async () => {
+    const { page } = makePage({
+      url: "https://ssologin.cuny.edu/oam/server/obrareq.cgi?encquery=abc",
+      visible: ['input[type="password"]'],
     });
 
     await expect(navigate(page)).resolves.toBe(false);

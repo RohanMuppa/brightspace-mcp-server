@@ -140,6 +140,13 @@ export class PurdueSSOFlow {
   private accountHintSubmitted = false;
   /** Authenticator codes asked for during this login. See submitMfaCode. */
   private mfaCodeAttempts = 0;
+  /**
+   * True for exactly one poll after a code is resubmitted in response to a
+   * rejection. Entra's rejection span can still be in the DOM on that very
+   * next poll - it hasn't re-rendered yet, so what's on screen is still the
+   * PREVIOUS attempt's verdict, not this one's. See submitMfaCode.
+   */
+  private awaitingMfaCodeSettle = false;
   /** Set once per login, the first time Entra's MFA page is handled. */
   private rememberMfa: RememberMfaResult | undefined;
   private readonly duoMfa: DuoMfaHandler;
@@ -375,6 +382,12 @@ export class PurdueSSOFlow {
     let resendNotFoundWarned = false;
     try {
       while (Date.now() < deadline) {
+        // A verified session outranks whatever challenge controls linger on
+        // screen: answering them would prompt or announce for nothing.
+        if (await this.isAuthenticated(page)) {
+          log("INFO", "Login successful - verified Brightspace home");
+          return;
+        }
         if (await this.duoMfa.handle(page)) challenged = true;
         if (await this.submitMfaCode(page)) challenged = true;
         const number = await this.readNumberMatch(page);
@@ -402,10 +415,6 @@ export class PurdueSSOFlow {
         if (number) {
           numberVanishedAt = null;
           resendNotFoundWarned = false;
-        }
-        if (await this.isAuthenticated(page)) {
-          log("INFO", "Login successful - verified Brightspace home");
-          return;
         }
         // Fix 2: Entra's number-match request itself times out (or the user
         // taps Deny) well before the 5-minute budget above. Once that has
@@ -505,7 +514,18 @@ export class PurdueSSOFlow {
     // second prompt on the next tick. That prompt blocks on stdin, and the
     // deadline is only checked between iterations, so the five-minute budget
     // can never fire while parked there.
-    if (this.mfaCodeAttempts > 0) {
+    const isRetry = this.mfaCodeAttempts > 0;
+    if (isRetry) {
+      // The rejection span can still be the stale one from the attempt we
+      // just resubmitted in reaction to - Entra hasn't re-rendered yet, so
+      // this poll can't tell that span apart from a genuine rejection of the
+      // new attempt. Give it exactly one more poll (like cuny-sso.ts requiring
+      // the URL to change before trusting its own error state) before trusting
+      // the span again.
+      if (this.awaitingMfaCodeSettle) {
+        this.awaitingMfaCodeSettle = false;
+        return false;
+      }
       if (!await page.locator(MFA_CODE_ERROR_SELECTOR).first().isVisible().catch(() => false)) return false;
       if (this.mfaCodeAttempts >= MAX_MFA_CODE_ATTEMPTS) {
         throw new BrowserAuthError(`Microsoft rejected ${this.mfaCodeAttempts} authenticator codes. Run \`${AUTH_COMMAND}\` to try again.`, "mfa_code");
@@ -519,6 +539,7 @@ export class PurdueSSOFlow {
     }
     await this.rememberMfaDevice(page);
     this.mfaCodeAttempts += 1;
+    this.awaitingMfaCodeSettle = isRetry;
     const code = await this.config.requestMfaCode();
     if (!/^\d{6,8}$/.test(code)) throw new UnsupportedAuthenticationError("The MFA code must contain 6-8 digits.");
     await input.fill(code);
