@@ -13,6 +13,7 @@ import { convertHtmlToMarkdown } from "../utils/html-converter.js";
 import { log } from "../utils/logger.js";
 import { applyCourseFilter } from "../utils/course-filter.js";
 import { assignmentUrl, gradebookUrl, quizUrl } from "../utils/deep-links.js";
+import { dueIn } from "../utils/due-in.js";
 import type { AppConfig } from "../types/index.js";
 
 // D2L Dropbox API types
@@ -325,6 +326,7 @@ export async function fetchCourseAssignments(
           ? convertHtmlToMarkdown(folder.CustomInstructions.Html).markdown
           : "",
         dueDate: folder.DueDate,
+        dueIn: dueIn(folder.DueDate),
         points: folder.Assessment?.ScoreDenominator ?? null,
         isGroup: folder.GroupTypeId !== null,
         rubric: folder.Assessment?.Rubrics?.map((r) => ({
@@ -458,6 +460,7 @@ export async function fetchCourseAssignments(
           ? convertHtmlToMarkdown(descriptionHtml).markdown
           : "",
         dueDate: quiz.DueDate,
+        dueIn: dueIn(quiz.DueDate),
         startDate: quiz.StartDate,
         endDate: quiz.EndDate,
         timeLimit: timeLimit?.IsEnforced ? timeLimit.TimeLimitValue : null,
@@ -530,6 +533,7 @@ function gradebookHeadsUp(
       // Always null: a grade column carries no due date of its own, and
       // inventing one from the column name would be a guess.
       dueDate: null,
+      dueIn: null,
       url: baseUrl ? gradebookUrl(baseUrl, courseId) : null,
     });
   }

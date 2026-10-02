@@ -25,7 +25,11 @@ const config = (overrides: Partial<AppConfig> = {}): AppConfig => ({
   ...overrides,
 });
 
-function setup(appConfig: AppConfig, version = "9.8.7") {
+function setup(
+  appConfig: AppConfig,
+  version = "9.8.7",
+  readSignedInIdentity?: () => Promise<{ uniqueName?: string; displayName?: string } | null>
+) {
   let name = "";
   let handler: (args: unknown) => Promise<any>;
   const server = {
@@ -34,7 +38,11 @@ function setup(appConfig: AppConfig, version = "9.8.7") {
       handler = fn;
     },
   };
-  registerGetServerInfo(server as any, appConfig, version);
+  if (readSignedInIdentity) {
+    registerGetServerInfo(server as any, appConfig, version, readSignedInIdentity);
+  } else {
+    registerGetServerInfo(server as any, appConfig, version);
+  }
   return { name: () => name, call: () => handler!({}) };
 }
 
@@ -48,8 +56,16 @@ describe("get_server_info", () => {
 
   it("returns exactly the documented fields", async () => {
     expect(Object.keys(await payload(config())).sort()).toEqual(
-      ["arch", "configPath", "hasStoredCredential", "node", "platform", "schoolUrl", "sessionStatePath", "version"],
+      ["arch", "configPath", "hasStoredCredential", "localTimezone", "node", "platform", "schoolUrl", "sessionStatePath", "utcOffsetMinutes", "version"],
     );
+  });
+
+  it("reports the server's resolved local timezone", async () => {
+    expect((await payload(config())).localTimezone).toBe(Intl.DateTimeFormat().resolvedOptions().timeZone);
+  });
+
+  it("reports the UTC offset in minutes, the inverse of Date#getTimezoneOffset", async () => {
+    expect((await payload(config())).utcOffsetMinutes).toBe(-new Date().getTimezoneOffset());
   });
 
   it("reports the version the server was started with", async () => {
@@ -126,5 +142,38 @@ describe("get_server_info microsoftSession", () => {
     await savedSession();
     const text = (await setup(config({ sessionDir: dir })).call()).content.map((c: any) => c.text).join("\n");
     expect(text).not.toContain("entra-cookie-secret");
+  });
+});
+
+/**
+ * signedInAs reports the non-secret uniqueName/displayName persisted
+ * alongside the session's encrypted token data. readSignedInIdentity is
+ * injected here so these tests never touch the native keyring that the real
+ * session store depends on — that encrypted round trip is covered by
+ * tests/auth/session-store.test.ts instead.
+ */
+describe("get_server_info signedInAs", () => {
+  it("reports signedInAs when the session carries both fields", async () => {
+    const { call } = setup(config(), "9.8.7", async () => ({ uniqueName: "jdoe", displayName: "Jane Doe" }));
+    expect(JSON.parse((await call()).content[0].text).signedInAs).toEqual({
+      uniqueName: "jdoe",
+      displayName: "Jane Doe",
+    });
+  });
+
+  it("reports only the field that is present", async () => {
+    const { call } = setup(config(), "9.8.7", async () => ({ displayName: "Jane Doe" }));
+    expect(JSON.parse((await call()).content[0].text).signedInAs).toEqual({ displayName: "Jane Doe" });
+  });
+
+  it("omits signedInAs entirely when there is no identity to report", async () => {
+    const { call } = setup(config(), "9.8.7", async () => null);
+    expect(JSON.parse((await call()).content[0].text)).not.toHaveProperty("signedInAs");
+  });
+
+  it("omits signedInAs by default against a session directory with nothing saved", async () => {
+    // No readSignedInIdentity override: falls through to the real (empty) session store.
+    expect(await payload(config({ sessionDir: path.join("/home/student", ".d2l-session", "accounts", "nonexistent") })))
+      .not.toHaveProperty("signedInAs");
   });
 });

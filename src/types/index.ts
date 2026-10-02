@@ -20,6 +20,13 @@ export interface TokenData {
   cookieHeader?: string;
   /** D2L XSRF token; the mint answers 403 without it. */
   csrfToken?: string;
+  /**
+   * Non-secret identity from the whoami call already made to validate the
+   * session. Reported by get_server_info as signedInAs. Never anything else
+   * from that response — no Identifier, email, or role.
+   */
+  uniqueName?: string;
+  displayName?: string;
 }
 
 // Encrypted token stored on disk

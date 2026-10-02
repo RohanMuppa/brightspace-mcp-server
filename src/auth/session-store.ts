@@ -33,6 +33,8 @@ function validToken(value: unknown): value is TokenData {
     && (token.source === "browser" || token.source === "cache")
     && (token.cookieHeader === undefined || typeof token.cookieHeader === "string")
     && (token.csrfToken === undefined || typeof token.csrfToken === "string")
+    && (token.uniqueName === undefined || typeof token.uniqueName === "string")
+    && (token.displayName === undefined || typeof token.displayName === "string")
     && validTenantOrigin(token.tenantOrigin);
 }
 

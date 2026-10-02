@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { fetchCourseAssignments } from "../../src/tools/get-assignments.js";
 
 /**
@@ -435,5 +435,75 @@ describe("get_assignments across all courses", () => {
 
     await call({});
     expect(requested[0]).toContain("isActive=true");
+  });
+});
+
+/**
+ * dueIn is additive: a relative-time rendering of dueDate so a caller doesn't
+ * have to do its own date math. It rides next to dueDate wherever that field
+ * already appears, and is null wherever dueDate is null (gradeOnly rows).
+ */
+describe("fetchCourseAssignments dueIn", () => {
+  const NOW = new Date("2026-09-02T12:00:00.000Z");
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("adds a relative dueIn next to a dropbox folder's dueDate, leaving dueDate unchanged", async () => {
+    const dueDate = "2026-09-05T12:00:00.000Z"; // 3 days out
+    const apiClient = {
+      le: (orgUnitId: number, p: string) => `/d2l/api/le/1.0/${orgUnitId}${p}`,
+      get: vi.fn(async (path: string) => {
+        if (path.endsWith("/dropbox/folders/")) {
+          return [{ Id: 55, Name: "HW 1", DueDate: dueDate, IsHidden: false, GroupTypeId: null }];
+        }
+        if (path.endsWith("/quizzes/")) return { Objects: [] };
+        if (path.endsWith("/grades/")) return [];
+        if (path.endsWith("/content/toc")) return { Modules: [] };
+        throw notFound();
+      }),
+    };
+
+    const [assignment] = await fetchCourseAssignments(apiClient as any, COURSE_ID, BASE);
+    expect(assignment.dueDate).toBe(dueDate);
+    expect(assignment.dueIn).toBe("in 3 days");
+  });
+
+  it("adds a relative dueIn next to a quiz's dueDate, leaving dueDate unchanged", async () => {
+    const dueDate = "2026-09-01T12:00:00.000Z"; // 1 day in the past
+    const { apiClient } = makeQuizClient(
+      [{ QuizId: 66, Name: "Quiz 1", IsActive: true, DueDate: dueDate }],
+      () => []
+    );
+
+    const [quiz] = quizzesOf(await fetchCourseAssignments(apiClient as any, COURSE_ID));
+    expect(quiz.dueDate).toBe(dueDate);
+    expect(quiz.dueIn).toBe("yesterday");
+  });
+
+  it("keeps dueIn null for a gradeOnly row, same as its always-null dueDate", async () => {
+    const apiClient = {
+      le: (orgUnitId: number, p: string) => `/d2l/api/le/1.0/${orgUnitId}${p}`,
+      get: vi.fn(async (path: string) => {
+        if (path.endsWith("/dropbox/folders/")) return [];
+        if (path.endsWith("/quizzes/")) return { Objects: [] };
+        if (path.endsWith("/content/toc")) return { Modules: [] };
+        if (path.endsWith("/grades/")) {
+          return [{ Id: 9, Name: "Proctored Exam", GradeObjectTypeId: 1, AssociatedTool: null }];
+        }
+        throw notFound();
+      }),
+    };
+
+    const [row] = await fetchCourseAssignments(apiClient as any, COURSE_ID, BASE);
+    expect(row.type).toBe("gradeOnly");
+    expect(row.dueDate).toBeNull();
+    expect(row.dueIn).toBeNull();
   });
 });
