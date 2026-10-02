@@ -13,6 +13,7 @@ import { TUDelftSSOFlow, isTUDelftBrightspace } from "./tudelft-sso.js";
 import { CunySSOFlow, isCunyBrightspace } from "./cuny-sso.js";
 import { LeidenSSOFlow, isLeidenBrightspace } from "./leiden-sso.js";
 import { McgillSSOFlow, isMcgillBrightspace } from "./mcgill-sso.js";
+import { JaverianaSSOFlow, isJaverianaBrightspace } from "./javeriana-sso.js";
 import { BrowserAuthError } from "../utils/errors.js";
 import type { RememberMfaResult } from "./microsoft-session.js";
 import { AUTH_COMMAND } from "../utils/commands.js";
@@ -103,6 +104,10 @@ export function createSSOFlow(config: AppConfig, requestMfaCode?: RequestMfaCode
 
   if (isMcgillBrightspace(config.baseUrl)) {
     return new McgillSSOFlow(credentials);
+  }
+
+  if (isJaverianaBrightspace(config.baseUrl)) {
+    return new JaverianaSSOFlow(credentials);
   }
 
   return new PurdueSSOFlow(credentials);

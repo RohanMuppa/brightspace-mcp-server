@@ -103,6 +103,64 @@ describe("get_roster truncation", () => {
 });
 
 /**
+ * A sign-in that has not finished is not an empty roster. CLAUDE.md forbids
+ * turning a previously successful `{users: []}` response into an error, so
+ * the tool keeps the success envelope and adds an explicit authPending/notice
+ * pair a caller can check instead.
+ */
+
+import { AuthProcessError } from "../../src/auth/auth-runner.js";
+import { ApiError } from "../../src/api/errors.js";
+
+const mfaPending = () => new AuthProcessError("mfaPending", "MFA approval pending");
+
+describe("get_roster while sign-in is pending", () => {
+  it("reports authPending instead of an empty list read as success (includeStudents)", async () => {
+    const { call } = setup(() => {
+      throw mfaPending();
+    });
+
+    const result = await call({ courseId: COURSE_ID, includeStudents: true });
+
+    expect(result.isError).toBeUndefined();
+    const parsed = parse(result);
+    expect(parsed).toMatchObject({ courseId: COURSE_ID, users: [], authPending: true });
+    expect(parsed.notice).toContain("Approve the sign-in request");
+  });
+
+  it("reports authPending when only the TA route is rejected with 401, keeping the instructor that did answer", async () => {
+    const { call } = setup((path) => {
+      if (path.includes("roleId=135")) throw new ApiError(401, path, "expired");
+      return { Objects: [user("prof")], Next: null };
+    });
+
+    const result = await call({ courseId: COURSE_ID });
+
+    expect(result.isError).toBeUndefined();
+    const parsed = parse(result);
+    expect(parsed).toMatchObject({ courseId: COURSE_ID, authPending: true });
+    expect(parsed.users.map((u: any) => u.name)).toEqual(["prof"]);
+    expect(parsed.notice).toContain("Authentication expired");
+  });
+
+  it("still returns instructors when the TA route fails for a non-auth reason", async () => {
+    const { call } = setup((path) => {
+      if (path.includes("roleId=135")) {
+        throw Object.assign(new Error("Forbidden"), { status: 403 });
+      }
+      return { Objects: [user("prof")], Next: null };
+    });
+
+    const result = await call({ courseId: COURSE_ID });
+
+    expect(result.isError).toBeUndefined();
+    const parsed = parse(result);
+    expect(parsed.authPending).toBeUndefined();
+    expect(parsed.users.map((u: any) => u.name)).toEqual(["prof"]);
+  });
+});
+
+/**
  * The default staff view (includeStudents=false) found instructors and TAs by
  * Purdue's own role IDs (109/135). On any other tenant those IDs mean nothing
  * or belong to different roles, so the fast path quietly returned an empty

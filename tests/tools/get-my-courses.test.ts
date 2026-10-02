@@ -16,31 +16,35 @@ const COURSES = [
   { id: 319544, name: "IDSN-532", code: "20263_34066", isActive: false },
 ];
 
-function makeConfig(activeOnly: boolean): AppConfig {
+type Dated = { id: number; name: string; code: string; isActive: boolean; startDate?: string | null; endDate?: string | null };
+
+function makeConfig(activeOnly: boolean, currentOnly = false): AppConfig {
   return {
     baseUrl: "https://brightspace.example.edu",
     sessionDir: "/tmp/nope",
     tokenTtl: 3600,
     headless: true,
-    courseFilter: { activeOnly },
+    courseFilter: { activeOnly, currentOnly },
   } as AppConfig;
 }
 
 /** Captures the registered handler and the paths it requests. */
-function setup(config: AppConfig) {
+function setup(config: AppConfig, courses: Dated[] = COURSES) {
   const requested: string[] = [];
   const apiClient = {
     lp: (p: string) => `/d2l/api/lp/1.0${p}`,
     get: vi.fn(async (path: string) => {
       requested.push(path);
       const activeOnlyQuery = path.includes("isActive=true");
-      const items = COURSES.filter((c) => !activeOnlyQuery || c.isActive);
+      const items = courses.filter((c) => !activeOnlyQuery || c.isActive);
       return {
         Items: items.map((c) => ({
           OrgUnit: { Id: c.id, Name: c.name, Code: c.code },
           Access: {
             ClasslistRoleName: "Instructor",
             IsActive: c.isActive,
+            StartDate: c.startDate ?? null,
+            EndDate: c.endDate ?? null,
             LastAccessed: null,
           },
         })),
@@ -142,5 +146,51 @@ describe("get_my_courses pagination", () => {
     expect(idsOf(result)).toEqual([1, 2]);
     expect(requested).toHaveLength(2);
     expect(requested[1]).toContain("bookmark=b1");
+  });
+});
+
+/**
+ * currentOnly (D2L_CURRENT_ONLY) is opt-in and defaults to false. A course
+ * whose enrollment window has already ended must disappear from the result
+ * only when currentOnly is explicitly turned on -- never by default.
+ */
+describe("get_my_courses currentOnly filter", () => {
+  // Computed relative to the real clock (the tool calls applyCourseFilter with
+  // its default `now`) so this stays correct regardless of when it runs.
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  const now = Date.now();
+  const DATED_COURSES: Dated[] = [
+    {
+      id: 1,
+      name: "Current Semester",
+      code: "current",
+      isActive: true,
+      startDate: new Date(now - 30 * DAY_MS).toISOString(),
+      endDate: new Date(now + 60 * DAY_MS).toISOString(),
+    },
+    {
+      id: 2,
+      name: "Past Semester",
+      code: "past",
+      isActive: true,
+      startDate: new Date(now - 2 * 365 * DAY_MS).toISOString(),
+      endDate: new Date(now - 365 * DAY_MS).toISOString(),
+    },
+  ];
+
+  it("keeps the dated-out course when currentOnly is off (the default)", async () => {
+    const { call } = setup(makeConfig(false, false), DATED_COURSES);
+
+    const result = await call({});
+
+    expect(idsOf(result).sort()).toEqual([1, 2]);
+  });
+
+  it("drops the dated-out course only when currentOnly is on", async () => {
+    const { call } = setup(makeConfig(false, true), DATED_COURSES);
+
+    const result = await call({});
+
+    expect(idsOf(result)).toEqual([1]);
   });
 });

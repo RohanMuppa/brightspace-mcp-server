@@ -488,3 +488,105 @@ describe("get_announcements attachments", () => {
     });
   });
 });
+
+/**
+ * A sign-in that has not finished is not an empty course. CLAUDE.md forbids
+ * turning a previously successful response into an error. Without
+ * modifiedSince the response is always a bare array — changing content[0]'s
+ * shape would break every existing caller — so the authPending notice lands
+ * in a second content block instead. With modifiedSince the response is
+ * already an object, and authPending/unavailableCourseIds/notice join the
+ * rest of that JSON.
+ */
+
+import { AuthProcessError } from "../../src/auth/auth-runner.js";
+import { ApiError } from "../../src/api/errors.js";
+
+const mfaPending = () => new AuthProcessError("mfaPending", "MFA approval pending");
+const body = (result: any): any => JSON.parse(result.content[0].text);
+const notice = (result: any): string => result.content[1].text;
+
+describe("get_announcements while sign-in is pending", () => {
+  it("reports authPending for a single course instead of an empty list read as success", async () => {
+    const { call } = setup(() => {
+      throw mfaPending();
+    });
+
+    const result = await call({ courseId: COURSE_A.Id });
+
+    expect(result.isError).toBeUndefined();
+    expect(Array.isArray(body(result))).toBe(true);
+    expect(body(result)).toEqual([]);
+    expect(notice(result)).toContain("Approve the sign-in request");
+  });
+
+  it("reports authPending when the news route is rejected with 401", async () => {
+    const { call } = setup((path) => {
+      throw new ApiError(401, path, "expired");
+    });
+
+    const result = await call({ courseId: COURSE_A.Id });
+
+    expect(result.isError).toBeUndefined();
+    expect(Array.isArray(body(result))).toBe(true);
+    expect(body(result)).toEqual([]);
+    expect(notice(result)).toContain("Authentication expired");
+  });
+
+  it("keeps the courses that answered when only one course's sign-in is pending", async () => {
+    const { call } = setup((path) => {
+      if (path.includes("/enrollments/")) return enrollments(COURSE_A, COURSE_B);
+      if (path.includes(`/le/1.0/${COURSE_B.Id}/`)) throw mfaPending();
+      return [news({ Id: 1, StartDate: "2026-09-18T00:00:00.000Z", IsPublished: true })];
+    });
+
+    const result = await call({});
+
+    expect(result.isError).toBeUndefined();
+    const parsed = body(result);
+    expect(Array.isArray(parsed)).toBe(true);
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0].courseId).toBe(COURSE_A.Id);
+    expect(notice(result)).toContain(String(COURSE_B.Id));
+  });
+
+  it("still returns a bare array when the only failure is non-auth", async () => {
+    const { call } = setup((path) => {
+      if (path.includes("/enrollments/")) return enrollments(COURSE_A, COURSE_B);
+      if (path.includes(`/le/1.0/${COURSE_B.Id}/`)) {
+        throw Object.assign(new Error("Forbidden"), { status: 403 });
+      }
+      return [news({ Id: 1, StartDate: "2026-09-18T00:00:00.000Z", IsPublished: true })];
+    });
+
+    const result = await call({});
+
+    expect(result.isError).toBeUndefined();
+    const parsed = body(result);
+    expect(Array.isArray(parsed)).toBe(true);
+    expect(parsed).toHaveLength(1);
+  });
+
+  it("keeps the modifiedSince object shape and adds authPending alongside it", async () => {
+    const { call } = setup((path) => {
+      if (path.includes("/enrollments/")) return enrollments(COURSE_A, COURSE_B);
+      if (path.includes(`/le/1.0/${COURSE_B.Id}/`)) throw mfaPending();
+      return [
+        news({
+          Id: 1,
+          StartDate: "2026-09-18T00:00:00.000Z",
+          LastModifiedDate: "2026-09-18T00:00:00.000Z",
+          IsPublished: true,
+        }),
+      ];
+    });
+
+    const result = await call({ modifiedSince: "2026-01-01T00:00:00Z" });
+
+    expect(result.isError).toBeUndefined();
+    const parsed = body(result);
+    expect(parsed.modifiedSince).toBe("2026-01-01T00:00:00Z");
+    expect(parsed.authPending).toBe(true);
+    expect(parsed.unavailableCourseIds).toEqual([COURSE_B.Id]);
+  });
+});

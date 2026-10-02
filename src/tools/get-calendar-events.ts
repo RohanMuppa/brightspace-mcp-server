@@ -7,7 +7,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { D2LApiClient } from "../api/index.js";
 import { GetCalendarEventsSchema } from "./schemas.js";
-import { toolResponse, errorResponse, sanitizeError } from "./tool-helpers.js";
+import { toolResponse, toolResponseWithNotice, errorResponse, sanitizeError, isAuthUnavailable, authPendingNotice } from "./tool-helpers.js";
 import { log } from "../utils/logger.js";
 import { resolveCourses } from "./resolve-courses.js";
 import { fetchCourseCalendarEvents } from "./calendar-events.js";
@@ -57,17 +57,46 @@ export function registerGetCalendarEvents(
           )
         );
 
+        // A pending sign-in only means that course's route never answered —
+        // it says nothing about the other courses, whose requests may already
+        // have gone out independently. Collect it rather than failing the
+        // whole call and losing every course that *did* answer.
+        const pendingCourseIds: number[] = [];
+        let firstAuthError: unknown = null;
         const events = results
           .flatMap((result, i) => {
             if (result.status === "fulfilled") return result.value;
+            if (isAuthUnavailable(result.reason)) {
+              pendingCourseIds.push(courses[i].id);
+              firstAuthError ??= result.reason;
+              log("DEBUG", `get_calendar_events: sign-in pending for course ${courses[i].id}`, result.reason);
+              return [];
+            }
             log("DEBUG", `get_calendar_events: skipping course ${courses[i].id} after fetch failure`, result.reason);
             return [];
           })
           .filter((event) => includeGenerated || !event.generatedFrom)
           .sort((a, b) => new Date(a.start).getTime() - new Date(b.start).getTime());
 
-        log("INFO", `get_calendar_events: Retrieved ${events.length} events across ${courses.length} courses`);
-        return toolResponse(events);
+        log(
+          "INFO",
+          `get_calendar_events: Retrieved ${events.length} events across ${courses.length} courses` +
+          (pendingCourseIds.length > 0 ? ` (${pendingCourseIds.length} pending sign-in)` : "")
+        );
+
+        // The response is always a bare array, pending sign-in or not — a
+        // shape change would break every existing caller. A pending course
+        // instead adds a second content block carrying the notice, which
+        // names which course ids are unavailable.
+        if (pendingCourseIds.length === 0) {
+          return toolResponse(events);
+        }
+        return toolResponseWithNotice(
+          events,
+          "Sign-in to Brightspace is still in progress, so calendar events for " +
+            `${pendingCourseIds.length} course(s) (${pendingCourseIds.join(", ")}) could not be fetched ` +
+            `yet. ${authPendingNotice(firstAuthError)} Call get_calendar_events again once sign-in finishes.`
+        );
       } catch (error) {
         return sanitizeError(error);
       }

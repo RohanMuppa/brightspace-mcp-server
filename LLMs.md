@@ -52,9 +52,24 @@ when the Brightspace session ends the user reruns `auth` in a terminal:
 npx -y brightspace-mcp-server@latest setup --cuny
 ```
 
+If the user is at McGill University, use the McGill preset. Sign-in goes
+through myCourses' SAML redirect straight to Microsoft Entra:
+
+```bash
+npx -y brightspace-mcp-server@latest setup --mcgill
+```
+
+If the user is at Pontificia Universidad Javeriana Cali, use the Javeriana
+preset. Sign-in goes through MobilityGuard OneGate, which asks in the
+terminal for a code from the user's authenticator app:
+
+```bash
+npx -y brightspace-mcp-server@latest setup --javeriana
+```
+
 The wizard:
 
-- prompts for the school's Brightspace URL (skipped with `--purdue`, `--suny`, `--western`, `--tudelft`, `--cuny`, `--leiden`, or `--mcgill`)
+- prompts for the school's Brightspace URL (skipped with `--purdue`, `--suny`, `--western`, `--tudelft`, `--cuny`, `--leiden`, `--mcgill`, or `--javeriana`)
 - asks whether MFA uses device approval, terminal code entry, or a visible browser, then authenticates accordingly
 - saves the password in the native credential store and public settings in `~/.brightspace-mcp/config.json` (0600)
 - writes the encrypted session below `~/.d2l-session/accounts/<account-hash>/` (AES-256-GCM)
@@ -121,7 +136,7 @@ Registered in `src/tools/index.ts`, schemas in `src/tools/schemas.ts`:
 
 | Tool | Purpose |
 |------|---------|
-| `get_my_courses` | List enrolled courses |
+| `get_my_courses` | List enrolled courses, each with `startDate`/`endDate` (the enrollment's `Access.StartDate`/`Access.EndDate`) alongside the existing fields — emitted unconditionally, independent of `currentOnly` |
 | `get_my_grades` | Grades for a course or all courses |
 | `get_assignments` | Assignments with due dates and submission status |
 | `get_assignment_rubric` | Full rubric table (criteria groups, levels, points, descriptions) for a dropbox assignment, plus the student's own graded outcome per criterion when the tenant exposes it |
@@ -135,13 +150,23 @@ Registered in `src/tools/index.ts`, schemas in `src/tools/schemas.ts`:
 | `get_roster` | Classlist for a course |
 | `get_my_groups` | The current user's project/discussion groups in a course, with each group's members |
 | `get_classlist_emails` | Emails of classmates and instructors |
-| `download_file` | Download a file attachment (PDF, slides, etc.) to disk — course content (`topicId`), a submission (`folderId` + `fileId`), or an announcement attachment (`newsId` + `fileId`) |
+| `download_file` | Get a file attachment — course content (`topicId`), a submission (`folderId` + `fileId`), or an announcement attachment (`newsId` + `fileId`). `downloadPath` is optional: omit it to get the file back inline in the tool response (extracted text for PDFs/Office docs, an image block for jpeg/png/gif/webp, capped at 10MB / 400k extracted characters), or pass an absolute host path to save it to disk as before |
 | `get_assignment_files` | Read the files attached to an assignment (spec, rubric, starter workbook) and return their text |
 | `get_announcement_files` | Read the files attached to an announcement (prompts, rubric, updated schedule) and return their text |
 | `get_video_transcript` | Transcript of a video embedded in course content (Kaltura, YouTube), with timestamps |
 | `get_server_info` | Running version, Node runtime, platform, config and session paths, school URL, whether a credential is stored, the server's local timezone and UTC offset (`localTimezone`, `utcOffsetMinutes`), `signedInAs` (`uniqueName`/`displayName`) once known, `microsoftSession` (what Microsoft remembered) once a browser sign-in is saved, and `requests` (lightweight API client counters) — no network call, no secrets |
+| `get_dropbox_folders` | Every assignment (dropbox) folder in a course, with due dates, submission type, visibility, and whether rubrics are attached |
+| `get_dropbox_submissions` | Instructor/TA: every student's (or group's) submission to a dropbox folder — submitter, submitted date, late status, files, and feedback/grading status |
+| `get_dropbox_user_submissions` | Instructor/TA: all submissions made by one specific student (or group) in a dropbox folder |
+| `get_dropbox_feedback` | Instructor/TA: feedback already saved for a user or group in a dropbox folder — score, graded state, feedback text, rubric assessment |
+| `get_rubrics_for_object` | The full rubric table (criteria, levels, points) attached to a dropbox folder |
+| `download_dropbox_submission_file` | Instructor/TA: download one file from a student's (or group's) dropbox submission |
 
-These nineteen are the whole surface. An available-update notice, when there is one, rides along as a second text block on the first successful result.
+These twenty-five are the whole surface. An available-update notice, when there is one, rides along as a second text block on the first successful result.
+
+Of the `get_dropbox_*`/`download_dropbox_submission_file` tools above, `get_dropbox_submissions`, `get_dropbox_user_submissions`, `get_dropbox_feedback`, and `download_dropbox_submission_file` are instructor/TA-side: they read every student's submissions and feedback for a course, which Brightspace only grants to course staff. A student account calling one of those gets a clear "Instructor or TA access required for this course" note (403) rather than a generic or broken-looking error. `get_dropbox_folders` and `get_rubrics_for_object` read the same folder-listing endpoint a student's own client uses, so they are not gated the same way. A 404 (no folders, no submissions, folder not found) comes back as an empty list/null with an explanatory `note`, not a failure. They are read-only — there is no tool in this server that posts a grade or feedback back to Brightspace.
+
+`download_file`'s two response modes (`src/tools/download-file.ts`): disk mode (`downloadPath` given) is unchanged — same JSON shape, with an additive `mode: "disk"` field. Inline mode (`downloadPath` omitted, and now the default) returns `mode: "inline"` content directly in the tool response instead: extracted text (via the existing `pdf-extractor.ts`/`zip-extract.ts`) for PDFs and `.docx`/`.xlsx`/`.pptx`, an `ImageContent` block for `jpeg`/`png`/`gif`/`webp`, and a short description pointing back to disk mode for anything else. It deliberately never emits an MCP `EmbeddedResource` — some clients route an embedded `application/pdf` into a document pipeline that rejects PDFs containing JBIG2-compressed images (common in scanned academic PDFs) and can fail the whole tool response. Inline responses are capped at 10MB and 400,000 characters of extracted text, each with an explicit truncation/oversize message naming `downloadPath` as the way to get the full file. `validateFileType`'s magic-byte allowlist is enforced in both modes.
 
 `search_course` reuses the same fetchers as `get_course_content`, `get_announcements`, and `get_discussions` (`fetchRootContent`/`buildContentTree`, `fetchCourseNews`, `fetchForums`/`fetchForumTopics`) rather than hitting the API a second way, so results share their cache. It scores in-memory term matches, case-insensitive and tokenized on non-alphanumerics: a result matching every query term always outranks one matching only some, and within that tier a title match outranks a body-only match. One source failing (e.g. a 403 on discussions) is skipped rather than failing the whole search, and named in the response's `note`.
 
@@ -184,6 +209,8 @@ The all-courses branch of `get_my_grades` returns an additive top-level `restric
 
 `get_course_content` topics and modules, and `get_announcements` items, carry a `lastModified` field (D2L's `LastModifiedDate`, or `null` when the tenant didn't send one). Both tools also accept an optional `modifiedSince` (ISO 8601 datetime, e.g. `2026-01-15T00:00:00Z`) that returns only items at or after that timestamp — useful for "what's new since I last checked" instead of re-fetching everything. A malformed value is a validation error naming the expected format, not a silently empty result. An item with no `lastModified` is always included rather than excluded, the same way a null due date is never treated as "not due" elsewhere in this server — dropping it silently would be indistinguishable from data loss. For `get_course_content`, a module is kept whenever any descendant topic matches, even if the module's own timestamp doesn't, so a matched topic never arrives with no surrounding context; the module's own `children` array reflects only the topics that matched. Passing `modifiedSince` adds `modifiedSince`, `returned`, and `filteredOut` to the response so a caller can tell "nothing changed" apart from "the filter was wrong"; omitting it leaves the response shape exactly as before (a bare array for `get_announcements`).
 
+While a sign-in is still being worked on in the background, `get_assignments`, `get_my_grades`, `get_upcoming_due_dates`, `get_calendar_events`, `get_announcements`, and `get_roster` report it rather than silently returning an empty or partial result that reads as a real measurement — but never by changing a response's documented shape. `get_my_grades`, `get_roster`, and a `get_announcements` call that passed `modifiedSince` already answer with an object, so `authPending: true`, a `notice` string, and (for the tools that aggregate courses) `unavailableCourseIds` join the rest of that JSON. The tools that normally answer with a bare array — `get_upcoming_due_dates`, `get_calendar_events`, and `get_announcements` without `modifiedSince` — keep returning that same array, holding whatever courses did answer, as `content[0]`; the notice (naming which course ids are unavailable) is appended as a second text block in `content[1]` instead of changing `content[0]`'s shape. `get_roster`'s non-`includeStudents` view keeps whichever of the instructor/TA routes did answer rather than discarding it just because the other is still pending.
+
 ## Codebase map
 
 ```
@@ -191,6 +218,7 @@ src/
   index.ts                  MCP server entrypoint, registers tools
   setup.ts                  Setup wizard (CLI subcommand `setup`)
   auth-cli.ts               Manual reauth (CLI subcommand `auth`)
+  doctor.ts                 Beginner diagnostic (CLI subcommand `doctor`)
   update.ts                 Self-update checker
   tools/
     index.ts                Tool registry
@@ -224,6 +252,7 @@ src/
     suny-sso.ts             SUNY campus selection
     cuny-sso.ts             CUNY Login (Oracle OAM) credentials and authenticator code
     mcgill-sso.ts           McGill myCourses SAML entry point, then shared Entra flow
+    javeriana-sso.ts        Javeriana Cali (MobilityGuard OneGate) credentials and authenticator code
     session-store.ts        AES-256-GCM token persistence and v1 migration
     browser-state-store.ts  Encrypted cookie and browser storage persistence
     credential-store.ts     Native password and encryption-key storage
@@ -233,7 +262,7 @@ src/
   utils/
     config-store.ts         ~/.brightspace-mcp/config.json reader/writer
     config.ts               Resolved config (store + env fallback)
-    course-filter.ts        Filter enrolled vs archived courses
+    course-filter.ts        Filter enrolled vs archived courses, and (currentOnly) vs out-of-term courses
     download-helpers.ts     Stream-to-disk with validation
     file-validator.ts       Magic-byte file-type checks
     html-converter.ts       HTML to Markdown via turndown
@@ -253,7 +282,9 @@ src/
 | `npx -y brightspace-mcp-server@latest setup --suny` | Setup with SUNY preset (also asks for campus) |
 | `npx -y brightspace-mcp-server@latest setup --cuny` | Setup with CUNY preset |
 | `npx -y brightspace-mcp-server@latest setup --mcgill` | Setup with McGill preset |
+| `npx -y brightspace-mcp-server@latest setup --javeriana` | Setup with Javeriana Cali preset |
 | `npx -y brightspace-mcp-server@latest auth` | Manual reauth |
+| `npx -y brightspace-mcp-server@latest doctor` | Diagnose a broken setup — Node version, saved config, credential store, Brightspace reachability, saved sign-in, a real course-list call, and installed version, each as a ✓/✗ line with one plain-English next step |
 | `npx -y brightspace-mcp-server@latest` | Run the MCP server (registered in AI client config) |
 | `npm run build` | Compile TypeScript to `build/` |
 | `npm run dev` | Watch-mode TypeScript compile |

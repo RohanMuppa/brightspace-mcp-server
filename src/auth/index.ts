@@ -11,6 +11,7 @@ export { TUDelftSSOFlow, isTUDelftBrightspace } from "./tudelft-sso.js";
 export { CunySSOFlow, isCunyBrightspace } from "./cuny-sso.js";
 export { LeidenSSOFlow, isLeidenBrightspace } from "./leiden-sso.js";
 export { McgillSSOFlow, isMcgillBrightspace } from "./mcgill-sso.js";
+export { JaverianaSSOFlow, isJaverianaBrightspace } from "./javeriana-sso.js";
 export { createSSOFlow } from "./sso-flow.js";
 export type { SSOFlow } from "./sso-flow.js";
 export { TokenManager } from "./token-manager.js";

@@ -82,6 +82,13 @@ export async function loadConfig(): Promise<AppConfig> {
     ?? store?.activeOnly
     ?? true;
 
+  // Resolve currentOnly: env > store > default (false). When true, a course
+  // only passes the filter if Access.StartDate <= now <= Access.EndDate,
+  // matching Brightspace's "Current Courses" widget.
+  const currentOnly = envBoolean(process.env.D2L_CURRENT_ONLY, "D2L_CURRENT_ONLY")
+    ?? store?.currentOnly
+    ?? false;
+
   // D2L_ACCESS_TOKEN beats D2L_SESSION_COOKIE beats the normal stored-credential
   // browser flow; both are validated whenever present regardless of which one
   // wins, so a typo in the losing variable still fails loudly at startup.
@@ -117,6 +124,7 @@ export async function loadConfig(): Promise<AppConfig> {
       includeCourseIds,
       excludeCourseIds,
       activeOnly,
+      currentOnly,
     },
   };
 }
@@ -233,7 +241,8 @@ export function parseSessionCookieEnv(raw: string): string {
   throw new Error(SESSION_COOKIE_FORMAT_ERROR);
 }
 
-function expandTilde(filePath: string): string {
+/** Exported for the `doctor` CLI, which resolves the same session directory without loading the full app config. */
+export function expandTilde(filePath: string): string {
   if (filePath.startsWith("~")) {
     return path.join(os.homedir(), filePath.slice(1));
   }

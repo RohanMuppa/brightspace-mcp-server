@@ -127,6 +127,45 @@ describe("resolved authentication configuration", () => {
     warn.mockRestore();
   });
 
+  describe("courseFilter.currentOnly", () => {
+    it("defaults to false", async () => {
+      expect((await loadConfig()).courseFilter.currentOnly).toBe(false);
+    });
+
+    it("reads currentOnly=true from the config file", async () => {
+      fake.store = { currentOnly: true };
+      expect((await loadConfig()).courseFilter.currentOnly).toBe(true);
+    });
+
+    it.each([
+      ["0", false], ["No", false], ["1", true], ["Yes", true],
+    ])("reads D2L_CURRENT_ONLY=%j as %s", async (value, expected) => {
+      vi.stubEnv("D2L_CURRENT_ONLY", value);
+      fake.store = { currentOnly: !expected };
+      expect((await loadConfig()).courseFilter.currentOnly).toBe(expected);
+    });
+
+    it("lets D2L_CURRENT_ONLY override the config file", async () => {
+      fake.store = { currentOnly: false };
+      vi.stubEnv("D2L_CURRENT_ONLY", "true");
+      expect((await loadConfig()).courseFilter.currentOnly).toBe(true);
+    });
+
+    it("D2L_CURRENT_ONLY=false disables even if the config file says true", async () => {
+      fake.store = { currentOnly: true };
+      vi.stubEnv("D2L_CURRENT_ONLY", "false");
+      expect((await loadConfig()).courseFilter.currentOnly).toBe(false);
+    });
+
+    it("ignores an unrecognized D2L_CURRENT_ONLY and keeps the default", async () => {
+      vi.stubEnv("D2L_CURRENT_ONLY", "maybe");
+      const warn = vi.spyOn(console, "error").mockImplementation(() => {});
+      expect((await loadConfig()).courseFilter.currentOnly).toBe(false);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("Ignoring D2L_CURRENT_ONLY"));
+      warn.mockRestore();
+    });
+  });
+
   describe("D2L_SESSION_COOKIE / D2L_ACCESS_TOKEN (browser-free sign-in)", () => {
     it("leaves both unset by default — byte-identical to today", async () => {
       const config = await loadConfig();

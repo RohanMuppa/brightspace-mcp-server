@@ -9,7 +9,7 @@ import { D2LApiClient, DEFAULT_CACHE_TTLS } from "../api/index.js";
 import {
   GetUpcomingDueDatesSchema,
 } from "./schemas.js";
-import { toolResponse, sanitizeError } from "./tool-helpers.js";
+import { toolResponse, toolResponseWithNotice, sanitizeError, isAuthUnavailable, authPendingNotice } from "./tool-helpers.js";
 import { log } from "../utils/logger.js";
 import { assignmentUrl, quizUrl, discussionUrl } from "../utils/deep-links.js";
 import { dueIn } from "../utils/due-in.js";
@@ -97,6 +97,7 @@ async function fetchDiscussionDueTopics(
       );
       topics.push(...unwrapList<DiscussionTopic>(forumTopics));
     } catch (error) {
+      if (isAuthUnavailable(error)) throw error;
       log(
         "DEBUG",
         `get_upcoming_due_dates: failed to fetch topics for forum ${forum.ForumId} in course ${courseId}`,
@@ -160,6 +161,12 @@ async function fetchCourseDueItems(
     fetchDiscussionDueTopics(apiClient, course.id),
     fetchCourseCalendarEvents(apiClient, baseUrl, course, from, to),
   ]);
+
+  // Each route may fail on its own without costing the others, but a failed
+  // sign-in means none of them answered: report that, not an empty course.
+  for (const result of [dropboxResult, quizResult, discussionResult, calendarResult]) {
+    if (result.status === "rejected" && isAuthUnavailable(result.reason)) throw result.reason;
+  }
 
   const items: UpcomingItem[] = [];
 
@@ -277,8 +284,20 @@ export function registerGetUpcomingDueDates(
           courses.map((course) => fetchCourseDueItems(apiClient, config.baseUrl, course, now, windowEnd))
         );
 
-        const items = results.flatMap((result) => {
+        // A pending sign-in only means that course's routes never answered —
+        // it says nothing about the other courses, whose requests may already
+        // have gone out independently. Collect it rather than failing the
+        // whole call and losing every course that *did* answer.
+        const pendingCourseIds: number[] = [];
+        let firstAuthError: unknown = null;
+        const items = results.flatMap((result, i) => {
           if (result.status === "fulfilled") return result.value;
+          if (isAuthUnavailable(result.reason)) {
+            pendingCourseIds.push(courses[i].id);
+            firstAuthError ??= result.reason;
+            log("DEBUG", `get_upcoming_due_dates: sign-in pending for course ${courses[i].id}`, result.reason);
+            return [];
+          }
           log("DEBUG", "get_upcoming_due_dates: skipping course after fetch failure", result.reason);
           return [];
         });
@@ -295,9 +314,23 @@ export function registerGetUpcomingDueDates(
 
         log(
           "INFO",
-          `get_upcoming_due_dates: Retrieved ${upcoming.length} items across ${courses.length} courses`
+          `get_upcoming_due_dates: Retrieved ${upcoming.length} items across ${courses.length} courses` +
+          (pendingCourseIds.length > 0 ? ` (${pendingCourseIds.length} pending sign-in)` : "")
         );
-        return toolResponse(upcoming);
+
+        // The response is always a bare array, pending sign-in or not — a
+        // shape change would break every existing caller. A pending course
+        // instead adds a second content block carrying the notice, which
+        // names which course ids are unavailable.
+        if (pendingCourseIds.length === 0) {
+          return toolResponse(upcoming);
+        }
+        return toolResponseWithNotice(
+          upcoming,
+          "Sign-in to Brightspace is still in progress, so upcoming due dates for " +
+            `${pendingCourseIds.length} course(s) (${pendingCourseIds.join(", ")}) could not be fetched ` +
+            `yet. ${authPendingNotice(firstAuthError)} Call get_upcoming_due_dates again once sign-in finishes.`
+        );
       } catch (error) {
         return sanitizeError(error);
       }
