@@ -8,7 +8,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { D2LApiClient, DEFAULT_CACHE_TTLS } from "../api/index.js";
 import { fetchAllItems } from "../api/paginate.js";
 import { GetAssignmentsSchema } from "./schemas.js";
-import { toolResponse, sanitizeError, isAuthUnavailable } from "./tool-helpers.js";
+import { toolResponse, sanitizeError, isAuthUnavailable, authPendingNotice } from "./tool-helpers.js";
 import { convertHtmlToMarkdown } from "../utils/html-converter.js";
 import { log } from "../utils/logger.js";
 import { applyCourseFilter } from "../utils/course-filter.js";
@@ -572,10 +572,32 @@ export function registerGetAssignments(
 
         // Single course case
         if (courseId) {
-          const assignments = await fetchCourseAssignments(apiClient, courseId, config.baseUrl);
+          try {
+            const assignments = await fetchCourseAssignments(apiClient, courseId, config.baseUrl);
 
-          log("INFO", `get_assignments: Retrieved ${assignments.length} assignments for course ${courseId}`);
-          return toolResponse({ courseId, assignments });
+            log("INFO", `get_assignments: Retrieved ${assignments.length} assignments for course ${courseId}`);
+            return toolResponse({ courseId, assignments });
+          } catch (error) {
+            // A pending sign-in is not an empty course: the routes never
+            // answered, so the result says so instead of reporting zero
+            // assignments as if that were a real measurement. The envelope
+            // stays a success — existing callers that only read `assignments`
+            // keep working — with authPending/notice added for callers that
+            // want to tell "no assignments" apart from "couldn't check".
+            if (isAuthUnavailable(error)) {
+              log("DEBUG", `get_assignments: sign-in pending for course ${courseId}`, error);
+              return toolResponse({
+                courseId,
+                assignments: [],
+                authPending: true,
+                notice:
+                  "Sign-in to Brightspace is still in progress, so assignments for this course " +
+                  `could not be fetched yet. ${authPendingNotice(error)} Call get_assignments again ` +
+                  "once sign-in finishes.",
+              });
+            }
+            throw error;
+          }
         }
 
         // All courses case
@@ -628,28 +650,67 @@ export function registerGetAssignments(
               );
               return null;
             }
+            // A pending sign-in only means this course's routes never
+            // answered — it says nothing about the other courses, whose
+            // requests may already have gone out independently. Mark this one
+            // rather than failing the whole call and losing every course that
+            // *did* answer.
+            if (isAuthUnavailable(error)) {
+              log(
+                "DEBUG",
+                `get_assignments: sign-in pending for course ${item.OrgUnit.Id} (${item.OrgUnit.Name})`
+              );
+              return {
+                courseId: item.OrgUnit.Id,
+                courseName: item.OrgUnit.Name,
+                authPending: true as const,
+                authError: error,
+              };
+            }
             throw error; // Re-throw other errors
           }
         });
 
         const results = await Promise.allSettled(assignmentPromises);
-        const authFailure = results.find(
-          (r): r is PromiseRejectedResult =>
-            r.status === "rejected" && isAuthUnavailable(r.reason)
+        const hardFailure = results.find(
+          (r): r is PromiseRejectedResult => r.status === "rejected"
         );
-        if (authFailure) throw authFailure.reason;
-        const courses = results
+        if (hardFailure) throw hardFailure.reason;
+
+        const settled = results
           .filter(
             (r): r is PromiseFulfilledResult<any> =>
               r.status === "fulfilled" && r.value !== null
           )
           .map((r) => r.value);
 
+        const pending = settled.filter((c) => c.authPending);
+        const courses = settled
+          .filter((c) => !c.authPending)
+          .map(({ courseId, courseName, assignments }) => ({ courseId, courseName, assignments }));
+
         log(
           "INFO",
-          `get_assignments: Retrieved assignments for ${courses.length} courses (out of ${enrollmentItems.length} enrolled)`
+          `get_assignments: Retrieved assignments for ${courses.length} courses ` +
+          `(out of ${enrollmentItems.length} enrolled${pending.length > 0 ? `, ${pending.length} pending sign-in` : ""})`
         );
-        return toolResponse({ courses });
+
+        const response: Record<string, unknown> = {
+          courses: [
+            ...courses,
+            ...pending.map(({ courseId, courseName }) => ({ courseId, courseName, authPending: true as const })),
+          ],
+        };
+        if (pending.length > 0) {
+          response.authPending = true;
+          response.unavailableCourseIds = pending.map((c) => c.courseId);
+          response.notice =
+            "Sign-in to Brightspace is still in progress, so assignments for " +
+            `${pending.length} course(s) (${pending.map((c) => c.courseId).join(", ")}) could not be ` +
+            `fetched yet. ${authPendingNotice(pending[0].authError)} Call get_assignments again once ` +
+            "sign-in finishes.";
+        }
+        return toolResponse(response);
       } catch (error) {
         // Temporary: log full error details to stderr for debugging
         if (error instanceof Error) {
