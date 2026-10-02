@@ -6,7 +6,7 @@ Talk to your Brightspace courses with AI. Ask about grades, due dates, quizzes, 
 
 This is an [MCP (Model Context Protocol)](https://modelcontextprotocol.io) server that connects your AI to D2L Brightspace so it can pull your grades, assignments, syllabus, and course content on demand.
 
-Connects to D2L Brightspace. Automatic login supports Purdue's Microsoft Entra flow, SUNY campus selection, Western University, and TU Delft NetID via SURFconext. Other schools need a compatible automated sign-in flow; unsupported login pages return an actionable error.
+Connects to D2L Brightspace. Automatic login supports Purdue's Microsoft Entra flow, SUNY campus selection, Western University, TU Delft NetID via SURFconext, and CUNY Login. Other schools need a compatible automated sign-in flow; unsupported login pages return an actionable error.
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/RohanMuppa/brightspace-mcp-server/main/docs/how-it-works.svg" alt="Architecture diagram" width="100%">
@@ -28,7 +28,7 @@ Paste this into Claude Code, Cursor, Windsurf, Copilot, Codex, or any AI coding 
 ```
 Install brightspace-mcp-server for me by following
 https://github.com/RohanMuppa/brightspace-mcp-server/blob/main/LLMs.md
-(use --purdue at Purdue, --suny at SUNY, or --tudelft at TU Delft).
+(use --purdue at Purdue, --suny at SUNY, --tudelft at TU Delft, or --cuny at CUNY).
 ```
 
 **Option 2: Run it yourself**
@@ -57,6 +57,16 @@ npx -y brightspace-mcp-server@latest setup --tudelft
 ```
 
 Use your NetID rather than your student email address. The TU Delft flow is headless NetID username and password sign-in only, including automatic re-authentication when the saved session expires; it does not support MFA or any other interactive step. If your account requires one, [open an issue](https://github.com/RohanMuppa/brightspace-mcp-server/issues) — that tenant isn't supported yet.
+
+CUNY students can add `--cuny`. Sign in with your full CUNY Login address
+(`firstname.lastname01@login.cuny.edu`); authentication asks in the terminal
+for the 6-digit code from your authenticator app. CUNY asks for that code on
+every full sign-in, so when your Brightspace session ends, run
+`npx -y brightspace-mcp-server@latest auth` in a terminal again:
+
+```bash
+npx -y brightspace-mcp-server@latest setup --cuny
+```
 
 The wizard saves your password in the native credential store and asks how you'll complete MFA: wait for approval or number matching, enter a terminal code from Google Authenticator or another app, or use a visible browser for other interactive methods. It can also configure Claude Desktop, Cursor, Codex Desktop and CLI, and Claude Code when installed — restart your AI client when it finishes.
 
