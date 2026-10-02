@@ -25,6 +25,8 @@ interface EnrollmentItem {
     ClasslistRoleName: string;
     IsActive: boolean;
     CanAccess?: boolean;
+    StartDate: string | null;
+    EndDate: string | null;
     LastAccessed: string | null;
   };
 }
@@ -78,6 +80,8 @@ export function registerGetMyCourses(
             role: item.Access.ClasslistRoleName,
             isActive: item.Access.IsActive,
             canAccess: item.Access.CanAccess,
+            startDate: item.Access.StartDate,
+            endDate: item.Access.EndDate,
             lastAccessed: item.Access.LastAccessed,
           })),
           { ...config.courseFilter, activeOnly }

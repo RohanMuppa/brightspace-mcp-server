@@ -39,6 +39,7 @@ All are optional; env always overrides `config.json`.
 | `D2L_INCLUDE_COURSES` | Comma-separated course ID whitelist |
 | `D2L_EXCLUDE_COURSES` | Comma-separated course ID blacklist |
 | `D2L_ACTIVE_ONLY` | Only show active (non-archived) courses (default `true`) |
+| `D2L_CURRENT_ONLY` | Only show courses in their current enrollment window, matching Brightspace's "Current Courses" widget (default `false`) |
 | `D2L_NO_UPDATE_CHECK` | Set to any value to switch off the background npm update check and its update notices |
 
 ## On-disk layout

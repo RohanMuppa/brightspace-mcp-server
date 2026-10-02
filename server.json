@@ -6,12 +6,12 @@
     "url": "https://github.com/RohanMuppa/brightspace-mcp-server",
     "source": "github"
   },
-  "version": "3.9.18",
+  "version": "3.9.22",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "brightspace-mcp-server",
-      "version": "3.9.18",
+      "version": "3.9.22",
       "transport": {
         "type": "stdio"
       },
@@ -61,6 +61,13 @@
         {
           "name": "D2L_ACTIVE_ONLY",
           "description": "Only return courses whose enrollment is active. Default: true",
+          "isRequired": false,
+          "format": "boolean",
+          "isSecret": false
+        },
+        {
+          "name": "D2L_CURRENT_ONLY",
+          "description": "Only return courses whose Access.StartDate to Access.EndDate window contains now, matching Brightspace's \"Current Courses\" widget. Default: false",
           "isRequired": false,
           "format": "boolean",
           "isSecret": false

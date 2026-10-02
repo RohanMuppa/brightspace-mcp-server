@@ -38,6 +38,7 @@ describe("server.json", () => {
       "D2L_INCLUDE_COURSES",
       "D2L_EXCLUDE_COURSES",
       "D2L_ACTIVE_ONLY",
+      "D2L_CURRENT_ONLY",
       "D2L_NO_UPDATE_CHECK",
     ]) {
       expect(names).toContain(expected);

@@ -581,3 +581,124 @@ describe("get_upcoming_due_dates course resolution", () => {
     expect(items.map((i) => i.title)).toEqual(["Incomplete from last term"]);
   });
 });
+
+/**
+ * A sign-in that has not finished is not an empty course. CLAUDE.md forbids
+ * turning a previously successful response into an error, so the tool keeps
+ * the bare-array shape it always returns and adds the authPending notice as a
+ * second content block instead of changing content[0]'s shape.
+ */
+
+import { AuthProcessError } from "../../src/auth/auth-runner.js";
+import { ApiError } from "../../src/api/errors.js";
+
+const mfaPending = () => new AuthProcessError("mfaPending", "MFA approval pending");
+const body = (result: any): any => JSON.parse(result.content[0].text);
+const notice = (result: any): string => result.content[1].text;
+
+describe("get_upcoming_due_dates while sign-in is pending", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("reports authPending for a single course instead of an empty list read as success", async () => {
+    const { call } = setup((path) => {
+      if (path.includes("/enrollments/")) return enrollments(COURSE_A);
+      throw mfaPending();
+    });
+
+    const result = await call({ daysAhead: 7, courseId: COURSE_A.Id });
+
+    expect(result.isError).toBeUndefined();
+    expect(Array.isArray(body(result))).toBe(true);
+    expect(body(result)).toEqual([]);
+    expect(notice(result)).toContain(String(COURSE_A.Id));
+    expect(notice(result)).toContain("Approve the sign-in request");
+  });
+
+  it("reports authPending when the dropbox route is rejected with 401", async () => {
+    const { call } = setup((path) => {
+      if (path.includes("/enrollments/")) return enrollments(COURSE_A);
+      if (path.includes("/dropbox/folders/")) throw new ApiError(401, path, "expired");
+      return [];
+    });
+
+    const result = await call({ daysAhead: 7, courseId: COURSE_A.Id });
+
+    expect(result.isError).toBeUndefined();
+    expect(Array.isArray(body(result))).toBe(true);
+    expect(notice(result)).toContain("Authentication expired");
+  });
+
+  it("reports authPending when a forum's topics fail on a pending sign-in", async () => {
+    const { call } = setup((path) => {
+      if (path.includes("/enrollments/")) return enrollments(COURSE_A);
+      if (path.includes("/discussions/forums/") && path.endsWith("/topics/")) throw mfaPending();
+      if (path.includes("/discussions/forums/")) return [{ ForumId: 9, Name: "General" }];
+      return [];
+    });
+
+    const result = await call({ daysAhead: 7, courseId: COURSE_A.Id });
+
+    expect(result.isError).toBeUndefined();
+    expect(Array.isArray(body(result))).toBe(true);
+    expect(notice(result)).toContain("Sign-in to Brightspace is still in progress");
+  });
+
+  it("keeps the other course's items when only one course's sign-in is pending", async () => {
+    const { call } = setup((path) => {
+      if (path.includes("/enrollments/")) return enrollments(COURSE_A, COURSE_B);
+      if (path.includes(`/${COURSE_B.Id}/`)) throw mfaPending();
+      if (path.includes("/dropbox/folders/")) {
+        return [{ Id: 1, Name: "HW 1", DueDate: daysFromNow(1), IsHidden: false }];
+      }
+      return [];
+    });
+
+    const result = await call({ daysAhead: 7 });
+
+    expect(result.isError).toBeUndefined();
+    const parsed = body(result);
+    expect(Array.isArray(parsed)).toBe(true);
+    expect(parsed.map((i: any) => i.title)).toEqual(["HW 1"]);
+    expect(notice(result)).toContain(String(COURSE_B.Id));
+  });
+
+  it("still returns a bare array when the only failure is non-auth (403)", async () => {
+    const { call } = setup((path) => {
+      if (path.includes("/enrollments/")) return enrollments(COURSE_A, COURSE_B);
+      if (path.includes(`/${COURSE_B.Id}/`)) throw forbidden();
+      if (path.includes("/dropbox/folders/")) {
+        return [{ Id: 1, Name: "HW 1", DueDate: daysFromNow(1), IsHidden: false }];
+      }
+      return [];
+    });
+
+    const result = await call({ daysAhead: 7 });
+
+    expect(result.isError).toBeUndefined();
+    const parsed = body(result);
+    expect(Array.isArray(parsed)).toBe(true);
+    expect(parsed).toHaveLength(1);
+  });
+
+  it("still returns a bare array when a course's fetch fails over the network, not auth", async () => {
+    const { call } = setup((path) => {
+      if (path.includes("/enrollments/")) return enrollments(COURSE_A);
+      if (path.includes("/dropbox/folders/")) throw new Error("network error");
+      return [];
+    });
+
+    const result = await call({ daysAhead: 7 });
+
+    expect(result.isError).toBeUndefined();
+    const parsed = body(result);
+    expect(Array.isArray(parsed)).toBe(true);
+    expect(parsed).toEqual([]);
+  });
+});

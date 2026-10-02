@@ -137,6 +137,90 @@ describe("get_my_grades all-courses course resolution", () => {
 });
 
 /**
+ * A sign-in that has not finished is not an empty gradebook. CLAUDE.md forbids
+ * turning a previously successful `{grades: []}` response into an error, so
+ * the tool keeps the success envelope and adds an explicit authPending/notice
+ * pair a caller can check instead.
+ */
+
+import { AuthProcessError } from "../../src/auth/auth-runner.js";
+import { ApiError } from "../../src/api/errors.js";
+
+const mfaPending = () => new AuthProcessError("mfaPending", "MFA approval pending");
+
+describe("get_my_grades while sign-in is pending", () => {
+  it("reports authPending for a single course instead of an empty list read as success", async () => {
+    const { call } = setup(() => {
+      throw mfaPending();
+    });
+
+    const result = await call({ courseId: COURSE_A.Id });
+
+    expect(result.isError).toBeUndefined();
+    const parsed = parse(result);
+    expect(parsed).toMatchObject({ courseId: COURSE_A.Id, grades: [], authPending: true });
+    expect(parsed.notice).toContain("Approve the sign-in request");
+  });
+
+  it("reports authPending when the grades route is rejected with 401", async () => {
+    const { call } = setup((path) => {
+      if (path.includes("/grades/")) throw new ApiError(401, path, "expired");
+      return [];
+    });
+
+    const result = await call({ courseId: COURSE_A.Id });
+
+    expect(result.isError).toBeUndefined();
+    const parsed = parse(result);
+    expect(parsed).toMatchObject({ courseId: COURSE_A.Id, grades: [], authPending: true });
+    expect(parsed.notice).toContain("Authentication expired");
+  });
+
+  it("still returns the other course when a non-auth failure hits one course", async () => {
+    const { call } = setup((path) => {
+      if (path.includes("/enrollments/")) {
+        return { Items: [{ OrgUnit: COURSE_A, Access: { IsActive: true } }, { OrgUnit: COURSE_B, Access: { IsActive: true } }] };
+      }
+      if (path.includes(`/${COURSE_B.Id}/grades/`)) {
+        throw new ApiError(403, path, "Forbidden");
+      }
+      return [grade("Exam 1")];
+    });
+
+    const result = await call({});
+
+    expect(result.isError).toBeUndefined();
+    const parsed = parse(result);
+    expect(parsed.authPending).toBeUndefined();
+    expect(parsed.courses.map((c: any) => c.courseId)).toEqual([COURSE_A.Id]);
+  });
+
+  it("keeps the courses that answered when only one course's sign-in is pending", async () => {
+    const { call } = setup((path) => {
+      if (path.includes("/enrollments/")) {
+        return { Items: [{ OrgUnit: COURSE_A, Access: { IsActive: true } }, { OrgUnit: COURSE_B, Access: { IsActive: true } }] };
+      }
+      if (path.includes(`/${COURSE_B.Id}/grades/`)) throw mfaPending();
+      return [grade("Exam 1")];
+    });
+
+    const result = await call({});
+
+    expect(result.isError).toBeUndefined();
+    const parsed = parse(result);
+    expect(parsed.authPending).toBe(true);
+    expect(parsed.unavailableCourseIds).toEqual([COURSE_B.Id]);
+
+    const answered = parsed.courses.find((c: any) => c.courseId === COURSE_A.Id);
+    expect(answered.grades).toHaveLength(1);
+    expect(answered.authPending).toBeUndefined();
+
+    const pending = parsed.courses.find((c: any) => c.courseId === COURSE_B.Id);
+    expect(pending).toEqual({ courseId: COURSE_B.Id, courseName: COURSE_B.Name, grades: [], authPending: true });
+  });
+});
+
+/**
  * A 403 on a course's /grades/values/myGradeValues/ means the tenant
  * restricts the grade API for that course (a common institutional policy,
  * not a bug). Dropping the course from `courses` with no trace left a

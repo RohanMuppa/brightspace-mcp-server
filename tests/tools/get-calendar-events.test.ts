@@ -278,3 +278,89 @@ describe("get_calendar_events", () => {
     expect(requested.some((p) => p.includes(`/${COURSE_A.Id}/`))).toBe(false);
   });
 });
+
+/**
+ * A sign-in that has not finished is not an empty calendar. CLAUDE.md forbids
+ * turning a previously successful response into an error, so the tool keeps
+ * the bare-array shape it always returns and adds the authPending notice as a
+ * second content block instead of changing content[0]'s shape.
+ */
+
+import { AuthProcessError } from "../../src/auth/auth-runner.js";
+import { ApiError } from "../../src/api/errors.js";
+
+const mfaPending = () => new AuthProcessError("mfaPending", "MFA approval pending");
+const notice = (result: any): string => result.content[1].text;
+
+describe("get_calendar_events while sign-in is pending", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("reports authPending for a single course instead of an empty list read as success", async () => {
+    const { call } = setup((path) => {
+      if (path.includes("/enrollments/")) return enrollments(COURSE_A);
+      throw mfaPending();
+    });
+
+    const result = await call({ courseId: COURSE_A.Id });
+
+    expect(result.isError).toBeUndefined();
+    expect(Array.isArray(parse(result))).toBe(true);
+    expect(parse(result)).toEqual([]);
+    expect(notice(result)).toContain(String(COURSE_A.Id));
+    expect(notice(result)).toContain("Approve the sign-in request");
+  });
+
+  it("reports authPending when the calendar route is rejected with 401", async () => {
+    const { call } = setup((path) => {
+      if (path.includes("/enrollments/")) return enrollments(COURSE_A);
+      if (path.includes("/calendar/")) throw new ApiError(401, path, "expired");
+      return [];
+    });
+
+    const result = await call({ courseId: COURSE_A.Id });
+
+    expect(result.isError).toBeUndefined();
+    expect(Array.isArray(parse(result))).toBe(true);
+    expect(notice(result)).toContain("Authentication expired");
+  });
+
+  it("keeps the other course's events when only one course's sign-in is pending", async () => {
+    const { call } = setup((path) => {
+      if (path.includes("/enrollments/")) return enrollments(COURSE_A, COURSE_B);
+      if (path.includes(`/${COURSE_B.Id}/calendar/`)) throw mfaPending();
+      if (path.includes(`/${COURSE_A.Id}/calendar/`)) return page(event(1, "Lab", daysFromNow(1)));
+      return [];
+    });
+
+    const result = await call({});
+
+    expect(result.isError).toBeUndefined();
+    const parsed = parse(result);
+    expect(Array.isArray(parsed)).toBe(true);
+    expect(parsed.map((e: any) => e.title)).toEqual(["Lab"]);
+    expect(notice(result)).toContain(String(COURSE_B.Id));
+  });
+
+  it("still returns a bare array when the only failure is non-auth", async () => {
+    const { call } = setup((path) => {
+      if (path.includes("/enrollments/")) return enrollments(COURSE_A, COURSE_B);
+      if (path.includes(`/${COURSE_B.Id}/calendar/`)) throw new Error("Forbidden");
+      if (path.includes(`/${COURSE_A.Id}/calendar/`)) return page(event(1, "Lab", daysFromNow(1)));
+      return [];
+    });
+
+    const result = await call({});
+
+    expect(result.isError).toBeUndefined();
+    const parsed = parse(result);
+    expect(Array.isArray(parsed)).toBe(true);
+    expect(parsed).toHaveLength(1);
+  });
+});

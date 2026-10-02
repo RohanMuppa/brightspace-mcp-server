@@ -22,6 +22,12 @@ export interface ConfigStoreData {
   includeCourses?: number[];
   excludeCourses?: number[];
   activeOnly?: boolean;
+  /**
+   * Only include courses whose Access.StartDate ≤ now ≤ Access.EndDate,
+   * matching Brightspace's "Current Courses" widget. Overridable via
+   * D2L_CURRENT_ONLY.
+   */
+  currentOnly?: boolean;
 }
 
 const CONFIG_DIR = path.join(os.homedir(), ".brightspace-mcp");

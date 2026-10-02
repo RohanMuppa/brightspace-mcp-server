@@ -99,4 +99,16 @@ export interface CourseFilterConfig {
   includeCourseIds?: number[];
   excludeCourseIds?: number[];
   activeOnly: boolean;
+  /**
+   * Only include courses whose Access.StartDate ≤ now ≤ Access.EndDate,
+   * matching Brightspace's "Current Courses" widget. Courses with both
+   * start and end dates null (undated org units like "Academic Integrity")
+   * are excluded; a single null side is treated as open-ended. Default: false.
+   *
+   * Optional (unlike activeOnly) so inline test fixtures that build a
+   * CourseFilterConfig literal don't all need updating for a field
+   * applyCourseFilter already treats as falsy-default via `if (config.currentOnly)`.
+   * The resolved config (resolveCourseFilterConfig in config.ts) always sets it.
+   */
+  currentOnly?: boolean;
 }

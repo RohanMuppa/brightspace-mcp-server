@@ -85,8 +85,8 @@ export const DownloadFileSchema = z.object({
     .describe("Specific file ID within a dropbox submission, or an announcement attachment's file ID (with newsId)."),
   newsId: z.coerce.number().int().positive().optional()
     .describe("Announcement (news item) ID whose attachment to download. Requires fileId."),
-  downloadPath: z.string().min(1)
-    .describe("Absolute path to the directory where the file should be saved."),
+  downloadPath: z.string().min(1).optional()
+    .describe("Absolute path to the directory where the file should be saved on disk. Omit this to receive the file inline in the tool response instead — the right choice in clients like Claude Desktop, whose analysis/sandbox tools cannot see files an MCP server writes to its own host filesystem. Inline mode returns extracted text for PDFs and Office documents, an image block for jpeg/png/gif/webp, and a short description (pointing back to disk mode) for anything else, capped at 10MB and 400,000 characters of extracted text."),
   customFilename: z.string().max(255).optional()
     .describe("Custom filename for the downloaded file (include extension). If not provided, uses the original filename from Brightspace."),
 });
