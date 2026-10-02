@@ -20,7 +20,7 @@ vi.mock("node:fs", async (importOriginal) => {
 });
 
 const fs = await vi.importActual<typeof import("node:fs")>("node:fs");
-const { SCHOOL_PRESETS, buildConfigToSave, configureMcpClient, presetForArgv } =
+const { SCHOOL_PRESETS, buildConfigToSave, configureMcpClient, presetForArgv, readPasswordInput } =
   await import("../../src/setup.js");
 const { createSSOFlow } = await import("../../src/auth/sso-flow.js");
 const { SunySSOFlow } = await import("../../src/auth/suny-sso.js");
@@ -231,5 +231,30 @@ describe("client configuration", () => {
     configureMcpClient(configPath);
 
     expect(fs.statSync(configPath).mode & 0o777).toBe(0o600);
+  });
+});
+
+describe("password prompt input", () => {
+  it("takes a pasted password with its copied newline as one submission", () => {
+    expect(readPasswordInput("", "hunter2\n")).toEqual({ password: "hunter2", echo: "*******", outcome: "submit" });
+  });
+
+  it("echoes one asterisk per pasted character and keeps waiting for Enter", () => {
+    expect(readPasswordInput("", "hunter2")).toEqual({ password: "hunter2", echo: "*******", outcome: "pending" });
+    expect(readPasswordInput("hunter2", "\r")).toEqual({ password: "hunter2", echo: "", outcome: "submit" });
+  });
+
+  it("strips bracketed-paste markers and arrow keys", () => {
+    expect(readPasswordInput("", "\x1b[200~hunter2\x1b[201~").password).toBe("hunter2");
+    expect(readPasswordInput("ab", "\x1b[D\x1b[C").password).toBe("ab");
+  });
+
+  it("erases only what was typed, one character at a time", () => {
+    expect(readPasswordInput("ab", "\x7f\x7f\x7f")).toEqual({ password: "", echo: "\b \b\b \b", outcome: "pending" });
+    expect(readPasswordInput("pä🔑", "\b").password).toBe("pä");
+  });
+
+  it("cancels on Ctrl+C even inside a longer chunk", () => {
+    expect(readPasswordInput("", "abc\x03def").outcome).toBe("cancel");
   });
 });

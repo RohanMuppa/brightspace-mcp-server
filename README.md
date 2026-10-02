@@ -105,6 +105,8 @@ Claude Desktop uses a separate configuration, which the setup wizard can update 
 
 Building against this server or opening a PR? See [STABILITY.md](STABILITY.md) for what's safe to rely on and what counts as a breaking change.
 
+**Running from a source checkout or fork?** When a newer release is published, the server tells a source checkout to `git pull` and `npm run build` rather than to install the npm package. For a fork you maintain, set `D2L_NO_UPDATE_CHECK=1` in the server's environment to turn off upstream update notices.
+
 ## Session Expired?
 
 There's no login step — asking a question signs you in.

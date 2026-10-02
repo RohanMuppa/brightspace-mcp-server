@@ -110,6 +110,39 @@ function ask(rl: readline.Interface, question: string): Promise<string> {
   });
 }
 
+export interface PasswordInput {
+  password: string;
+  /** What to print back: one asterisk per accepted character, or erasures. */
+  echo: string;
+  outcome: "pending" | "submit" | "cancel";
+}
+
+/**
+ * Apply one raw-mode stdin chunk to the password typed so far. A paste
+ * arrives as a single chunk, possibly wrapped in bracketed-paste markers and
+ * ending in a copied newline, so the chunk is read one character at a time
+ * and escape sequences (paste markers, arrow keys) never reach the password.
+ */
+export function readPasswordInput(password: string, chunk: string): PasswordInput {
+  let echo = "";
+  const text = chunk.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "");
+  for (const ch of text) {
+    if (ch === "\x03") return { password, echo, outcome: "cancel" };
+    if (ch === "\r" || ch === "\n") return { password, echo, outcome: "submit" };
+    if (ch === "\x7f" || ch === "\b") {
+      if (password.length > 0) {
+        password = [...password].slice(0, -1).join("");
+        echo += "\b \b";
+      }
+      continue;
+    }
+    if (ch < " ") continue;
+    password += ch;
+    echo += "*";
+  }
+  return { password, echo, outcome: "pending" };
+}
+
 /**
  * Prompt for a password without echoing characters to the terminal.
  * We swap stdout.write to suppress the default echo, then print
@@ -152,37 +185,20 @@ function askPassword(prompt: string): Promise<string> {
     process.stdin.resume();
 
     const onData = (key: Buffer) => {
-      const ch = key.toString("utf-8");
-      // Ctrl+C
-      if (ch === "\x03") {
-        process.stdout.write = origWrite;
-        process.stdin.setRawMode?.(false);
-        process.stdin.removeListener("data", onData);
-        rl.close();
+      const input = readPasswordInput(password, key.toString("utf-8"));
+      if (input.echo) origWrite(input.echo);
+      password = input.password;
+      if (input.outcome === "pending") return;
+      process.stdout.write = origWrite;
+      process.stdin.setRawMode?.(false);
+      process.stdin.removeListener("data", onData);
+      rl.close();
+      if (input.outcome === "cancel") {
         console.log("");
         process.exit(0);
       }
-      // Enter
-      if (ch === "\r" || ch === "\n") {
-        process.stdout.write = origWrite;
-        process.stdin.setRawMode?.(false);
-        process.stdin.removeListener("data", onData);
-        rl.close();
-        origWrite("\n");
-        resolve(password);
-        return;
-      }
-      // Backspace
-      if (ch === "\x7f" || ch === "\b") {
-        if (password.length > 0) {
-          password = password.slice(0, -1);
-          origWrite("\b \b");
-        }
-        return;
-      }
-      // Normal character
-      password += ch;
-      origWrite("*");
+      origWrite("\n");
+      resolve(password);
     };
 
     process.stdin.on("data", onData);
@@ -502,7 +518,7 @@ async function main(): Promise<void> {
   rl.close();
 
   const passwordPrompt = preset
-    ? `What is your ${preset.usernameLabel.replace("username", "password")}? `
+    ? `What is your ${preset.name} password? `
     : "What is your Brightspace password? ";
   let password = "";
   while (!password) {
