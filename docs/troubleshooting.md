@@ -1,0 +1,24 @@
+# Troubleshooting
+
+**Where to find logs:** MCP clients log the server's stderr themselves. On **macOS**, Claude Desktop writes to `~/Library/Logs/Claude/mcp*.log` (one file per server, plus `mcp.log` for the client itself). On **Windows**, it's `%APPDATA%\Claude\logs`. Other clients vary — check their own logs or output panel for the `brightspace-mcp-server` process.
+
+**Works in a terminal but not in the client:** the client launches the server as its own subprocess, which doesn't inherit your shell's environment. Common causes: the native credential store is locked (a GUI app started before you unlocked your keyring or logged into macOS won't get a Keychain prompt the way a terminal does), `HOME` or `PATH` differ for GUI-launched processes versus your shell, or `npx` resolves a different cached version than the one on your `PATH`. To check, run the exact registered command (`npx -y brightspace-mcp-server@latest`, or `cmd /c npx -y brightspace-mcp-server@latest` on Windows) from a fresh terminal with no extra environment set, and compare.
+
+**Which version am I running:** ask the assistant anything that calls `get_server_info` — it reports the running version, Node runtime, platform, config and session paths, school URL, whether a credential is stored, the local timezone and UTC offset (`localTimezone`, `utcOffsetMinutes`), who the session is signed in as when known (`signedInAs: { uniqueName, displayName }`), what Microsoft remembered (`microsoftSession`: stay-signed-in and its expiry, plus whether "Don't ask again" was ticked, already on, not offered, or left off because `D2L_REMEMBER_MFA` isn't set), and `requests` (lightweight counters: responses by status class, network errors, cache hits/misses, coalesced in-flight joins, and token refreshes) — all without contacting Brightspace or revealing secrets. On a source checkout, that version comes from the local `build/` output, so it only reflects your latest `npm run build`, not what's on npm.
+
+**`npx` fails with `EPERM` on macOS:** run it from your home folder — macOS blocks `npx` from Documents, Desktop, or Downloads without Files and Folders permission. Grant access in System Settings → Privacy & Security → Files and Folders, or run elsewhere.
+
+**Stuck on MFA:** a missed approval pauses automatic sign-in for 5 minutes; `npx -y brightspace-mcp-server@latest auth` retries immediately, takes over a stuck sign-in, or asks for a code. See [Signing in](sign-in.md).
+
+**Running from a source checkout or fork:** when a newer release is published, the server tells a source checkout to `git pull` and `npm run build` rather than to install the npm package. For a fork you maintain, set `D2L_NO_UPDATE_CHECK=1` in the server's environment to turn off upstream update notices.
+
+**Using a client the wizard doesn't configure:** search your client's docs for how to add an MCP server; the command to register is `npx -y brightspace-mcp-server@latest` (on **Windows**, `cmd /c npx -y brightspace-mcp-server@latest`). You still need to run `npx -y brightspace-mcp-server@latest setup` first to save your credentials. For Codex Desktop and CLI: `codex mcp add brightspace -- npx -y brightspace-mcp-server@latest` (they share one user configuration; restart the desktop app or start a new CLI session). For Claude Code: `claude mcp add --scope user brightspace -- npx -y brightspace-mcp-server@latest`. Claude Desktop uses a separate configuration, which the setup wizard can update automatically.
+
+## Output details worth knowing
+
+- `get_course_content` reports `isAvailable`, `availabilityStatus` (`available`, `not_yet_open`, `ended`, `hidden`, or `locked`), `availabilityMessage`, `startDate`, and `endDate` for modules and topics. The effective release window includes restrictions inherited from enclosing modules.
+- When a content-file download returns 403 or 404, `download_file` checks topic metadata and the course table of contents. Confirmed restrictions return `{ success: false, available: false, reason, message, startDate, endDate }` so the assistant can explain when content opens or why it has closed. Unexplained 404s and server/network failures retain their original errors.
+- When course content or announcements are converted to markdown, `javascript:`/`data:` links are rendered as plain text (the link itself is dropped, not followed) and D2L's per-session query parameters (`d2lSessionVal`, `d2lSecureSessionVal`, and the cache-busting `_`) are stripped from any remaining links and images before they reach the assistant.
+- Every due date in `get_assignments` and `get_upcoming_due_dates` carries a `dueIn` relative time ("in 3 days") next to it.
+
+Building against this server or opening a PR? See [STABILITY.md](../STABILITY.md) for what's safe to rely on and what counts as a breaking change.

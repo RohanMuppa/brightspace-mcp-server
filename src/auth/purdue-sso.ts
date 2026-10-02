@@ -348,11 +348,18 @@ export class PurdueSSOFlow {
   }
 
   private async hasPostCredentialChallenge(page: Page): Promise<boolean> {
+    // Entra can land directly on its bare verification-code form - no
+    // number-match digits, no #idDiv_SAOTCAS_Title/#idDiv_SAOTCC_Title
+    // heading - when resuming a restored session. Without MFA_CODE_SELECTORS
+    // here, login() concluded no challenge was present and re-ran
+    // enterCredentials against a page with no username/password field.
+    // Idea from ElliotDrel/brightspace-mcp (branch codex/purdue-totp).
     return this.duoMfa.isChallenge(page) || await this.anyVisible(page, [
       NUMBER_MATCH_SELECTOR,
       "#idDiv_SAOTCAS_Title",
       "#idDiv_SAOTCC_Title",
       "#KmsiCheckboxField",
+      ...MFA_CODE_SELECTORS,
     ]);
   }
 

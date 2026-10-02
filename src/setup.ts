@@ -99,10 +99,16 @@ export const SCHOOL_PRESETS: Record<string, SchoolPreset> = {
     mfaNote: "Approve the sign-in request from your MFA app.",
     usernameHint: "Use your full sign-in address if your Ngee Ann Polytechnic account requires it.",
   },
+  javeriana: {
+    name: "Pontificia Universidad Javeriana Cali",
+    baseUrl: "https://auladigital.javerianacali.edu.co",
+    usernameLabel: "Javeriana username",
+    mfaNote: "OneGate asks for a code from your authenticator app when you sign in.",
+  },
 };
 
 /**
- * Pick the school preset named by `--purdue`, `--suny`, `--western`, `--cuny`, etc.
+ * Pick the school preset named by `--purdue`, `--suny`, `--western`, `--cuny`, `--ngeeann`, etc.
  *
  * Own properties only: a bare index would make `--constructor` or
  * `--__proto__` resolve to something off `Object.prototype` and hand the
