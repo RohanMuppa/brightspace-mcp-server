@@ -101,6 +101,7 @@ describe("get_upcoming_due_dates", () => {
       courseId: 101,
       courseName: "CS 180",
       dueDate: quiz.DueDate,
+      dueIn: "in 5 days",
       startDate: quiz.StartDate,
       endDate: quiz.EndDate,
     });
@@ -295,6 +296,8 @@ describe("get_upcoming_due_dates", () => {
       title: "Reading response #1",
       courseId: 101,
       courseName: "CS 180",
+      dueDate: daysFromNow(3),
+      dueIn: "in 3 days",
     });
     expect(items[0].url).toBe(
       `${BASE}/d2l/lms/discussions/threadlist.d2l?ou=101&tId=501`
@@ -432,6 +435,7 @@ describe("get_upcoming_due_dates calendar events", () => {
         courseId: 101,
         courseName: "CS 180",
         dueDate: "2026-09-04T23:30:00.000Z",
+        dueIn: "in 2 days",
         startDate: null,
         endDate: "2026-09-05T01:30:00.000Z",
         location: "WTHR 200",

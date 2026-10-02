@@ -34,6 +34,22 @@ describe("SessionStore", () => {
     expect(backend.writes).toBe(0);
   });
 
+  it("round-trips the optional uniqueName/displayName identity fields", async () => {
+    const withIdentity = { ...testToken, uniqueName: "jdoe", displayName: "Jane Doe" };
+    await store.save(withIdentity);
+    expect(await new SessionStore(dir, { backend }).load()).toEqual(withIdentity);
+  });
+
+  it("loads an existing session file saved before uniqueName/displayName existed", async () => {
+    // testToken carries neither field, exactly like a session.json written by
+    // an older version of this server before identity was ever persisted.
+    await store.save(testToken);
+    const loaded = await new SessionStore(dir, { backend }).load();
+    expect(loaded).toEqual(testToken);
+    expect(loaded).not.toHaveProperty("uniqueName");
+    expect(loaded).not.toHaveProperty("displayName");
+  });
+
   it("preserves malformed files and reports the failure", async () => {
     const file = path.join(dir, "session.json");
     await fs.writeFile(file, "not-json");
@@ -111,6 +127,23 @@ describe("SessionStore", () => {
     const failing = new SessionStore(dir, { backend, write: async () => { throw new Error("disk full"); } });
     await expect(failing.load()).rejects.toThrow();
     expect(await fs.readFile(path.join(dir, "session.json"), "utf8")).toBe(saved);
+  });
+
+  it("peek() reads a legacy session without upgrading it on disk", async () => {
+    const planted = await writeLegacySession(dir);
+    expect(await store.peek()).toEqual(testToken);
+    expect(await fs.readFile(path.join(dir, "session.json"), "utf8")).toBe(planted);
+    expect(backend.writes).toBe(0);
+  });
+
+  it("peek() matches load() for an already-upgraded session", async () => {
+    await store.save(testToken);
+    expect(await store.peek()).toEqual(await store.load());
+  });
+
+  it("peek() returns null only for an absent session", async () => {
+    expect(await store.peek()).toBeNull();
+    expect(backend.writes).toBe(0);
   });
 
   it("clears a readable session recoverably", async () => {

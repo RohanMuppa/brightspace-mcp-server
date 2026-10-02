@@ -54,6 +54,12 @@ export class BrowserAuthTransportError extends Error {
   }
 }
 
+/** Non-secret identity read off a validated /users/whoami response. */
+interface WhoamiIdentity {
+  uniqueName?: string;
+  displayName?: string;
+}
+
 export interface AuthenticateOptions {
   automatic?: boolean;
   /** Persist the token before releasing the shared authentication lock. */
@@ -164,7 +170,13 @@ export class BrowserAuth {
       if (material.cookieHeader && material.csrfToken) {
         const minted = await mintAccessToken({ baseUrl: this.config.baseUrl, cookieHeader: material.cookieHeader, csrfToken: material.csrfToken });
         if (minted.ok) {
-          token = { accessToken: minted.accessToken, capturedAt: Date.now(), expiresAt: Date.now() + this.config.tokenTtl * 1000, source: "browser" };
+          // The mint endpoint itself carries no identity. Reuse the same
+          // whoami read the other extraction strategies already validate
+          // against so a mint-path login reports signedInAs too; a failure
+          // here (offline, slow tenant) must not fail a login that already
+          // has a good token, so it degrades to "no identity" instead.
+          const identity = await this.validateToken(minted.accessToken).catch(() => null);
+          token = { accessToken: minted.accessToken, capturedAt: Date.now(), expiresAt: Date.now() + this.config.tokenTtl * 1000, source: "browser", ...identity };
         } else if (minted.reason === "transport") {
           throw new BrowserAuthTransportError(`Token mint temporarily failed: ${minted.detail ?? "network unavailable"}. Saved sign-in state is preserved.`);
         } else {
@@ -172,8 +184,11 @@ export class BrowserAuth {
         }
       }
       token ??= await this.tryExtractToken(page, context);
-      if (!token && captured && await this.validateToken(captured)) {
-        token = { accessToken: captured, capturedAt: Date.now(), expiresAt: Date.now() + this.config.tokenTtl * 1000, source: "browser" };
+      if (!token && captured) {
+        const identity = await this.validateToken(captured);
+        if (identity) {
+          token = { accessToken: captured, capturedAt: Date.now(), expiresAt: Date.now() + this.config.tokenTtl * 1000, source: "browser", ...identity };
+        }
       }
       if (!token) throw new BrowserAuthError("Brightspace did not provide a usable API token. Saved SSO cookies have been preserved.", "token_extraction");
       if (interrupted) throw new BrowserAuthError("Authentication interrupted", "interrupted");
@@ -224,23 +239,27 @@ export class BrowserAuth {
     page: Page,
     context: BrowserContext
   ): Promise<TokenData | null> {
-    const build = (token: string): TokenData => {
+    const build = (token: string, identity?: WhoamiIdentity | null): TokenData => {
       const now = Date.now();
       return {
         accessToken: token,
         capturedAt: now,
         expiresAt: now + this.config.tokenTtl * 1000,
         source: "browser",
+        ...identity,
       };
     };
 
     // Strategy 0: localStorage (D2L.Fetch.Tokens) : fastest
     const lsToken = await this.extractLocalStorageToken(page);
-    if (lsToken && (await this.validateToken(lsToken))) {
-      log("INFO", "Extracted valid Bearer token from localStorage");
-      return build(lsToken);
+    if (lsToken) {
+      const identity = await this.validateToken(lsToken);
+      if (identity) {
+        log("INFO", "Extracted valid Bearer token from localStorage");
+        return build(lsToken, identity);
+      }
+      log("WARN", "localStorage Bearer token failed validation, trying next strategy");
     }
-    if (lsToken) log("WARN", "localStorage Bearer token failed validation, trying next strategy");
 
     // Strategy 1: Force a Bearer fetch by hitting the API, then re-check localStorage
     try {
@@ -250,9 +269,12 @@ export class BrowserAuth {
         { waitUntil: "load", timeout: 15000 }
       );
       const lsToken2 = await this.extractLocalStorageToken(page);
-      if (lsToken2 && (await this.validateToken(lsToken2))) {
-        log("INFO", "Extracted valid Bearer token from localStorage after API nudge");
-        return build(lsToken2);
+      if (lsToken2) {
+        const identity = await this.validateToken(lsToken2);
+        if (identity) {
+          log("INFO", "Extracted valid Bearer token from localStorage after API nudge");
+          return build(lsToken2, identity);
+        }
       }
     } catch (error) {
       if (error instanceof BrowserAuthTransportError) throw error;
@@ -261,28 +283,36 @@ export class BrowserAuth {
 
     // Strategy 2: XSRF / page JS context
     const xsrfToken = await this.extractXsrfToken(page);
-    if (xsrfToken && (await this.validateToken(xsrfToken))) {
-      log("INFO", "Extracted valid XSRF token from page context");
-      return build(xsrfToken);
+    if (xsrfToken) {
+      const identity = await this.validateToken(xsrfToken);
+      if (identity) {
+        log("INFO", "Extracted valid XSRF token from page context");
+        return build(xsrfToken, identity);
+      }
+      log("WARN", "XSRF token failed validation, trying next strategy");
     }
-    if (xsrfToken) log("WARN", "XSRF token failed validation, trying next strategy");
 
     // Strategy 3: Cookie-based auth
     const cookieToken = await this.extractCookieToken(context);
-    if (cookieToken && (await this.validateToken(cookieToken))) {
-      log("INFO", "Extracted valid session cookie for API auth");
-      return build(cookieToken);
+    if (cookieToken) {
+      const identity = await this.validateToken(cookieToken);
+      if (identity) {
+        log("INFO", "Extracted valid session cookie for API auth");
+        return build(cookieToken, identity);
+      }
+      log("WARN", "Cookie token failed validation");
     }
-    if (cookieToken) log("WARN", "Cookie token failed validation");
 
     return null;
   }
 
   /**
    * Validate a token by making a test API call to /users/whoami.
-   * Returns true if the token is accepted by D2L, false otherwise.
+   * Returns the non-secret identity whoami reported when the token is
+   * accepted by D2L (an empty object if the response carried no usable
+   * name fields), or null when the token is rejected.
    */
-  private async validateToken(token: string): Promise<boolean> {
+  private async validateToken(token: string): Promise<WhoamiIdentity | null> {
     let response: Response;
     try {
       response = await fetch(`${this.config.baseUrl}/d2l/api/lp/1.45/users/whoami`, {
@@ -294,17 +324,23 @@ export class BrowserAuth {
     }
     if (response.ok) {
       const contentType = response.headers.get("content-type") ?? "";
-      if (!contentType.includes("json")) return false;
+      if (!contentType.includes("json")) return null;
       let user: unknown;
       try {
         user = await response.json();
       } catch (error) {
         throw new BrowserAuthTransportError("Token validation returned unreadable JSON.", { cause: error });
       }
-      const identifier = (user as { Identifier?: unknown } | null)?.Identifier;
-      return (typeof identifier === "string" && identifier.length > 0) || (typeof identifier === "number" && Number.isFinite(identifier));
+      const whoami = user as { Identifier?: unknown; UniqueName?: unknown; DisplayName?: unknown } | null;
+      const identifier = whoami?.Identifier;
+      const valid = (typeof identifier === "string" && identifier.length > 0) || (typeof identifier === "number" && Number.isFinite(identifier));
+      if (!valid) return null;
+      return {
+        ...(typeof whoami?.UniqueName === "string" && whoami.UniqueName ? { uniqueName: whoami.UniqueName } : {}),
+        ...(typeof whoami?.DisplayName === "string" && whoami.DisplayName ? { displayName: whoami.DisplayName } : {}),
+      };
     }
-    if (response.status === 401 || response.status === 403) return false;
+    if (response.status === 401 || response.status === 403) return null;
     throw new BrowserAuthTransportError(`Token validation temporarily failed with HTTP ${response.status}.`);
   }
 
@@ -541,7 +577,10 @@ export class BrowserAuth {
       return;
     }
 
-    if (!url.includes("login.microsoftonline.com")) return;
+    if (!url.includes("login.microsoftonline.com")) {
+      await this.ssoFlow.selectIdentityProvider?.(page);
+      return;
+    }
 
     // The page must PROVE it is the "Stay signed in?" page before this click:
     // #idSIButton9 is Microsoft's id for the primary button on EVERY sign-in

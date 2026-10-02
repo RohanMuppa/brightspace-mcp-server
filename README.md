@@ -6,7 +6,7 @@ Talk to your Brightspace courses with AI. Ask about grades, due dates, quizzes, 
 
 This is an [MCP (Model Context Protocol)](https://modelcontextprotocol.io) server that connects your AI to D2L Brightspace so it can pull your grades, assignments, syllabus, and course content on demand.
 
-Connects to D2L Brightspace. Automatic login supports Purdue's Microsoft Entra flow, SUNY campus selection, Western University, TU Delft NetID via SURFconext, and CUNY Login. Other schools need a compatible automated sign-in flow; unsupported login pages return an actionable error.
+Connects to D2L Brightspace. Automatic login supports Purdue's Microsoft Entra flow, SUNY campus selection, Western University, TU Delft NetID via SURFconext, CUNY Login, and Leiden University via SURFconext and Microsoft Entra. Other schools need a compatible automated sign-in flow; unsupported login pages return an actionable error.
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/RohanMuppa/brightspace-mcp-server/main/docs/how-it-works.svg" alt="Architecture diagram" width="100%">
@@ -28,7 +28,7 @@ Paste this into Claude Code, Cursor, Windsurf, Copilot, Codex, or any AI coding 
 ```
 Install brightspace-mcp-server for me by following
 https://github.com/RohanMuppa/brightspace-mcp-server/blob/main/LLMs.md
-(use --purdue at Purdue, --suny at SUNY, --tudelft at TU Delft, or --cuny at CUNY).
+(use --purdue at Purdue, --suny at SUNY, --tudelft at TU Delft, --cuny at CUNY, or --leiden at Leiden).
 ```
 
 **Option 2: Run it yourself**
@@ -68,6 +68,14 @@ every full sign-in, so when your Brightspace session ends, run
 npx -y brightspace-mcp-server@latest setup --cuny
 ```
 
+Leiden University students can use `--leiden`:
+
+```bash
+npx -y brightspace-mcp-server@latest setup --leiden
+```
+
+Sign in with your full Microsoft address (for example `s1234567@vuw.leidenuniv.nl`). The flow picks Leiden University (Entra) on SURFconext's account page, then uses the same Microsoft sign-in as Purdue. Leiden normally asks for a code from your authenticator app, which `auth` prompts for in the terminal.
+
 The wizard saves your password in the native credential store and asks how you'll complete MFA: wait for approval or number matching, enter a terminal code from Google Authenticator or another app, or use a visible browser for other interactive methods. It can also configure Claude Desktop, Cursor, Codex Desktop and CLI, and Claude Code when installed — restart your AI client when it finishes.
 
 Any other D2L school: run `setup` without a flag and paste your Brightspace URL (for example `https://yourschool.brightspace.com`).
@@ -103,6 +111,10 @@ Claude Desktop uses a separate configuration, which the setup wizard can update 
 
 </details>
 
+Building against this server or opening a PR? See [STABILITY.md](STABILITY.md) for what's safe to rely on and what counts as a breaking change.
+
+**Running from a source checkout or fork?** When a newer release is published, the server tells a source checkout to `git pull` and `npm run build` rather than to install the npm package. For a fork you maintain, set `D2L_NO_UPDATE_CHECK=1` in the server's environment to turn off upstream update notices.
+
 ## Session Expired?
 
 There's no login step — asking a question signs you in.
@@ -119,6 +131,35 @@ npx -y brightspace-mcp-server@latest auth
 
 Run it from your home folder — macOS blocks `npx` from Documents, Desktop, or Downloads without Files and Folders permission (`EPERM`). Grant access in System Settings → Privacy & Security → Files and Folders, or run elsewhere.
 
+## No browser? Paste a session cookie or token
+
+The normal setup drives a real (usually hidden) browser through sign-in, which doesn't work in Docker, headless Linux, WSL without a display, or on a tenant whose MFA requires a hardware security key. Two environment variables skip the browser entirely; set one and leave the normal setup untouched:
+
+- **`D2L_SESSION_COOKIE`** — the `d2lSessionVal` and `d2lSecureSessionVal` cookies from a browser tab where you're already signed in to Brightspace. In Chrome DevTools: open your Brightspace site, **F12 → Application → Cookies**, find `d2lSessionVal` and `d2lSecureSessionVal`, and set the variable to either form:
+  ```bash
+  export D2L_SESSION_COOKIE="d2lSessionVal=<value>; d2lSecureSessionVal=<value>"
+  # or just the two values, in that order:
+  export D2L_SESSION_COOKIE="<d2lSessionVal>;<d2lSecureSessionVal>"
+  ```
+- **`D2L_ACCESS_TOKEN`** — a pre-issued Bearer token (an admin-issued Valence token, or one minted by a TA script):
+  ```bash
+  export D2L_ACCESS_TOKEN="<token>"
+  ```
+
+Set either in your MCP client's `env` config instead of a shell export if you're not running the server from a terminal. If both are set, `D2L_ACCESS_TOKEN` wins.
+
+If this is a Docker or other headless setup with no `~/.brightspace-mcp/config.json` on disk, also set **`D2L_BASE_URL`** to your school's Brightspace URL — with no config file to read it from, the server otherwise defaults to Purdue's.
+
+**The catch:** neither one renews itself. A pasted session cookie dies at D2L's own idle timeout (the same timeout that would eventually log you out in a browser), and a pre-issued token dies whenever it expires or is revoked. When that happens the server does **not** fall back to a browser login — it answers with an error telling you to paste a fresh value. There's no in-between: this is a deliberate escape hatch for environments that can't run a browser at all, not a way to skip typing your password once.
+
+## Troubleshooting
+
+**Where to find logs:** MCP clients log the server's stderr themselves. On **macOS**, Claude Desktop writes to `~/Library/Logs/Claude/mcp*.log` (one file per server, plus `mcp.log` for the client itself). On **Windows**, it's `%APPDATA%\Claude\logs`. Other clients vary — check their own logs or output panel for the `brightspace-mcp-server` process.
+
+**Works in a terminal but not in the client:** the client launches the server as its own subprocess, which doesn't inherit your shell's environment. Common causes: the native credential store is locked (a GUI app started before you unlocked your keyring or logged into macOS won't get a Keychain prompt the way a terminal does), `HOME` or `PATH` differ for GUI-launched processes versus your shell, or `npx` resolves a different cached version than the one on your `PATH`. To check, run the exact registered command (`npx -y brightspace-mcp-server@latest`, or `cmd /c npx -y brightspace-mcp-server@latest` on Windows) from a fresh terminal with no extra environment set, and compare.
+
+**Which version am I running:** ask the assistant anything that calls `get_server_info` — it reports the running version, Node runtime, and config/session paths with no network call. If you're on a source checkout instead of the published npm package, that version comes from the local `build/` output, so it only reflects your latest `npm run build`, not what's on npm.
+
 ## What You Can Ask About
 
 | Topic | Examples |
@@ -134,13 +175,29 @@ Run it from your home folder — macOS blocks `npx` from Documents, Desktop, or 
 | Groups | "Who is in my project group?" · "List my lab group members for this course" |
 | Discussions | "What are people saying in the final project thread?" · "Summarize the latest discussion posts" |
 | Video transcripts | "What did the professor say about pinch-off in Tuesday's lecture recording?" · "Summarize last week's BoilerCast video" — works for Kaltura and YouTube embeds; other platforms report that they aren't supported yet |
-| Troubleshooting | "Which version of the Brightspace server am I running?" · "Where is my Brightspace config file?" — `get_server_info` reports the version, Node runtime, platform, config and session paths, school URL, whether a credential is stored, and what Microsoft remembered (`microsoftSession`: stay-signed-in and its expiry, plus whether "Don't ask again" was ticked, already on, not offered, or left off because `D2L_REMEMBER_MFA` isn't set), without contacting Brightspace or revealing secrets |
+| Troubleshooting | "Which version of the Brightspace server am I running?" · "Where is my Brightspace config file?" · "What timezone are my due dates being computed in?" — `get_server_info` reports the version, Node runtime, platform, config and session paths, school URL, whether a credential is stored, the server's local timezone and UTC offset (`localTimezone`, `utcOffsetMinutes`), who the session is signed in as when known (`signedInAs: { uniqueName, displayName }`), what Microsoft remembered (`microsoftSession`: stay-signed-in and its expiry, plus whether "Don't ask again" was ticked, already on, not offered, or left off because `D2L_REMEMBER_MFA` isn't set), and `requests` (lightweight counters: responses by status class, network errors, cache hits/misses, coalesced in-flight joins, and token refreshes), without contacting Brightspace or revealing secrets |
 | Calendar | "When is my midterm?" · "What's on my calendar this week?" · "Is lab cancelled on Thursday?" — reads exams, labs, review sessions, and deadlines instructors put only on the course calendar |
 | Planning | "Build me a study schedule based on my upcoming due dates" · "Which class needs the most attention right now?" — pulls from assignments, quizzes, graded discussion topics (any topic with a due date), and course calendar events such as exams and labs |
+
+### Prompts
+
+Clients that show server-provided prompts (e.g. Claude Desktop's prompt picker) can also start from one of
+four canned prompts instead of typing a question from scratch:
+
+| Prompt | Arguments | What it asks for |
+|--------|-----------|-------------------|
+| `weekly_briefing` | — | A 7-day rollup of what's due, what's new, and what's changed in grades, across every course |
+| `grade_audit` | `courseId` (optional) | Analyzes grades for one course, or all of them, and flags missing or low-scoring items |
+| `study_planner` | `daysAhead` (optional, default 7) | Plans study time from upcoming due dates and calendar events |
+| `course_summary` | `courseId` (required) | Syllabus, content outline, assignments, and grades for one course |
+
+Each prompt is a single starter message built from the tools above — it doesn't add any new capability on
+its own, just a one-click way to ask for a common combination of them.
 
 `get_course_content` reports `isAvailable`, `availabilityStatus` (`available`, `not_yet_open`, `ended`, `hidden`, or `locked`), `availabilityMessage`, `startDate`, and `endDate` for modules and topics. The effective release window includes restrictions inherited from enclosing modules.
 
 When a content-file download returns 403 or 404, `download_file` checks topic metadata and the course table of contents. Confirmed restrictions return `{ success: false, available: false, reason, message, startDate, endDate }` so the assistant can explain when content opens or why it has closed. Unexplained 404s and server/network failures retain their original errors.
 
+When course content or announcements are converted to markdown, `javascript:`/`data:` links are rendered as plain text (the link itself is dropped, not followed) and D2L's per-session query parameters (`d2lSessionVal`, `d2lSecureSessionVal`, and the cache-busting `_`) are stripped from any remaining links and images before they reach the assistant.
 
 Licensed under the MIT License.

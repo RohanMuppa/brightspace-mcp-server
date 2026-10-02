@@ -53,9 +53,40 @@ export interface D2LApiClientOptions {
   timeoutMs?: number; // default 30_000
   /** Called when auth is expired and retries are exhausted. Return true if re-auth succeeded. */
   onAuthExpired?: () => Promise<boolean>;
+  /**
+   * Overrides the generic "Session expired" message thrown when no
+   * onAuthExpired is configured (or it fails to produce a usable token).
+   * Set this for D2L_SESSION_COOKIE / D2L_ACCESS_TOKEN, where there is no
+   * browser to relaunch and the fix is to paste a fresh credential instead.
+   */
+  authExpiredMessage?: string;
   /** Backoff for 429, 5xx, and network failures. See retry.ts for defaults. */
   retry?: RetryConfig;
 }
 
 // Re-export TokenData from shared types for convenience
 export type { TokenData };
+
+/**
+ * Counters read by get_server_info and whatever else wants a cheap sense of
+ * what the client has been doing. Never carries a URL, username, or token —
+ * every field is a count. statusClasses groups by the outcomes tools and
+ * support threads actually ask about; "other" catches any status outside
+ * that list (e.g. 400) rather than dropping it silently.
+ */
+export interface ClientStats {
+  statusClasses: {
+    "2xx": number;
+    "401": number;
+    "403": number;
+    "404": number;
+    "429": number;
+    "5xx": number;
+    other: number;
+  };
+  networkErrors: number;
+  cacheHits: number;
+  cacheMisses: number;
+  coalescedJoins: number;
+  tokenRefreshes: number;
+}
