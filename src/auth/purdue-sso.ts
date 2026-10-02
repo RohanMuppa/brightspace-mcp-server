@@ -30,6 +30,9 @@ const FIELD_POLL_MS = 250;
 const NUMBER_MATCH_SELECTOR = "#idRichContext_DisplaySign";
 const MFA_CODE_SELECTORS = ["#idTxtBx_SAOTCC_OTC", 'input[name="otc"]'];
 const MFA_CODE_SUBMIT_SELECTORS = ["#idSubmit_SAOTCC_Continue", "#idSIButton9"];
+// Entra rejects a wrong code in place: the field stays and this message appears.
+const MFA_CODE_ERROR_SELECTOR = "#idSpan_SAOTCC_Error_OTC";
+const MAX_MFA_CODE_ATTEMPTS = 3;
 
 /**
  * Entra's "Don't ask again for N days" checkbox: the number-match page's id
@@ -135,8 +138,15 @@ function signInName(username: string, baseUrl?: string): string {
 export class PurdueSSOFlow {
   private config: PurdueSSOConfig;
   private accountHintSubmitted = false;
-  /** One authenticator code per login. See submitMfaCode. */
-  private mfaCodeSubmitted = false;
+  /** Authenticator codes asked for during this login. See submitMfaCode. */
+  private mfaCodeAttempts = 0;
+  /**
+   * True for exactly one poll after a code is resubmitted in response to a
+   * rejection. Entra's rejection span can still be in the DOM on that very
+   * next poll - it hasn't re-rendered yet, so what's on screen is still the
+   * PREVIOUS attempt's verdict, not this one's. See submitMfaCode.
+   */
+  private awaitingMfaCodeSettle = false;
   /** Set once per login, the first time Entra's MFA page is handled. */
   private rememberMfa: RememberMfaResult | undefined;
   private readonly duoMfa: DuoMfaHandler;
@@ -498,19 +508,38 @@ export class PurdueSSOFlow {
     const input = await this.firstVisible(page, MFA_CODE_SELECTORS);
     if (!input) return false;
     if (this.config.headless === false) return false;
-    // Ask once per login. This runs on every two-second poll, and Microsoft
-    // commonly leaves the field on screen while it validates, so without this
-    // a correct code gets a second prompt on the next tick. That prompt blocks
-    // on stdin, and the deadline is only checked between iterations, so the
-    // five-minute budget can never fire while parked there.
-    if (this.mfaCodeSubmitted) return false;
+    // Ask again only after Entra's rejection message. This runs on every
+    // two-second poll, and Microsoft commonly leaves the field on screen while
+    // it validates, so a lingering field alone would give a correct code a
+    // second prompt on the next tick. That prompt blocks on stdin, and the
+    // deadline is only checked between iterations, so the five-minute budget
+    // can never fire while parked there.
+    const isRetry = this.mfaCodeAttempts > 0;
+    if (isRetry) {
+      // The rejection span can still be the stale one from the attempt we
+      // just resubmitted in reaction to - Entra hasn't re-rendered yet, so
+      // this poll can't tell that span apart from a genuine rejection of the
+      // new attempt. Give it exactly one more poll (like cuny-sso.ts requiring
+      // the URL to change before trusting its own error state) before trusting
+      // the span again.
+      if (this.awaitingMfaCodeSettle) {
+        this.awaitingMfaCodeSettle = false;
+        return false;
+      }
+      if (!await page.locator(MFA_CODE_ERROR_SELECTOR).first().isVisible().catch(() => false)) return false;
+      if (this.mfaCodeAttempts >= MAX_MFA_CODE_ATTEMPTS) {
+        throw new BrowserAuthError(`Microsoft rejected ${this.mfaCodeAttempts} authenticator codes. Run \`${AUTH_COMMAND}\` to try again.`, "mfa_code");
+      }
+      log("WARN", "Microsoft rejected that code. Enter the current one from your authenticator app.");
+    }
     if (!this.config.requestMfaCode) {
       throw new UnsupportedAuthenticationError(
         `This MFA method requires a code. Run \`${AUTH_COMMAND}\` in a terminal to enter it.`,
       );
     }
     await this.rememberMfaDevice(page);
-    this.mfaCodeSubmitted = true;
+    this.mfaCodeAttempts += 1;
+    this.awaitingMfaCodeSettle = isRetry;
     const code = await this.config.requestMfaCode();
     if (!/^\d{6,8}$/.test(code)) throw new UnsupportedAuthenticationError("The MFA code must contain 6-8 digits.");
     await input.fill(code);

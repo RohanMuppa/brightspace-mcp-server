@@ -436,4 +436,119 @@ describe("get_assignments across all courses", () => {
     await call({});
     expect(requested[0]).toContain("isActive=true");
   });
+
+  it("still returns the other courses when one course fails for a non-auth reason", async () => {
+    const { call } = setupTool((path) => {
+      if (path.includes("/enrollments/")) {
+        return { Items: [enrollmentItem(COURSE_A), enrollmentItem(COURSE_B)] };
+      }
+      // A malformed dropbox payload makes this course's fetch throw a TypeError.
+      if (path.endsWith(`/le/1.0/${COURSE_B.Id}/dropbox/folders/`)) return null;
+      return courseWork(path);
+    }, allCoursesConfig(true));
+
+    const result = await call({});
+
+    expect(result.isError).toBeUndefined();
+    expect(body(result).courses.map((c: any) => c.courseId)).toEqual([COURSE_A.Id]);
+  });
+});
+
+/**
+ * A sign-in that has not finished is not an empty course. Every route below
+ * get_assignments swallows its own failures so one forbidden endpoint cannot
+ * hide the rest, but an authentication failure means none of them answered.
+ * CLAUDE.md forbids turning a previously successful `{assignments: []}`
+ * response into an error, so the tool keeps the success envelope and adds an
+ * explicit authPending/notice pair a caller can check instead.
+ */
+
+import { AuthProcessError } from "../../src/auth/auth-runner.js";
+import { ApiError } from "../../src/api/errors.js";
+
+const mfaPending = () => new AuthProcessError("mfaPending", "MFA approval pending");
+
+describe("get_assignments while sign-in is pending", () => {
+  it("reports authPending for a single course instead of an empty list read as success", async () => {
+    const { call } = setupTool(() => {
+      throw mfaPending();
+    }, allCoursesConfig(true));
+
+    const result = await call({ courseId: COURSE_A.Id });
+
+    expect(result.isError).toBeUndefined();
+    const parsed = body(result);
+    expect(parsed).toMatchObject({ courseId: COURSE_A.Id, assignments: [], authPending: true });
+    expect(parsed.notice).toContain("Approve the sign-in request");
+  });
+
+  it("reports authPending across all courses when the course routes cannot sign in", async () => {
+    // Enrollments answer from cache, the course routes need a live session.
+    const { call } = setupTool((path) => {
+      if (path.includes("/enrollments/")) return { Items: [enrollmentItem(COURSE_A)] };
+      throw mfaPending();
+    }, allCoursesConfig(true));
+
+    const result = await call({});
+
+    expect(result.isError).toBeUndefined();
+    const parsed = body(result);
+    expect(parsed.authPending).toBe(true);
+    expect(parsed.unavailableCourseIds).toEqual([COURSE_A.Id]);
+    expect(parsed.notice).toContain("Approve the sign-in request");
+    expect(parsed.courses).toEqual([
+      { courseId: COURSE_A.Id, courseName: COURSE_A.Name, assignments: [], authPending: true },
+    ]);
+  });
+
+  it("reports authPending when only the dropbox route is rejected with 401", async () => {
+    const { call } = setupTool((path) => {
+      if (path.endsWith("/dropbox/folders/")) throw new ApiError(401, path, "expired");
+      return courseWork(path);
+    }, allCoursesConfig(true));
+
+    const result = await call({ courseId: COURSE_A.Id });
+
+    expect(result.isError).toBeUndefined();
+    const parsed = body(result);
+    expect(parsed).toMatchObject({ courseId: COURSE_A.Id, assignments: [], authPending: true });
+    expect(parsed.notice).toContain("Authentication expired");
+  });
+
+  it("reports authPending rather than reporting an assignment as unsubmitted", async () => {
+    const { call } = setupTool((path) => {
+      if (path.includes("/mysubmissions/")) throw mfaPending();
+      return courseWork(path);
+    }, allCoursesConfig(true));
+
+    const result = await call({ courseId: COURSE_A.Id });
+
+    expect(result.isError).toBeUndefined();
+    const parsed = body(result);
+    expect(parsed.authPending).toBe(true);
+  });
+
+  it("keeps the courses that answered when only one course's sign-in is pending", async () => {
+    const { call } = setupTool((path) => {
+      if (path.includes("/enrollments/")) {
+        return { Items: [enrollmentItem(COURSE_A), enrollmentItem(COURSE_B)] };
+      }
+      if (path.includes(`/le/1.0/${COURSE_B.Id}/`)) throw mfaPending();
+      return courseWork(path);
+    }, allCoursesConfig(true));
+
+    const result = await call({});
+
+    expect(result.isError).toBeUndefined();
+    const parsed = body(result);
+    expect(parsed.authPending).toBe(true);
+    expect(parsed.unavailableCourseIds).toEqual([COURSE_B.Id]);
+
+    const answered = parsed.courses.find((c: any) => c.courseId === COURSE_A.Id);
+    expect(answered.assignments).toHaveLength(1);
+    expect(answered.authPending).toBeUndefined();
+
+    const pending = parsed.courses.find((c: any) => c.courseId === COURSE_B.Id);
+    expect(pending).toEqual({ courseId: COURSE_B.Id, courseName: COURSE_B.Name, assignments: [], authPending: true });
+  });
 });

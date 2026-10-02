@@ -25,7 +25,16 @@ const config = (overrides: Partial<AppConfig> = {}): AppConfig => ({
   ...overrides,
 });
 
-function setup(appConfig: AppConfig, version = "9.8.7") {
+const STATS = {
+  statusClasses: { "2xx": 0, "401": 0, "403": 0, "404": 0, "429": 0, "5xx": 0, other: 0 },
+  networkErrors: 0,
+  cacheHits: 0,
+  cacheMisses: 0,
+  coalescedJoins: 0,
+  tokenRefreshes: 0,
+};
+
+function setup(appConfig: AppConfig, version = "9.8.7", stats: typeof STATS = STATS) {
   let name = "";
   let handler: (args: unknown) => Promise<any>;
   const server = {
@@ -34,12 +43,13 @@ function setup(appConfig: AppConfig, version = "9.8.7") {
       handler = fn;
     },
   };
-  registerGetServerInfo(server as any, appConfig, version);
+  const apiClient = { stats: () => stats };
+  registerGetServerInfo(server as any, appConfig, version, apiClient as any);
   return { name: () => name, call: () => handler!({}) };
 }
 
-const payload = async (appConfig: AppConfig, version?: string) =>
-  JSON.parse((await setup(appConfig, version).call()).content[0].text);
+const payload = async (appConfig: AppConfig, version?: string, stats?: typeof STATS) =>
+  JSON.parse((await setup(appConfig, version, stats).call()).content[0].text);
 
 describe("get_server_info", () => {
   it("registers under the name get_server_info", () => {
@@ -48,8 +58,20 @@ describe("get_server_info", () => {
 
   it("returns exactly the documented fields", async () => {
     expect(Object.keys(await payload(config())).sort()).toEqual(
-      ["arch", "configPath", "hasStoredCredential", "node", "platform", "schoolUrl", "sessionStatePath", "version"],
+      ["arch", "configPath", "hasStoredCredential", "node", "platform", "requests", "schoolUrl", "sessionStatePath", "version"],
     );
+  });
+
+  it("carries the client's request counters under requests", async () => {
+    const stats = {
+      statusClasses: { "2xx": 3, "401": 1, "403": 0, "404": 0, "429": 0, "5xx": 0, other: 0 },
+      networkErrors: 2,
+      cacheHits: 5,
+      cacheMisses: 1,
+      coalescedJoins: 4,
+      tokenRefreshes: 1,
+    };
+    expect((await payload(config(), undefined, stats)).requests).toEqual(stats);
   });
 
   it("reports the version the server was started with", async () => {

@@ -1,0 +1,22 @@
+title = "gitleaks config for brightspace-mcp-server"
+
+[extend]
+useDefault = true
+
+# Could not run `gitleaks detect` locally to pick exact fixture values to
+# allowlist (this checkout is macOS 12/Intel; `brew install gitleaks` has no
+# bottle for it and building it — and its Go toolchain dependency — from
+# source was impractical in this session). tests/ is full of fake
+# credentials that read like secrets to a regex scanner (e.g.
+# `dummy-bearer-secret`, `hunter2-secret`, `fixture-access-token`,
+# `stale-cookie`) — see tests/auth/secure-store-fixtures.ts,
+# tests/tools/get-server-info.test.ts, and tests/auth/browser-live.test.ts.
+# None of it is real: it never leaves the test process, there is no live
+# tenant behind it, and src/ carries no such allowlist. Run
+# `gitleaks detect --no-git -v` locally on a current OS and narrow this to
+# specific regexes once the false positives are known.
+[allowlist]
+description = "Fixture credentials used only in tests/, never real secrets"
+paths = [
+  '''tests/.*''',
+]

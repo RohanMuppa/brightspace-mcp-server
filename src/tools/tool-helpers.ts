@@ -133,6 +133,42 @@ const DOWNLOAD_FAILURE_GUIDANCE: Record<DownloadFailureKind, string> = {
 };
 
 /**
+ * True when an error means the session itself is unusable, not that one
+ * resource refused: a sign-in that failed or is still waiting on MFA, a 401
+ * left over after re-authentication, or a token that could not be renewed.
+ * Tools that tolerate per-route failures must not tolerate these, or a pending
+ * sign-in reads as a successful empty result.
+ */
+export function isAuthUnavailable(error: unknown): boolean {
+  return error instanceof AuthProcessError ||
+    error instanceof TokenRefreshError ||
+    (error instanceof ApiError && error.status === 401);
+}
+
+/**
+ * Guidance for a tool that returned a *successful* envelope anyway, because
+ * the sign-in blocking one or more of its routes is still being worked on in
+ * the background (see isAuthUnavailable). Reuses the same per-kind wording
+ * sanitizeError gives an AuthProcessError — including the dynamic MFA number,
+ * when one is known — so a caller sees identical instructions whether the
+ * tool reported isError or not; only the framing differs. Only call this once
+ * isAuthUnavailable(error) is true; it has no fallback for other errors.
+ */
+export function authPendingNotice(error: unknown): string {
+  if (error instanceof AuthProcessError) {
+    return authFailureMessage(error);
+  }
+  if (error instanceof TokenRefreshError) {
+    return "Brightspace could not renew your session right now. Your saved login was kept. " +
+      "Try again in a few minutes.";
+  }
+  // The remaining isAuthUnavailable case: a 401 ApiError left over after
+  // automatic re-authentication was attempted and failed.
+  return "Authentication expired. Auto-reauthentication was attempted but failed. " +
+    `Please run \`${AUTH_COMMAND}\` in your terminal, then try again.`;
+}
+
+/**
  * Sanitize errors for user-friendly messages
  *
  * SECURITY: Never include stack traces, raw API responses, or token values

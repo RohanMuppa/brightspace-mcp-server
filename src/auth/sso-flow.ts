@@ -11,6 +11,7 @@ import { SunySSOFlow, isSunyBrightspace } from "./suny-sso.js";
 import { WesternSSOFlow, isWesternBrightspace } from "./western-sso.js";
 import { TUDelftSSOFlow, isTUDelftBrightspace } from "./tudelft-sso.js";
 import { CunySSOFlow, isCunyBrightspace } from "./cuny-sso.js";
+import { LeidenSSOFlow, isLeidenBrightspace } from "./leiden-sso.js";
 import { BrowserAuthError } from "../utils/errors.js";
 import type { RememberMfaResult } from "./microsoft-session.js";
 import { AUTH_COMMAND } from "../utils/commands.js";
@@ -50,6 +51,8 @@ export class MfaApprovalError extends BrowserAuthError {
 export interface SSOFlow {
   /** Pass known school and campus selectors without entering credentials. */
   prepareLogin?(page: Page): Promise<void>;
+  /** Answer a federation's account picker (e.g. SURFconext) before the identity provider. */
+  selectIdentityProvider?(page: Page): Promise<void>;
   /** Submit only the public account name so a saved IdP session can resume. */
   identifyAccount?(page: Page): Promise<boolean>;
   /** True when saved credentials allow an automated sign-in attempt. */
@@ -79,6 +82,10 @@ export function createSSOFlow(config: AppConfig, requestMfaCode?: RequestMfaCode
 
   if (isTUDelftBrightspace(config.baseUrl)) {
     return new TUDelftSSOFlow(credentials);
+  }
+
+  if (isLeidenBrightspace(config.baseUrl)) {
+    return new LeidenSSOFlow(credentials);
   }
 
   if (isSunyBrightspace(config.baseUrl)) {
