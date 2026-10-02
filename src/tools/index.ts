@@ -25,6 +25,14 @@ export { registerGetVideoTranscript } from "./get-video-transcript.js";
 export { registerGetServerInfo } from "./get-server-info.js";
 export { registerSearchCourse } from "./search-course.js";
 
+// Instructor / TA dropbox tools (read-only)
+export { registerGetDropboxFolders } from "./get-dropbox-folders.js";
+export { registerGetDropboxSubmissions } from "./get-dropbox-submissions.js";
+export { registerGetDropboxUserSubmissions } from "./get-dropbox-user-submissions.js";
+export { registerGetDropboxFeedback } from "./get-dropbox-feedback.js";
+export { registerGetRubricsForObject } from "./get-rubrics-for-object.js";
+export { registerDownloadDropboxSubmissionFile } from "./download-dropbox-submission-file.js";
+
 // Re-export shared helpers and schemas for convenience
 export { toolResponse, errorResponse, sanitizeError } from "./tool-helpers.js";
 export * from "./schemas.js";

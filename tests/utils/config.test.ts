@@ -9,6 +9,7 @@ vi.mock("dotenv", () => ({ default: { config: fake.dotenv } }));
 vi.mock("../../src/utils/config-store.js", () => ({
   configStoreExists: () => fake.store !== null,
   loadConfigStore: () => fake.store,
+  getConfigStorePath: () => "/fake/config.json",
 }));
 vi.mock("../../src/utils/secure-config.js", () => ({ resolveStoredPassword: fake.password }));
 vi.mock("../../src/auth/legacy-state.js", () => ({ migrateLegacyState: fake.migrate }));

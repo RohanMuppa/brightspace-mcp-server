@@ -28,6 +28,7 @@ const { TUDelftSSOFlow } = await import("../../src/auth/tudelft-sso.js");
 const { LeidenSSOFlow } = await import("../../src/auth/leiden-sso.js");
 const { WesternSSOFlow } = await import("../../src/auth/western-sso.js");
 const { CunySSOFlow } = await import("../../src/auth/cuny-sso.js");
+const { JaverianaSSOFlow } = await import("../../src/auth/javeriana-sso.js");
 const { PurdueSSOFlow } = await import("../../src/auth/purdue-sso.js");
 type AppConfig = import("../../src/types/index.js").AppConfig;
 
@@ -79,6 +80,7 @@ describe("school presets", () => {
     expect(flowFor(SCHOOL_PRESETS.leiden.baseUrl)).toBeInstanceOf(LeidenSSOFlow);
     expect(flowFor(SCHOOL_PRESETS.western.baseUrl)).toBeInstanceOf(WesternSSOFlow);
     expect(flowFor(SCHOOL_PRESETS.cuny.baseUrl)).toBeInstanceOf(CunySSOFlow);
+    expect(flowFor(SCHOOL_PRESETS.javeriana.baseUrl)).toBeInstanceOf(JaverianaSSOFlow);
     expect(flowFor(SCHOOL_PRESETS.suny.baseUrl)).toBeInstanceOf(SunySSOFlow);
     expect(flowFor(SCHOOL_PRESETS.purdue.baseUrl)).toBeInstanceOf(PurdueSSOFlow);
   });
@@ -87,6 +89,7 @@ describe("school presets", () => {
     expect(SCHOOL_PRESETS.suny.campusPrompt).toBeTruthy();
     expect(SCHOOL_PRESETS.western.campusPrompt).toBeUndefined();
     expect(SCHOOL_PRESETS.cuny.campusPrompt).toBeUndefined();
+    expect(SCHOOL_PRESETS.javeriana.campusPrompt).toBeUndefined();
     expect(SCHOOL_PRESETS.purdue.campusPrompt).toBeUndefined();
   });
 });
