@@ -10,9 +10,16 @@ import { fetchAllItems } from "../api/paginate.js";
 import {
   GetMyGradesSchema,
 } from "./schemas.js";
-import { toolResponse, sanitizeError, isAuthUnavailable, authPendingNotice } from "./tool-helpers.js";
+import {
+  toolResponse,
+  sanitizeError,
+  errorResponse,
+  isAuthUnavailable,
+  authPendingNotice,
+} from "./tool-helpers.js";
 import { log } from "../utils/logger.js";
 import { applyCourseFilter } from "../utils/course-filter.js";
+import { gradebookUrl } from "../utils/deep-links.js";
 import type { AppConfig } from "../types/index.js";
 
 interface GradeValue {
@@ -68,27 +75,27 @@ export function registerGetMyGrades(
 
         // Single course case
         if (courseId) {
+          const path = apiClient.le(courseId, "/grades/values/myGradeValues/");
+          let gradeValues: GradeValue[];
           try {
-            const path = apiClient.le(courseId, "/grades/values/myGradeValues/");
-            const gradeValues = await apiClient.get<GradeValue[]>(path, {
+            gradeValues = await apiClient.get<GradeValue[]>(path, {
               ttl: DEFAULT_CACHE_TTLS.grades,
             });
-
-            // Map to clean objects
-            const grades = gradeValues.map((gv) => ({
-              name: gv.GradeObjectName,
-              displayGrade: gv.DisplayedGrade,
-              pointsNumerator: gv.PointsNumerator,
-              pointsDenominator: gv.PointsDenominator,
-              weightedNumerator: gv.WeightedNumerator,
-              weightedDenominator: gv.WeightedDenominator,
-              comments: gv.Comments?.Text || null,
-              lastModified: gv.LastModified,
-            }));
-
-            log("INFO", `get_my_grades: Retrieved ${grades.length} grade items for course ${courseId}`);
-            return toolResponse({ courseId, grades });
-          } catch (error) {
+          } catch (error: any) {
+            // A 403 here means the tenant restricts the grade API for this
+            // course (an institutional policy, not a bug). The error shape
+            // stays the same plain isError text result every other tool
+            // error uses -- only the text itself changes, naming the
+            // gradebook URL so the student can see their grade there
+            // instead.
+            if (error?.status === 403) {
+              const url = gradebookUrl(config.baseUrl, courseId);
+              log("INFO", `get_my_grades: 403 for course ${courseId} - grade API access restricted`);
+              return errorResponse(
+                "Your institution restricts grade API access for this course. " +
+                `View your grades directly in Brightspace: ${url}`
+              );
+            }
             // A pending sign-in is not an empty gradebook: the route never
             // answered, so the result says so instead of reporting zero grades
             // as if that were a real measurement. The envelope stays a
@@ -109,6 +116,21 @@ export function registerGetMyGrades(
             }
             throw error;
           }
+
+          // Map to clean objects
+          const grades = gradeValues.map((gv) => ({
+            name: gv.GradeObjectName,
+            displayGrade: gv.DisplayedGrade,
+            pointsNumerator: gv.PointsNumerator,
+            pointsDenominator: gv.PointsDenominator,
+            weightedNumerator: gv.WeightedNumerator,
+            weightedDenominator: gv.WeightedDenominator,
+            comments: gv.Comments?.Text || null,
+            lastModified: gv.LastModified,
+          }));
+
+          log("INFO", `get_my_grades: Retrieved ${grades.length} grade items for course ${courseId}`);
+          return toolResponse({ courseId, grades });
         }
 
         // All courses case
@@ -163,18 +185,28 @@ export function registerGetMyGrades(
             }));
 
             return {
+              restricted: false as const,
               courseId: item.OrgUnit.Id,
               courseName: item.OrgUnit.Name,
               grades,
             };
           } catch (error: any) {
-            // 403 means no access (past course, etc) - log and skip
+            // A 403 means the tenant restricts the grade API for this course
+            // (an institutional policy, not missing access like a dropped
+            // past course). Rather than dropping the course with no trace,
+            // it is surfaced in a separate, purely additive
+            // `restrictedCourses` array; `courses` itself is unaffected.
             if (error?.status === 403) {
               log(
                 "DEBUG",
-                `get_my_grades: 403 Forbidden for course ${item.OrgUnit.Id} (${item.OrgUnit.Name}) - skipping`
+                `get_my_grades: 403 Forbidden for course ${item.OrgUnit.Id} (${item.OrgUnit.Name}) - grade API access restricted`
               );
-              return null;
+              return {
+                restricted: true as const,
+                courseId: item.OrgUnit.Id,
+                courseName: item.OrgUnit.Name,
+                gradeUrl: gradebookUrl(config.baseUrl, item.OrgUnit.Id),
+              };
             }
             // A pending sign-in only means this course's route never
             // answered — it says nothing about the other courses, whose
@@ -199,26 +231,28 @@ export function registerGetMyGrades(
 
         const results = await Promise.allSettled(gradePromises);
         const settled = results
-          .filter(
-            (r): r is PromiseFulfilledResult<any> =>
-              r.status === "fulfilled" && r.value !== null
-          )
+          .filter((r): r is PromiseFulfilledResult<any> => r.status === "fulfilled")
           .map((r) => r.value);
 
         const pending = settled.filter((c) => c.authPending);
+        const restrictedCourses = settled
+          .filter((c) => c.restricted)
+          .map(({ restricted: _restricted, ...rest }) => rest);
         const courses = settled
-          .filter((c) => !c.authPending)
+          .filter((c) => !c.authPending && !c.restricted)
           .map(({ courseId, courseName, grades }) => ({ courseId, courseName, grades }));
 
         log(
           "INFO",
-          `get_my_grades: Retrieved grades for ${courses.length} courses ` +
-          `(out of ${enrollmentItems.length} enrolled${pending.length > 0 ? `, ${pending.length} pending sign-in` : ""})`
+          `get_my_grades: Retrieved grades for ${courses.length} courses, ` +
+          `${restrictedCourses.length} restricted (out of ${enrollmentItems.length} enrolled` +
+          `${pending.length > 0 ? `, ${pending.length} pending sign-in` : ""})`
         );
 
         // Pending courses keep `grades: []` so callers that read
         // `courses[i].grades` still get an array; authPending marks it as
-        // unchecked rather than empty.
+        // unchecked rather than empty. `restrictedCourses` is always present
+        // (even empty) so callers can rely on the field existing.
         const response: Record<string, unknown> = {
           courses: [
             ...courses,
@@ -229,6 +263,7 @@ export function registerGetMyGrades(
               authPending: true as const,
             })),
           ],
+          restrictedCourses,
         };
         if (pending.length > 0) {
           response.authPending = true;

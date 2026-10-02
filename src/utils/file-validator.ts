@@ -91,6 +91,11 @@ export const ALLOWED_MIME_TYPES: string[] = [
   // Archives
   "application/zip",
   "application/x-zip-compressed",
+  "application/x-7z-compressed",
+  "application/gzip",
+  "application/x-gzip",
+  "application/x-tar",
+  "application/x-bzip2",
   // Media
   "video/mp4",
   "audio/mpeg",

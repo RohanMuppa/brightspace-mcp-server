@@ -34,6 +34,17 @@ export interface ClasslistUser {
 const INSTRUCTOR_ROLE_ID = 109;
 const TA_ROLE_ID = 135;
 
+// When the role-ID fast path above returns nothing — a non-Purdue tenant
+// where those IDs belong to different roles or none at all — staff are found
+// instead by matching the role name the tenant itself reports. Role-name
+// fallback adapted from matthewliu10/brightspace-mcp-server (MIT).
+const TEACHING_ROLE_NAME =
+  /\b(instructor|professor|lecturer|teaching assistant|coordinator|grader|ta)\b/i;
+
+function isTeachingRoleByName(user: ClasslistUser): boolean {
+  return TEACHING_ROLE_NAME.test(user.ClasslistRoleDisplayName ?? "");
+}
+
 /**
  * Fetch every classlist user matching the optional filters, across all pages.
  *
@@ -92,6 +103,7 @@ export function registerGetRoster(
         try {
           const allUsers: ClasslistUser[] = [];
           let authFailure: PromiseRejectedResult | undefined;
+          let roleFallbackUsed = false;
 
           if (!includeStudents) {
             // Fetch instructors and TAs in parallel
@@ -134,6 +146,21 @@ export function registerGetRoster(
                 error: taResult.reason,
               });
             }
+
+            // Purdue's role IDs found nobody — on a non-Purdue tenant they
+            // likely mean a different role, or none. Fall back to one
+            // unfiltered classlist fetch and match on the role display name
+            // the tenant itself reports instead of an institution-specific ID.
+            // A genuine failure of this fetch is intentionally not caught
+            // here: it should surface as a tool error rather than silently
+            // producing an empty staff list.
+            if (allUsers.length === 0) {
+              const everyone = await fetchClasslistUsers(apiClient, courseId, {
+                searchTerm,
+              });
+              allUsers.push(...everyone.filter(isTeachingRoleByName));
+              roleFallbackUsed = true;
+            }
           } else {
             // Fetch all users
             allUsers.push(
@@ -175,6 +202,12 @@ export function registerGetRoster(
             truncated,
             ...(truncated
               ? { note: `Showing ${users.length} of ${total}. Raise the limit argument to see more.` }
+              : {}),
+            ...(roleFallbackUsed
+              ? {
+                  roleFilter:
+                    "No users matched the default instructor/TA role IDs, so staff were found by matching role display names (instructor, professor, lecturer, teaching assistant, coordinator, grader, TA) instead.",
+                }
               : {}),
             users,
             ...(authFailure
