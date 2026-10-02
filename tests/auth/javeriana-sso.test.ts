@@ -20,9 +20,11 @@ const SELECTORS = {
   token: "input#token",
   credentialsSubmit: 'form#form input[type="submit"]',
   tokenSubmit: 'form#otp-form input[type="submit"]',
+  chooserLink: 'a[href*="type=webtoken"]',
+  statusMessage: ".box--system-message",
 } as const;
 
-type Screen = "chooser" | "credentials" | "token" | "home" | "blank";
+type Screen = "chooser" | "credentials" | "credentials-error" | "token" | "home" | "blank";
 
 interface PageState {
   url: string;
@@ -46,8 +48,9 @@ function makeJaverianaPage(
 
   const countFor = (selector: string): number => {
     const { screen } = current();
-    if (selector === SELECTORS.username) return screen === "credentials" ? 1 : 0;
+    if (selector === SELECTORS.username) return screen === "credentials" || screen === "credentials-error" ? 1 : 0;
     if (selector === SELECTORS.token) return screen === "token" ? 1 : 0;
+    if (selector === SELECTORS.chooserLink) return screen === "chooser" ? 1 : 0;
     return 0;
   };
 
@@ -57,10 +60,12 @@ function makeJaverianaPage(
       case SELECTORS.username:
       case SELECTORS.password:
       case SELECTORS.credentialsSubmit:
-        return screen === "credentials";
+        return screen === "credentials" || screen === "credentials-error";
       case SELECTORS.token:
       case SELECTORS.tokenSubmit:
         return screen === "token";
+      case SELECTORS.statusMessage:
+        return screen === "credentials-error";
       default:
         return false;
     }
@@ -89,7 +94,7 @@ function makeJaverianaPage(
             queue = [...transitions.onSubmitCode];
           }
         }),
-        textContent: async () => null,
+        textContent: async () => current().screen === "credentials-error" ? "Usuario o contraseña incorrectos." : null,
       }),
     })),
     waitForTimeout: vi.fn(async (ms: number) => {
@@ -228,7 +233,7 @@ describe("Javeriana Cali / OneGate login flow", () => {
 
     await expect(new JaverianaSSOFlow({ ...credentials, requestMfaCode }).login(page as never))
       .rejects.toBeInstanceOf(UnsupportedAuthenticationError);
-    expect(fills[SELECTORS.password]).toBeUndefined();
+    expect(fills).toEqual({});
     expect(requestMfaCode).not.toHaveBeenCalled();
   });
 
@@ -263,5 +268,63 @@ describe("Javeriana Cali / OneGate login flow", () => {
 
     await expect(new JaverianaSSOFlow({ ...credentials, requestMfaCode: async () => "123456" }).login(page as never))
       .rejects.toThrow(/D2L_HEADLESS=false/);
+  });
+
+  it("leaves a marker-less interstitial page alone instead of yanking it back to the credentials form", async () => {
+    // A transient SAML auto-post / processing page: on OneGate's host, but
+    // with neither the username/token fields nor the chooser's own link.
+    const { page } = makeJaverianaPage([{ url: `${ONEGATE}/saml/auto-post`, screen: "blank" }]);
+
+    await new JaverianaSSOFlow({ ...credentials, requestMfaCode: async () => "123456" }).selectIdentityProvider(page as never);
+    expect(page.goto).not.toHaveBeenCalled();
+  });
+
+  it("opens the credentials form at most once per login, even if OneGate keeps showing the chooser", async () => {
+    // No onGoto transition: the mock page never actually leaves the chooser
+    // screen, isolating the "at most once" guarantee from navigation.
+    const { page } = makeJaverianaPage([{ url: CHOOSER_URL, screen: "chooser" }]);
+
+    await expect(new JaverianaSSOFlow({ ...credentials, requestMfaCode: async () => "123456" }).login(page as never))
+      .rejects.toThrow(/D2L_HEADLESS=false/);
+    expect(page.goto).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops with setup guidance when OneGate's error banner appears after the password is submitted", async () => {
+    const { page } = makeJaverianaPage(
+      [{ url: CHOOSER_URL, screen: "chooser" }],
+      {
+        onGoto: [{ url: CREDENTIALS_URL, screen: "credentials" }],
+        onSubmitCredentials: [{ url: CREDENTIALS_URL, screen: "credentials-error" }],
+      },
+    );
+
+    const failure = new JaverianaSSOFlow({ ...credentials, requestMfaCode: async () => "123456" }).login(page as never);
+    await expect(failure).rejects.toBeInstanceOf(BrowserAuthError);
+    await expect(failure).rejects.toMatchObject({ step: "credentials" });
+    await expect(failure).rejects.toThrow(/setup.*--javeriana/);
+  });
+
+  it("re-prompts for the authenticator code when the entry is not 6-8 digits", async () => {
+    const requestMfaCode = vi.fn()
+      .mockResolvedValueOnce("12")
+      .mockResolvedValueOnce("123456");
+    const { page, fills, clicks } = makeJaverianaPage(
+      [{ url: TOKEN_URL, screen: "token" }],
+      { onSubmitCode: [{ url: TOKEN_URL, screen: "blank" }, { url: HOME_URL, screen: "home" }] },
+    );
+
+    await expect(new JaverianaSSOFlow({ ...credentials, requestMfaCode }).login(page as never)).resolves.toBe(true);
+    expect(requestMfaCode).toHaveBeenCalledTimes(2);
+    expect(fills[SELECTORS.token]).toBe("123456");
+    expect(clicks).toEqual([SELECTORS.tokenSubmit]);
+  });
+
+  it("gives up on the code challenge after repeated malformed entries", async () => {
+    const requestMfaCode = vi.fn(async () => "not-a-code");
+    const { page } = makeJaverianaPage([{ url: TOKEN_URL, screen: "token" }]);
+
+    await expect(new JaverianaSSOFlow({ ...credentials, requestMfaCode }).login(page as never))
+      .rejects.toThrow(/6-8 digits/);
+    expect(requestMfaCode).toHaveBeenCalledTimes(3);
   });
 });

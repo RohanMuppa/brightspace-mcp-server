@@ -3,7 +3,7 @@
 import type { Page } from "playwright";
 import { BrowserAuthError } from "../utils/errors.js";
 import { log } from "../utils/logger.js";
-import { AUTH_COMMAND } from "../utils/commands.js";
+import { AUTH_COMMAND, SETUP_COMMAND } from "../utils/commands.js";
 import { MfaApprovalError, UnsupportedAuthenticationError } from "./sso-flow.js";
 import type { OnMfaChallenge, RequestMfaCode } from "./sso-flow.js";
 
@@ -45,6 +45,13 @@ const SELECTORS = {
   tokenSubmit: 'form#otp-form input[type="submit"]',
   /** OneGate's status banner. Rendered hidden and unhidden to show errors. */
   statusMessage: ".box--system-message",
+  /**
+   * The method chooser's own "Usuario y Contraseña" link — a positive
+   * marker that distinguishes the chooser from a transient interstitial
+   * (a SAML auto-post, a "processing" page) that also lacks the
+   * username/token fields but must not be navigated away from.
+   */
+  chooserLink: 'a[href*="type=webtoken"]',
 } as const;
 
 const POLL_MS = 500;
@@ -53,6 +60,8 @@ const CHALLENGE_TIMEOUT_MS = 60_000;
 /** A person has to find their authenticator and read a code. */
 const MFA_TIMEOUT_MS = 5 * 60 * 1000;
 const FORM_NAVIGATION_TIMEOUT_MS = 30_000;
+/** How many mistyped codes to re-prompt for before giving up on this challenge. */
+const MAX_CODE_ATTEMPTS = 3;
 
 interface JaverianaSSOConfig {
   username?: string;
@@ -95,6 +104,8 @@ function isOneGate(url: string): boolean {
  */
 export class JaverianaSSOFlow {
   private readonly config: JaverianaSSOConfig;
+  /** Guards the chooser-to-credentials-form redirect to at most once per login. */
+  private credentialsFormOpened = false;
 
   constructor(config: JaverianaSSOConfig) {
     this.config = config;
@@ -147,6 +158,17 @@ export class JaverianaSSOFlow {
         await this.openCredentialsForm(page);
         this.reportStatusMessage(page);
 
+        // The banner is also used for harmless notices before a password is
+        // ever sent, so only treat it as a hard rejection once credentials
+        // have actually been submitted — otherwise this would abort a login
+        // that is still progressing normally.
+        if (credentialsSubmitted && !challenged && await this.isVisible(page, SELECTORS.statusMessage)) {
+          throw new BrowserAuthError(
+            `OneGate rejected the saved username or password. Run \`${SETUP_COMMAND} --javeriana\` to update your password.`,
+            "credentials",
+          );
+        }
+
         if (await this.isEditable(page, SELECTORS.token)) {
           if (!challenged) {
             challenged = true;
@@ -195,13 +217,24 @@ export class JaverianaSSOFlow {
   /**
    * Open the password form from OneGate's chooser. A no-op once a username
    * or code field is already on screen — a resumed run, or a redirect that
-   * landed past the chooser on its own.
+   * landed past the chooser on its own — once this redirect has already
+   * run for this login, or when the current page is not actually the
+   * chooser: a transient interstitial (a SAML auto-post, a "processing"
+   * page between steps) also lacks the username/token fields, and
+   * navigating away from it would abort an in-flight POST. The chooser's
+   * own "Usuario y Contraseña" link is the positive signal that this really
+   * is the chooser, safe to redirect from.
    */
   private async openCredentialsForm(page: Page): Promise<void> {
     const hasUsername = (await page.locator(SELECTORS.username).count()) > 0;
     const hasToken = (await page.locator(SELECTORS.token).count()) > 0;
     if (hasUsername || hasToken) return;
+    if (this.credentialsFormOpened) return;
 
+    const hasChooserLink = (await page.locator(SELECTORS.chooserLink).count()) > 0;
+    if (!hasChooserLink) return;
+
+    this.credentialsFormOpened = true;
     const { origin } = new URL(page.url());
     log("INFO", 'Opening the "Usuario y Contraseña" form');
     await page.goto(`${origin}${CREDENTIALS_FORM_PATH}`, {
@@ -218,12 +251,13 @@ export class JaverianaSSOFlow {
     // `load`; clicking before then posts the hidden inputs empty.
     await page.waitForLoadState("load");
 
+    // Re-check immediately after the load wait and before either field is
+    // touched: a navigation during that wait must never let a lookalike
+    // host receive the username, let alone the password.
+    this.assertOnOneGate(page, "entering credentials");
+
     log("INFO", "Entering credentials");
     await page.locator(SELECTORS.username).first().fill(this.config.username);
-
-    // Re-check immediately before the password: a navigation during the
-    // load wait above must never let a lookalike host receive it.
-    this.assertOnOneGate(page, "entering the password");
     await page.locator(SELECTORS.password).first().fill(this.config.password);
     await page.locator(SELECTORS.credentialsSubmit).first().click().catch(() => {});
   }
@@ -234,10 +268,25 @@ export class JaverianaSSOFlow {
     );
   }
 
-  /** Feed OneGate's code challenge from the terminal prompt. */
+  /**
+   * Feed OneGate's code challenge from the terminal prompt. Unlike the
+   * other code-based flows, which validate once and bail, this re-prompts
+   * on a malformed entry — the caller supplying requestMfaCode may not
+   * already loop the way the CLI's own terminal prompt does.
+   */
   private async submitCode(page: Page): Promise<void> {
     if (!this.config.requestMfaCode) throw this.codePromptUnavailable();
-    const code = (await this.config.requestMfaCode()).replace(/\s/g, "");
+
+    let code: string | undefined;
+    for (let attempt = 1; attempt <= MAX_CODE_ATTEMPTS; attempt++) {
+      const typed = (await this.config.requestMfaCode()).replace(/\s/g, "");
+      if (/^\d{6,8}$/.test(typed)) {
+        code = typed;
+        break;
+      }
+      log("WARN", "That does not look like a 6-8 digit authenticator code.");
+    }
+    if (!code) throw new UnsupportedAuthenticationError("The MFA code must contain 6-8 digits.");
 
     // The same submit-handler timing applies to the code form.
     await page.waitForLoadState("load");
