@@ -78,10 +78,17 @@ export const SCHOOL_PRESETS: Record<string, SchoolPreset> = {
     mfaNote: "Approve the sign-in request from your MFA app.",
     usernameHint: "Use your full sign-in address if your Western account requires it.",
   },
+  cuny: {
+    name: "CUNY",
+    baseUrl: "https://brightspace.cuny.edu",
+    usernameLabel: "CUNY Login username",
+    mfaNote: "Type the 6-digit code from your authenticator app when prompted.",
+    usernameHint: "Use your full CUNY Login address, e.g. firstname.lastname01@login.cuny.edu",
+  },
 };
 
 /**
- * Pick the school preset named by `--purdue`, `--suny`, `--western`, etc.
+ * Pick the school preset named by `--purdue`, `--suny`, `--western`, `--cuny`, etc.
  *
  * Own properties only: a bare index would make `--constructor` or
  * `--__proto__` resolve to something off `Object.prototype` and hand the

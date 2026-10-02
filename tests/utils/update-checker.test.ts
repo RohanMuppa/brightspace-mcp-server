@@ -32,6 +32,7 @@ import {
   clearAllNpxCaches,
   safeVersionLabel,
   ownNpxCacheDir,
+  installKindOf,
 } from "../../src/utils/update-checker.js";
 
 const okJson = (body: unknown) => ({
@@ -46,7 +47,7 @@ async function seedNotice(installed = "1.0.0", latest = "2.0.0") {
     fetchImpl: vi.fn(async () => okJson({ version: latest })) as unknown as typeof fetch,
     env: {},
     installedVersion: installed,
-    runningFromNpxCache: false,
+    installKind: "npm-install",
   });
 }
 
@@ -119,7 +120,7 @@ describe("initUpdateChecker", () => {
       fetchImpl: fetchImpl as unknown as typeof fetch,
       env: {},
       installedVersion: "1.0.0",
-      runningFromNpxCache: false,
+      installKind: "npm-install",
       clearCaches,
     });
 
@@ -133,6 +134,34 @@ describe("initUpdateChecker", () => {
     expect(childProcess.spawn).not.toHaveBeenCalled();
   });
 
+  it("tells a source checkout to update its checkout, not to install the npm package", async () => {
+    const clearCaches = vi.fn(async () => 0);
+    await initUpdateChecker({
+      fetchImpl: vi.fn(async () => okJson({ version: "2.0.0" })) as unknown as typeof fetch,
+      env: {},
+      installedVersion: "1.0.0",
+      installKind: "source-checkout",
+      clearCaches,
+    });
+
+    const notice = peekUpdateNotice();
+    expect(notice).not.toMatch(/npm install -g/);
+    expect(notice).toContain("git pull");
+    expect(notice).toContain("npm run build");
+    expect(clearCaches).not.toHaveBeenCalled();
+  });
+
+  it("tells a source checkout how to opt out of upstream notices", async () => {
+    await initUpdateChecker({
+      fetchImpl: vi.fn(async () => okJson({ version: "2.0.0" })) as unknown as typeof fetch,
+      env: {},
+      installedVersion: "1.0.0",
+      installKind: "source-checkout",
+    });
+
+    expect(peekUpdateNotice()).toContain("D2L_NO_UPDATE_CHECK");
+  });
+
   it("clears only this package's stale npx caches and says so", async () => {
     const fetchImpl = vi.fn(async () => okJson({ version: "2.0.0" }));
     const clearCaches = vi.fn(async () => 2);
@@ -140,7 +169,7 @@ describe("initUpdateChecker", () => {
       fetchImpl: fetchImpl as unknown as typeof fetch,
       env: {},
       installedVersion: "1.0.0",
-      runningFromNpxCache: true,
+      installKind: "npx-cache",
       clearCaches,
     });
 
@@ -248,6 +277,24 @@ describe("ownNpxCacheDir", () => {
   });
 });
 
+describe("installKindOf", () => {
+  it("recognizes an npx cache", () => {
+    expect(installKindOf("/Users/me/.npm/_npx/abc123/node_modules/brightspace-mcp-server")).toBe("npx-cache");
+  });
+
+  it("recognizes a global npm install", () => {
+    expect(installKindOf("/usr/local/lib/node_modules/brightspace-mcp-server")).toBe("npm-install");
+  });
+
+  it("recognizes a source checkout", () => {
+    expect(installKindOf("/Users/me/Documents/brightspace-mcp-server")).toBe("source-checkout");
+  });
+
+  it("recognizes a renamed fork checkout", () => {
+    expect(installKindOf("/home/me/src/my-brightspace-fork")).toBe("source-checkout");
+  });
+});
+
 describe("clearAllNpxCaches", () => {
   const root = resolve(homedir(), ".npm", "_npx");
 
@@ -335,7 +382,7 @@ describe("startUpdateChecks", () => {
       fetchImpl: fetchImpl as unknown as typeof fetch,
       env: {},
       installedVersion: "1.0.0",
-      runningFromNpxCache: false,
+      installKind: "npm-install",
       setIntervalImpl: (fn) => {
         tick = fn;
         return { unref: vi.fn() };

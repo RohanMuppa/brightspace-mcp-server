@@ -43,9 +43,18 @@ they attend, which lets sign-in skip SUNY's shared campus picker:
 npx -y brightspace-mcp-server@latest setup --suny
 ```
 
+If the user is at a CUNY campus, use the CUNY preset. Their username is the
+full CUNY Login address, and sign-in asks in the terminal for the code from
+their authenticator app. CUNY requires that code on every full sign-in, so
+when the Brightspace session ends the user reruns `auth` in a terminal:
+
+```bash
+npx -y brightspace-mcp-server@latest setup --cuny
+```
+
 The wizard:
 
-- prompts for the school's Brightspace URL (skipped with `--purdue` or `--suny`)
+- prompts for the school's Brightspace URL (skipped with `--purdue`, `--suny`, or `--cuny`)
 - asks whether MFA uses device approval, terminal code entry, or a visible browser, then authenticates accordingly
 - saves the password in the native credential store and public settings in `~/.brightspace-mcp/config.json` (0600)
 - writes the encrypted session below `~/.d2l-session/accounts/<account-hash>/` (AES-256-GCM)
@@ -160,6 +169,7 @@ src/
     sso-flow.ts             Picks the login flow for the configured host
     purdue-sso.ts           Default SSO handler (Shibboleth, CAS, Entra forms)
     suny-sso.ts             SUNY campus selection
+    cuny-sso.ts             CUNY Login (Oracle OAM) credentials and authenticator code
     session-store.ts        AES-256-GCM token persistence and v1 migration
     browser-state-store.ts  Encrypted cookie and browser storage persistence
     credential-store.ts     Native password and encryption-key storage
@@ -187,6 +197,7 @@ src/
 | `npx -y brightspace-mcp-server@latest setup` | Interactive setup wizard |
 | `npx -y brightspace-mcp-server@latest setup --purdue` | Setup with Purdue preset |
 | `npx -y brightspace-mcp-server@latest setup --suny` | Setup with SUNY preset (also asks for campus) |
+| `npx -y brightspace-mcp-server@latest setup --cuny` | Setup with CUNY preset |
 | `npx -y brightspace-mcp-server@latest auth` | Manual reauth |
 | `npx -y brightspace-mcp-server@latest` | Run the MCP server (registered in AI client config) |
 | `npm run build` | Compile TypeScript to `build/` |
