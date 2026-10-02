@@ -69,11 +69,7 @@ npx -y brightspace-mcp-server@latest setup --javeriana
 
 The wizard:
 
-<<<<<<< HEAD
-- prompts for the school's Brightspace URL (skipped with `--purdue`, `--suny`, `--western`, `--tudelft`, `--cuny`, `--leiden`, `--ngeeann`, or `--javeriana`)
-=======
-- prompts for the school's Brightspace URL (skipped with `--purdue`, `--suny`, `--western`, `--tudelft`, `--cuny`, `--leiden`, `--mcgill`, or `--javeriana`)
->>>>>>> origin/main
+- prompts for the school's Brightspace URL (skipped with `--purdue`, `--suny`, `--western`, `--tudelft`, `--cuny`, `--leiden`, `--mcgill`, `--ngeeann`, or `--javeriana`)
 - asks whether MFA uses device approval, terminal code entry, or a visible browser, then authenticates accordingly
 - saves the password in the native credential store and public settings in `~/.brightspace-mcp/config.json` (0600)
 - writes the encrypted session below `~/.d2l-session/accounts/<account-hash>/` (AES-256-GCM)
@@ -285,11 +281,8 @@ src/
 | `npx -y brightspace-mcp-server@latest setup --purdue` | Setup with Purdue preset |
 | `npx -y brightspace-mcp-server@latest setup --suny` | Setup with SUNY preset (also asks for campus) |
 | `npx -y brightspace-mcp-server@latest setup --cuny` | Setup with CUNY preset |
-<<<<<<< HEAD
-| `npx -y brightspace-mcp-server@latest setup --ngeeann` | Setup with Ngee Ann Polytechnic preset |
-=======
 | `npx -y brightspace-mcp-server@latest setup --mcgill` | Setup with McGill preset |
->>>>>>> origin/main
+| `npx -y brightspace-mcp-server@latest setup --ngeeann` | Setup with Ngee Ann Polytechnic preset |
 | `npx -y brightspace-mcp-server@latest setup --javeriana` | Setup with Javeriana Cali preset |
 | `npx -y brightspace-mcp-server@latest auth` | Manual reauth |
 | `npx -y brightspace-mcp-server@latest doctor` | Diagnose a broken setup — Node version, saved config, credential store, Brightspace reachability, saved sign-in, a real course-list call, and installed version, each as a ✓/✗ line with one plain-English next step |
