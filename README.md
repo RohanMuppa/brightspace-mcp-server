@@ -141,5 +141,6 @@ Run it from your home folder — macOS blocks `npx` from Documents, Desktop, or 
 
 When a content-file download returns 403 or 404, `download_file` checks topic metadata and the course table of contents. Confirmed restrictions return `{ success: false, available: false, reason, message, startDate, endDate }` so the assistant can explain when content opens or why it has closed. Unexplained 404s and server/network failures retain their original errors.
 
+When course content or announcements are converted to markdown, `javascript:`/`data:` links are rendered as plain text (the link itself is dropped, not followed) and D2L's per-session query parameters (`d2lSessionVal`, `d2lSecureSessionVal`, and the cache-busting `_`) are stripped from any remaining links and images before they reach the assistant.
 
 Licensed under the MIT License.

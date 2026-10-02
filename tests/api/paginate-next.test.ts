@@ -1,4 +1,8 @@
 import { describe, it, expect, vi } from "vitest";
+
+vi.mock("../../src/utils/logger.js", () => ({ log: vi.fn() }));
+
+import { log } from "../../src/utils/logger.js";
 import { fetchAllObjects } from "../../src/api/paginate.js";
 
 /**
@@ -79,6 +83,22 @@ describe("fetchAllObjects Next shapes", () => {
 
     expect(all).toEqual(["a"]);
     expect(requested).toEqual(["/d2l/api/lp/1.0/1/classlist/paged/"]);
+  });
+
+  it("never logs the query string of a rejected server-relative Next link", async () => {
+    const { apiClient } = client(() => ({
+      Objects: ["a"],
+      Next: "/d2l/lp/home?d2lSessionVal=SECRET123",
+    }));
+
+    await fetchAllObjects<string>(apiClient, "/d2l/api/lp/1.0/1/classlist/paged/");
+
+    expect(vi.mocked(log)).toHaveBeenCalled();
+    for (const call of vi.mocked(log).mock.calls) {
+      const serialized = JSON.stringify(call);
+      expect(serialized).not.toContain("d2lSessionVal");
+      expect(serialized).not.toContain("?");
+    }
   });
 
   it("still follows a normal /d2l/api/... Next", async () => {

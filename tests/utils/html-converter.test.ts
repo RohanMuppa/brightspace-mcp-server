@@ -153,6 +153,16 @@ describe("convertHtmlToMarkdown", () => {
       expect(markdown).toBe("[doc](https://x.test/doc)");
     });
 
+    it("leaves a URL alone when its only '?' falls inside the fragment", () => {
+      // "#frag?x=1" is not a query string -- the "?" here belongs to the
+      // fragment, so there is nothing to strip and the URL must come through
+      // untouched rather than have its fragment mangled.
+      const { markdown } = convertHtmlToMarkdown(
+        '<a href="https://x.test/doc#section?d2lSessionVal=abc123">doc</a>'
+      );
+      expect(markdown).toBe("[doc](https://x.test/doc#section?d2lSessionVal=abc123)");
+    });
+
     it("drops a javascript: href but keeps the link text", () => {
       const { markdown } = convertHtmlToMarkdown(
         '<a href="javascript:alert(1)">click me</a>'

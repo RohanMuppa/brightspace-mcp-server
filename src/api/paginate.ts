@@ -145,10 +145,13 @@ function nextPath(firstPath: string, next: string): string | null {
   // A Next that begins with a slash is already a path, not a bookmark.
   // Appending it as one would ask for a page that does not exist.
   if (next.startsWith("/")) {
-    if (!isApiPath(next.split("?")[0] ?? next)) {
+    const nextPathOnly = next.split("?")[0] ?? next;
+    if (!isApiPath(nextPathOnly)) {
       log("INFO", "Pagination stopped: Next link left the D2L API", {
         firstPath,
-        nextPath: next,
+        // Log only the path, not the query string: a rejected server-relative
+        // Next can carry a `d2lSessionVal=` token in its query.
+        nextPath: nextPathOnly,
       });
       return null;
     }

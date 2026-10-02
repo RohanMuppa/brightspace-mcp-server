@@ -118,6 +118,13 @@ const SESSION_QUERY_PARAMS = new Set(["d2lsessionval", "d2lsecuresessionval", "_
 function stripSessionParams(url: string): string {
   const queryStart = url.indexOf("?");
   if (queryStart < 0) return url;
+  const earlyHash = url.indexOf("#");
+  if (earlyHash >= 0 && earlyHash < queryStart) {
+    // The "?" falls inside the fragment (e.g. "#frag?x=1"), not a real query
+    // string -- nothing to strip, and treating it as one would mangle the
+    // fragment.
+    return url;
+  }
   const hashStart = url.indexOf("#", queryStart);
   const query = url.slice(queryStart + 1, hashStart < 0 ? undefined : hashStart);
   const hash = hashStart < 0 ? "" : url.slice(hashStart);
