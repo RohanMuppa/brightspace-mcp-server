@@ -62,7 +62,11 @@ function makeMfaPage(states: PollState[]) {
       if (selector === "#idTxtBx_SAOTCC_OTC" || selector === 'input[name="otc"]') return Boolean(current().code);
       if (selector === "#idSubmit_SAOTCC_Continue") return Boolean(current().code);
       if (selector === "#idSpan_SAOTCC_Error_OTC") return Boolean(current().codeError);
-      if (selector === "#idDiv_SAOTCAS_Title" || selector === "#idDiv_SAOTCC_Title") return Boolean(current().challenge || current().code);
+      // `challenge` models the number-match/KMSI title heading; `code` alone
+      // models a BARE verification-code page with no such heading (the
+      // post-credential-challenge regression test below relies on the two
+      // being independent).
+      if (selector === "#idDiv_SAOTCAS_Title" || selector === "#idDiv_SAOTCC_Title") return Boolean(current().challenge);
       if (selector === "#KmsiCheckboxField" || selector === "#idSIButton9") return Boolean(current().kmsi);
       if (selector === RESEND_ID_SELECTOR) return Boolean(current().resend);
       return false;
@@ -385,5 +389,30 @@ describe("Purdue MFA loop ported from Brightspace Bar", () => {
   it("classifies a timeout with no challenge as unsupported instead of failed MFA", async () => {
     const { page } = makeMfaPage([{}]);
     await expect(handleMFA(page)).rejects.toBeInstanceOf(UnsupportedAuthenticationError);
+  });
+
+  it("treats a bare verification-code page as a post-credential challenge instead of re-entering credentials", async () => {
+    // Entra can land directly on its verification-code form (no number-match
+    // digits, no #idDiv_SAOTCAS_Title/#idDiv_SAOTCC_Title heading) when
+    // resuming a restored session. hasPostCredentialChallenge used to miss
+    // this, so login() concluded no challenge was present and re-ran
+    // enterCredentials against a page with no username/password field.
+    const requestMfaCode = vi.fn(async () => "123456");
+    const { page, fill } = makeMfaPage([
+      { code: true },
+      { url: `${BASE_URL}/d2l/home`, cookie: true, d2l: true },
+    ]);
+    const flow = new PurdueSSOFlow({
+      baseUrl: BASE_URL,
+      username: "student@purdue.edu",
+      password: "dummy-password",
+      requestMfaCode,
+    });
+    const enterCredentialsSpy = vi.spyOn(flow as any, "enterCredentials");
+
+    await expect(flow.login(page as never)).resolves.toBe(true);
+
+    expect(enterCredentialsSpy).not.toHaveBeenCalled();
+    expect(fill).toHaveBeenCalledWith("123456");
   });
 });

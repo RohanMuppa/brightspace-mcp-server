@@ -622,3 +622,97 @@ describe("fetchCourseAssignments dueIn", () => {
     expect(row.dueIn).toBeNull();
   });
 });
+
+/**
+ * Adapted from LunaParker/brightspace-mcp-server (MIT): a dropbox folder can
+ * carry instructor-provided URL links (D2L's `LinkAttachments`) alongside its
+ * file attachments. Surfaced as an additive `linkAttachments: [{ name, url }]`
+ * array; omitted entirely (not an empty array) when the folder has none, so
+ * the existing assignment shape is untouched for every folder that doesn't
+ * use this D2L feature.
+ */
+describe("fetchCourseAssignments link attachments", () => {
+  function makeDropboxClient(folder: Record<string, unknown>) {
+    return {
+      le: (orgUnitId: number, p: string) => `/d2l/api/le/1.0/${orgUnitId}${p}`,
+      get: vi.fn(async (path: string) => {
+        if (path.endsWith("/dropbox/folders/")) return [folder];
+        if (path.endsWith("/quizzes/")) return { Objects: [] };
+        if (path.endsWith("/grades/")) return [];
+        if (path.endsWith("/content/toc")) return { Modules: [] };
+        throw notFound();
+      }),
+    };
+  }
+
+  it("maps two link attachments to name/url", async () => {
+    const apiClient = makeDropboxClient({
+      Id: 55,
+      Name: "HW 1",
+      DueDate: null,
+      IsHidden: false,
+      GroupTypeId: null,
+      LinkAttachments: [
+        { LinkId: 1, Title: "Project spec", Href: "https://example.com/spec.pdf" },
+        { LinkId: 2, Title: "Starter repo", Href: "https://example.com/repo" },
+      ],
+    });
+
+    const [assignment] = await fetchCourseAssignments(apiClient as any, COURSE_ID);
+
+    expect(assignment.linkAttachments).toEqual([
+      { name: "Project spec", url: "https://example.com/spec.pdf" },
+      { name: "Starter repo", url: "https://example.com/repo" },
+    ]);
+  });
+
+  it("omits linkAttachments entirely for a folder with none", async () => {
+    const apiClient = makeDropboxClient({
+      Id: 55,
+      Name: "HW 1",
+      DueDate: null,
+      IsHidden: false,
+      GroupTypeId: null,
+    });
+
+    const [assignment] = await fetchCourseAssignments(apiClient as any, COURSE_ID);
+
+    expect(assignment).not.toHaveProperty("linkAttachments");
+  });
+
+  it("prefers LinkName over Title, D2L's documented field for the link's display text", async () => {
+    const apiClient = makeDropboxClient({
+      Id: 55,
+      Name: "HW 1",
+      DueDate: null,
+      IsHidden: false,
+      GroupTypeId: null,
+      LinkAttachments: [
+        { LinkId: 1, LinkName: "Project spec", Title: "Ignored title", Href: "https://example.com/spec.pdf" },
+        { LinkId: 2, LinkName: "Starter repo", Href: "https://example.com/repo" },
+      ],
+    });
+
+    const [assignment] = await fetchCourseAssignments(apiClient as any, COURSE_ID);
+
+    expect(assignment.linkAttachments).toEqual([
+      { name: "Project spec", url: "https://example.com/spec.pdf" },
+      { name: "Starter repo", url: "https://example.com/repo" },
+    ]);
+  });
+
+  it("drops a link entry with no Href rather than emitting a null url", async () => {
+    const apiClient = makeDropboxClient({
+      Id: 55,
+      Name: "HW 1",
+      DueDate: null,
+      IsHidden: false,
+      GroupTypeId: null,
+      LinkAttachments: [{ LinkId: 1, Title: "Broken link" }],
+    });
+
+    const [assignment] = await fetchCourseAssignments(apiClient as any, COURSE_ID);
+
+    expect(assignment).not.toHaveProperty("linkAttachments");
+  });
+});

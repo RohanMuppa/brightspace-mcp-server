@@ -149,6 +149,63 @@ describe("validateFileType: empty body", () => {
   });
 });
 
+/**
+ * Adapted from LunaParker/brightspace-mcp-server (MIT): starter-code and
+ * resource archives beyond zip (7z, gzip, tar, bzip2) are legitimate
+ * course-content downloads and were previously refused outright, not just
+ * mis-detected the way CFB and SVG were.
+ */
+describe("validateFileType: additional archive formats", () => {
+  it("accepts a 7z archive", async () => {
+    const buf = Buffer.alloc(64);
+    Buffer.from([0x37, 0x7a, 0xbc, 0xaf, 0x27, 0x1c]).copy(buf, 0);
+    await expect(validateFileType(buf, undefined, "project.7z")).resolves.toMatchObject({
+      mime: "application/x-7z-compressed",
+    });
+  });
+
+  it("accepts a gzip archive", async () => {
+    const zlib = await import("node:zlib");
+    const buf = zlib.gzipSync(Buffer.from("starter code payload for gzip detection test"));
+    await expect(validateFileType(buf, undefined, "starter.tar.gz")).resolves.toMatchObject({
+      mime: "application/gzip",
+    });
+  });
+
+  it("accepts a tar archive", async () => {
+    const buf = Buffer.alloc(512);
+    Buffer.from("ustar\0").copy(buf, 257);
+    await expect(validateFileType(buf, undefined, "starter.tar")).resolves.toMatchObject({
+      mime: "application/x-tar",
+    });
+  });
+
+  it("accepts a bzip2 archive", async () => {
+    const buf = Buffer.alloc(64);
+    Buffer.from([0x42, 0x5a, 0x68, 0x39]).copy(buf, 0);
+    await expect(validateFileType(buf, undefined, "starter.tar.bz2")).resolves.toMatchObject({
+      mime: "application/x-bzip2",
+    });
+  });
+
+  it("lists application/x-gzip in the allowlist for compatibility", async () => {
+    // Mirrors the existing application/x-zip-compressed entry: file-type
+    // itself never emits this legacy alias, so it is only reachable as a
+    // membership check, not via magic-byte detection.
+    const { ALLOWED_MIME_TYPES } = await import("../../src/utils/file-validator.js");
+    expect(ALLOWED_MIME_TYPES).toContain("application/x-gzip");
+  });
+
+  it("still refuses an unrelated binary type even with archives allowed", async () => {
+    // Regression guard: adding archive mimes must not widen the allowlist to
+    // arbitrary binaries. An ELF executable's magic bytes must still be denied.
+    const elf = Buffer.alloc(64);
+    Buffer.from([0x7f, 0x45, 0x4c, 0x46]).copy(elf, 0);
+    const error = await validateFileType(elf, undefined, "evil.bin").catch((e) => e);
+    expect(error).toBeInstanceOf(DownloadError);
+  });
+});
+
 describe("validateBaseUrl", () => {
   const BASE = "https://purdue.brightspace.com";
 
