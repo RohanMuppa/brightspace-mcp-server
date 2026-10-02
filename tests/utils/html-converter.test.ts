@@ -105,4 +105,87 @@ describe("convertHtmlToMarkdown", () => {
     const html = "<p>x</p>";
     expect(convertHtmlToMarkdown(html).html).toBe(html);
   });
+
+  /**
+   * D2L appends per-session query params to in-content hrefs/srcs
+   * (d2lSessionVal, d2lSecureSessionVal, a `_` cache-buster). Left alone, the
+   * markdown handed to the model would echo a live session token into the
+   * chat transcript.
+   */
+  describe("session tokens in links and images", () => {
+    it("strips d2lSessionVal from a link href", () => {
+      const { markdown } = convertHtmlToMarkdown(
+        '<a href="https://x.test/doc?d2lSessionVal=abc123">doc</a>'
+      );
+      expect(markdown).toBe("[doc](https://x.test/doc)");
+    });
+
+    it("strips d2lSecureSessionVal from a link href", () => {
+      const { markdown } = convertHtmlToMarkdown(
+        '<a href="https://x.test/doc?d2lSecureSessionVal=xyz789">doc</a>'
+      );
+      expect(markdown).toBe("[doc](https://x.test/doc)");
+    });
+
+    it("strips the _ cache-buster from a link href", () => {
+      const { markdown } = convertHtmlToMarkdown(
+        '<a href="https://x.test/doc?_=1696200000000">doc</a>'
+      );
+      expect(markdown).toBe("[doc](https://x.test/doc)");
+    });
+
+    it("strips session params from an image src", () => {
+      const { markdown } = convertHtmlToMarkdown(
+        '<img src="https://x.test/img.png?d2lSessionVal=abc123&amp;_=999" alt="diagram">'
+      );
+      expect(markdown).toBe("![diagram](https://x.test/img.png)");
+    });
+
+    it("preserves other query params untouched", () => {
+      const { markdown } = convertHtmlToMarkdown(
+        '<a href="https://x.test/doc?page=2&d2lSessionVal=abc123&lang=en">doc</a>'
+      );
+      expect(markdown).toBe("[doc](https://x.test/doc?page=2&lang=en)");
+    });
+
+    it("leaves an href with no query string unchanged", () => {
+      const { markdown } = convertHtmlToMarkdown('<a href="https://x.test/doc">doc</a>');
+      expect(markdown).toBe("[doc](https://x.test/doc)");
+    });
+
+    it("leaves a URL alone when its only '?' falls inside the fragment", () => {
+      // "#frag?x=1" is not a query string -- the "?" here belongs to the
+      // fragment, so there is nothing to strip and the URL must come through
+      // untouched rather than have its fragment mangled.
+      const { markdown } = convertHtmlToMarkdown(
+        '<a href="https://x.test/doc#section?d2lSessionVal=abc123">doc</a>'
+      );
+      expect(markdown).toBe("[doc](https://x.test/doc#section?d2lSessionVal=abc123)");
+    });
+
+    it("drops a javascript: href but keeps the link text", () => {
+      const { markdown } = convertHtmlToMarkdown(
+        '<a href="javascript:alert(1)">click me</a>'
+      );
+      expect(markdown).toBe("click me");
+      expect(markdown).not.toContain("javascript:");
+    });
+
+    it("drops a data: href but keeps the link text", () => {
+      const { markdown } = convertHtmlToMarkdown(
+        '<a href="data:text/html,<script>alert(1)</script>">click me</a>'
+      );
+      expect(markdown).toBe("click me");
+      expect(markdown).not.toContain("data:");
+    });
+
+    it("leaves a relative href as-is", () => {
+      const { markdown } = convertHtmlToMarkdown(
+        '<a href="/content/enforced/123-course/syllabus.pdf?d2lSessionVal=abc123">syllabus</a>'
+      );
+      expect(markdown).toBe(
+        "[syllabus](/content/enforced/123-course/syllabus.pdf)"
+      );
+    });
+  });
 });

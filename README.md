@@ -6,7 +6,7 @@ Talk to your Brightspace courses with AI. Ask about grades, due dates, quizzes, 
 
 This is an [MCP (Model Context Protocol)](https://modelcontextprotocol.io) server that connects your AI to D2L Brightspace so it can pull your grades, assignments, syllabus, and course content on demand.
 
-Connects to D2L Brightspace. Automatic login supports Purdue's Microsoft Entra flow, SUNY campus selection, Western University, TU Delft NetID via SURFconext, and CUNY Login. Other schools need a compatible automated sign-in flow; unsupported login pages return an actionable error.
+Connects to D2L Brightspace. Automatic login supports Purdue's Microsoft Entra flow, SUNY campus selection, Western University, TU Delft NetID via SURFconext, CUNY Login, and Leiden University via SURFconext and Microsoft Entra. Other schools need a compatible automated sign-in flow; unsupported login pages return an actionable error.
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/RohanMuppa/brightspace-mcp-server/main/docs/how-it-works.svg" alt="Architecture diagram" width="100%">
@@ -28,7 +28,7 @@ Paste this into Claude Code, Cursor, Windsurf, Copilot, Codex, or any AI coding 
 ```
 Install brightspace-mcp-server for me by following
 https://github.com/RohanMuppa/brightspace-mcp-server/blob/main/LLMs.md
-(use --purdue at Purdue, --suny at SUNY, --tudelft at TU Delft, or --cuny at CUNY).
+(use --purdue at Purdue, --suny at SUNY, --tudelft at TU Delft, --cuny at CUNY, or --leiden at Leiden).
 ```
 
 **Option 2: Run it yourself**
@@ -68,6 +68,14 @@ every full sign-in, so when your Brightspace session ends, run
 npx -y brightspace-mcp-server@latest setup --cuny
 ```
 
+Leiden University students can use `--leiden`:
+
+```bash
+npx -y brightspace-mcp-server@latest setup --leiden
+```
+
+Sign in with your full Microsoft address (for example `s1234567@vuw.leidenuniv.nl`). The flow picks Leiden University (Entra) on SURFconext's account page, then uses the same Microsoft sign-in as Purdue. Leiden normally asks for a code from your authenticator app, which `auth` prompts for in the terminal.
+
 The wizard saves your password in the native credential store and asks how you'll complete MFA: wait for approval or number matching, enter a terminal code from Google Authenticator or another app, or use a visible browser for other interactive methods. It can also configure Claude Desktop, Cursor, Codex Desktop and CLI, and Claude Code when installed — restart your AI client when it finishes.
 
 Any other D2L school: run `setup` without a flag and paste your Brightspace URL (for example `https://yourschool.brightspace.com`).
@@ -102,6 +110,8 @@ claude mcp add --scope user brightspace -- npx -y brightspace-mcp-server@latest
 Claude Desktop uses a separate configuration, which the setup wizard can update automatically.
 
 </details>
+
+**Running from a source checkout or fork?** When a newer release is published, the server tells a source checkout to `git pull` and `npm run build` rather than to install the npm package. For a fork you maintain, set `D2L_NO_UPDATE_CHECK=1` in the server's environment to turn off upstream update notices.
 
 ## Session Expired?
 
@@ -141,5 +151,6 @@ Run it from your home folder — macOS blocks `npx` from Documents, Desktop, or 
 
 When a content-file download returns 403 or 404, `download_file` checks topic metadata and the course table of contents. Confirmed restrictions return `{ success: false, available: false, reason, message, startDate, endDate }` so the assistant can explain when content opens or why it has closed. Unexplained 404s and server/network failures retain their original errors.
 
+When course content or announcements are converted to markdown, `javascript:`/`data:` links are rendered as plain text (the link itself is dropped, not followed) and D2L's per-session query parameters (`d2lSessionVal`, `d2lSecureSessionVal`, and the cache-busting `_`) are stripped from any remaining links and images before they reach the assistant.
 
 Licensed under the MIT License.
