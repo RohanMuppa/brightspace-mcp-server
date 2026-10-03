@@ -19,6 +19,7 @@ import {
 } from "./retry.js";
 import { log } from "../utils/logger.js";
 import { AUTH_COMMAND } from "../utils/commands.js";
+import { devActivity } from "../utils/dev-activity.js";
 
 /** An ordinary course HTML link to the login page is not an expired session. */
 function isExpiredSessionRedirect(body: string, baseUrl: string): boolean {
@@ -333,6 +334,7 @@ export class D2LApiClient {
 
   /** Buckets one observed HTTP status into statsData.statusClasses. */
   private recordStatus(status: number): void {
+    devActivity("http_response", { status });
     const classes = this.statsData.statusClasses;
     if (status >= 200 && status < 300) classes["2xx"]++;
     else if (status === 401) classes["401"]++;
@@ -363,6 +365,7 @@ export class D2LApiClient {
    * If successful, returns the fresh token. Otherwise throws 401 ApiError.
    */
   private async tryAutoReauth(path: string, rejectedAccessToken?: string): Promise<TokenData> {
+    devActivity("auth_required");
     if (this.onAuthExpired) {
       log("INFO", "Attempting auto-reauthentication...");
       const success = await this.onAuthExpired();

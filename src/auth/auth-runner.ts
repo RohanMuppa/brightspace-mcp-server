@@ -11,6 +11,7 @@ import * as path from "node:path";
 import { log } from "../utils/logger.js";
 import { AuthError } from "../utils/errors.js";
 import { AUTH_COMMAND } from "../utils/commands.js";
+import { devActivity } from "../utils/dev-activity.js";
 
 /**
  * Timeout for the auth process. It has to outlast the child's own MFA wait,
@@ -312,6 +313,8 @@ export class AuthRunner {
    * child's real completion is tracked separately on this.childDone.
    */
   private async spawnAuth(): Promise<boolean> {
+    const started = Date.now();
+    devActivity("recovery_started");
     log("INFO", "Auto-launching brightspace-auth...");
 
     return await new Promise<boolean>((resolve, reject) => {
@@ -401,6 +404,7 @@ export class AuthRunner {
       // fresh joiner sees it — see MFA_PENDING_MARKER's own comment.
       const publishChallenge = (matched: string | undefined) => {
         const firstChallenge = this.pendingChallenge === null;
+        if (firstChallenge) devActivity("mfa_observed", { elapsedMs: Date.now() - started });
         if (firstChallenge || matched) {
           this.pendingChallenge = { numberMatch: matched ?? this.pendingChallenge?.numberMatch };
         }
@@ -416,6 +420,7 @@ export class AuthRunner {
       const finishChild = (error?: AuthProcessError) => {
         if (childFinished) return;
         childFinished = true;
+        devActivity("recovery_finished", { outcome: error ? "error" : "success", reason: error?.kind, elapsedMs: Date.now() - started });
         clearTimeout(timer);
         if (killTimer) clearTimeout(killTimer);
         process.off("exit", onExit);

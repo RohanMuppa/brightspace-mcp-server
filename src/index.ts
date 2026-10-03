@@ -14,6 +14,7 @@ import { loadConfig } from "./utils/config.js";
 import { TokenManager, AuthRunner } from "./auth/index.js";
 import { D2LApiClient } from "./api/index.js";
 import { startUpdateChecks } from "./utils/update-checker.js";
+import { configureDevActivity, trackToolActivity } from "./utils/dev-activity.js";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
@@ -89,6 +90,7 @@ if (subcommand === 'setup') {
     try {
       // Load configuration
       const config = await loadConfig();
+      configureDevActivity(config.sessionDir);
       log("DEBUG", "Configuration loaded", { sessionDir: config.sessionDir });
 
       // Create MCP server instance
@@ -167,6 +169,7 @@ if (subcommand === 'setup') {
       // shows an MFA challenge mid-call and waits for the approval instead of
       // asking to be called again (see relayMfaChallenges).
       relayMfaChallenges(server);
+      trackToolActivity(server);
       registerGetMyCourses(server, apiClient, config);
       registerGetUpcomingDueDates(server, apiClient, config);
       registerGetCalendarEvents(server, apiClient, config);

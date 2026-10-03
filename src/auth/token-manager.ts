@@ -9,6 +9,7 @@ import { SessionStore } from "./session-store.js";
 import { mintAccessToken } from "./token-mint.js";
 import { log } from "../utils/logger.js";
 import { TokenRefreshError } from "../api/errors.js";
+import { devActivity } from "../utils/dev-activity.js";
 
 /**
  * Token refresh buffer - tokens within this time of expiry are considered invalid.
@@ -186,6 +187,8 @@ export class TokenManager {
   }
 
   private async runMint(stale: TokenData): Promise<TokenData | null> {
+    const started = Date.now();
+    devActivity("token_mint_started");
     log("DEBUG", "Trying to mint an access token from the session cookie");
 
     let result;
@@ -196,8 +199,13 @@ export class TokenManager {
         csrfToken: stale.csrfToken as string,
       });
     } catch (error) {
+      devActivity("token_mint_finished", { outcome: "transport", elapsedMs: Date.now() - started });
       throw new TokenRefreshError("token service request failed", error instanceof Error ? error : undefined);
     }
+    devActivity("token_mint_finished", {
+      outcome: result.ok ? "success" : result.reason === "sessionExpired" ? "sessionExpired" : "error",
+      elapsedMs: Date.now() - started,
+    });
 
     // The auth CLI or another MCP process can finish a login while HTTP minting
     // is in flight. Its newer session wins over either result of this request.

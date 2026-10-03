@@ -73,6 +73,13 @@
           "isSecret": false
         },
         {
+          "name": "D2L_DEV_MODE",
+          "description": "Set to true to record local tool timestamps and safe authentication outcomes in the account session directory. No arguments, results or credentials are logged. Default: false.",
+          "isRequired": false,
+          "format": "boolean",
+          "isSecret": false
+        },
+        {
           "name": "D2L_NO_UPDATE_CHECK",
           "description": "Set to any value to disable the startup check against the npm registry for a newer version.",
           "isRequired": false,
