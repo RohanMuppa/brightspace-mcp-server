@@ -72,5 +72,7 @@ export async function saveEncryptedRecord(sessionDir: string, file: string, kind
 export async function trashFile(file: string, options: SecureStoreOptions): Promise<void> {
   if (options.trash) return options.trash(file);
   const { default: trash } = await import("trash");
-  await trash(file);
+  // A literal path, never a pattern: a bracket or brace in the home directory
+  // name must not be read as a glob.
+  await trash(file, { glob: false });
 }

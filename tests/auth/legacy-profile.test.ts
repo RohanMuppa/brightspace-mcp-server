@@ -27,7 +27,7 @@ describe("retiring the legacy browser profile", () => {
   it("uses recoverable Trash only after encrypted state exists", async () => {
     await retireLegacyProfile(sessionDir);
     expect(fs.access).toHaveBeenCalledWith(path.join(sessionDir, "storage-state.encrypted.json"));
-    expect(trash).toHaveBeenCalledWith([path.join(sessionDir, "browser-data")]);
+    expect(trash).toHaveBeenCalledWith([path.join(sessionDir, "browser-data")], { glob: false });
     expect(vi.mocked(fs.access).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(trash).mock.invocationCallOrder[0]);
   });
 

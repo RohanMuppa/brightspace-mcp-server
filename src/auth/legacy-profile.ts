@@ -24,7 +24,7 @@ export async function retireLegacyProfile(sessionDir: string): Promise<void> {
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") return;
     }
-    await trash([profile]);
+    await trash([profile], { glob: false });
     log("INFO", "Moved the retired v1 browser-data profile to Trash. It can be restored there.");
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
