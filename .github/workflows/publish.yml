@@ -17,7 +17,7 @@ jobs:
     outputs:
       published: ${{ steps.publish.outputs.published }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-node@v7
         with:
@@ -67,7 +67,7 @@ jobs:
       # registry-side change can't silently alter CI behavior.
       MCP_PUBLISHER_VERSION: v1.8.1
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Verify server.json version matches package.json
         run: |
