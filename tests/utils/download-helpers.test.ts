@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { secureDownload, resolveFilenameConflict } from "../../src/utils/download-helpers.js";
+import { secureDownload, secureStreamDownload, resolveFilenameConflict } from "../../src/utils/download-helpers.js";
 import { DownloadError } from "../../src/utils/download-errors.js";
 
 /**
@@ -166,5 +166,96 @@ describe("resolveFilenameConflict", () => {
       await fs.writeFile(path.join(targetDir, name), "x");
     }
     expect(await resolveFilenameConflict(targetDir, "x.pdf")).toBe("x(3).pdf");
+  });
+});
+
+/** A web stream delivering the given chunks, the way fetch hands over a body. */
+function streamOf(...chunks: Buffer[]): ReadableStream<Uint8Array> {
+  return new ReadableStream({
+    start(controller) {
+      for (const chunk of chunks) controller.enqueue(chunk);
+      controller.close();
+    },
+  });
+}
+
+describe("secureStreamDownload", () => {
+  it("writes the streamed file and reports its path, size and type", async () => {
+    const result = await secureStreamDownload({
+      targetDir,
+      filename: "deck.pdf",
+      body: streamOf(Buffer.from("%PDF-1.4\n"), Buffer.alloc(1000)),
+      maxBytes: 1024 * 1024,
+    });
+
+    expect(result).toEqual({ path: path.join(targetDir, "deck.pdf"), size: 1009, mime: "application/pdf" });
+  });
+
+  it("refuses a body that grows past maxBytes", async () => {
+    const attempt = secureStreamDownload({
+      targetDir,
+      filename: "deck.pdf",
+      body: streamOf(Buffer.from("%PDF-1.4\n"), Buffer.alloc(2000)),
+      maxBytes: 1024,
+    });
+
+    await expect(attempt).rejects.toMatchObject({ kind: "tooLarge" });
+  });
+
+  it("leaves nothing in the directory after refusing an oversize body", async () => {
+    await secureStreamDownload({
+      targetDir,
+      filename: "deck.pdf",
+      body: streamOf(Buffer.from("%PDF-1.4\n"), Buffer.alloc(2000)),
+      maxBytes: 1024,
+    }).catch(() => undefined);
+
+    expect(await fs.readdir(targetDir)).toEqual([]);
+  });
+
+  it("never writes above the target directory", async () => {
+    const result = await secureStreamDownload({
+      targetDir,
+      filename: "../../escape.pdf",
+      body: streamOf(pdfBuffer()),
+      maxBytes: 1024 * 1024,
+    });
+
+    expect(inside(result.path)).toBe(true);
+  });
+
+  it("resolves a conflict rather than overwriting", async () => {
+    await fs.writeFile(path.join(targetDir, "deck.pdf"), "already here");
+
+    const result = await secureStreamDownload({
+      targetDir,
+      filename: "deck.pdf",
+      body: streamOf(pdfBuffer()),
+      maxBytes: 1024 * 1024,
+    });
+
+    expect(path.basename(result.path)).toBe("deck(1).pdf");
+  });
+
+  it("still accepts a plain text file, which has no magic bytes", async () => {
+    const result = await secureStreamDownload({
+      targetDir,
+      filename: "notes.txt",
+      body: streamOf(Buffer.from("week 3 notes\n")),
+      maxBytes: 1024 * 1024,
+    });
+
+    expect(result.mime).toBe("text/plain");
+  });
+
+  it("still refuses a type that is not on the allowlist", async () => {
+    const attempt = secureStreamDownload({
+      targetDir,
+      filename: "setup.exe",
+      body: streamOf(Buffer.concat([Buffer.from("MZ"), Buffer.alloc(4096, 0xff)])),
+      maxBytes: 1024 * 1024,
+    });
+
+    await expect(attempt).rejects.toBeInstanceOf(DownloadError);
   });
 });
