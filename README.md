@@ -73,7 +73,7 @@ School-specific quirks: [docs/sign-in.md](docs/sign-in.md#per-school-notes).
 | Course content | "Find the midterm review slides" · "Download every PDF from Module 5" · "Search this course for office hours" · or just read a file inline instead of saving it |
 | People | "Who are the TAs for ECE 264?" · "Who is in my project group?" |
 | Discussions | "Summarize the latest posts in the final project thread" |
-| Lecture videos | "What did the professor say about pinch-off in Tuesday's recording?" (Kaltura and YouTube) |
+| Lecture videos | "What did the professor say about pinch-off in Tuesday's recording?" (Kaltura, including BoilerCast LTI links, and YouTube) |
 | Calendar | "When is my midterm?" · "Is lab cancelled on Thursday?" |
 | For instructors and TAs | "Which students haven't submitted Lab 4 yet?" · "What feedback did I leave on this student's homework?" · "Download that student's submitted PDF" (students see a clear "instructor access required" note) |
 
