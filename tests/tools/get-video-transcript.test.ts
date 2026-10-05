@@ -196,6 +196,26 @@ describe("get_video_transcript — Brightspace LTI quickLinks", () => {
     expect(body.message).toMatch(/LTI link/);
   });
 
+  it("strips D2L session params from the unresolved LTI link's videoUrl and message, but fetches the raw URL (#187)", async () => {
+    const sessionLink =
+      "/d2l/common/dialogs/quickLink/quickLink.d2l?ou=101&type=lti&rcode=fixture" +
+      "&d2lSessionVal=TEST_SESSION&d2lSecureSessionVal=TEST_SECURE";
+    const { call, apiClient } = setup(kalturaFetch(), sessionLink);
+    const getPage = vi.fn(async () => null);
+    Object.assign(apiClient, { getPage });
+
+    const result = await call({ courseId: COURSE_ID, topicId: 55 });
+    const body = JSON.parse(result.content[0].text);
+
+    // The authenticated request still uses the URL exactly as Brightspace gave it.
+    expect(getPage).toHaveBeenCalledWith(sessionLink);
+    expect(result.content[0].text).not.toContain("TEST_SESSION");
+    expect(result.content[0].text).not.toContain("TEST_SECURE");
+    expect(body.videoUrl).toBe("/d2l/common/dialogs/quickLink/quickLink.d2l?ou=101&type=lti&rcode=fixture");
+    expect(body.message).toContain("ou=101&type=lti&rcode=fixture");
+    expect(body.message).not.toMatch(/d2lSessionVal|d2lSecureSessionVal/i);
+  });
+
   it("says the LTI link could not be resolved, rather than calling it an unsupported platform", async () => {
     const { call } = setupLti({
       [QUICKLINK]: launchPage(

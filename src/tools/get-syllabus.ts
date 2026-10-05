@@ -9,6 +9,7 @@ import { D2LApiClient, ApiError, DEFAULT_CACHE_TTLS } from "../api/index.js";
 import { GetSyllabusSchema } from "./schemas.js";
 import { toolResponse, sanitizeError, errorResponse } from "./tool-helpers.js";
 import { convertHtmlToMarkdown } from "../utils/html-converter.js";
+import { stripD2lSessionParams } from "../utils/session-params.js";
 import { secureDownload, readBodyCapped } from "../utils/download-helpers.js";
 import { DownloadError } from "../utils/download-errors.js";
 import { MAX_FILE_SIZE } from "../utils/file-validator.js";
@@ -68,7 +69,9 @@ function findExternalSyllabusSources(
     for (const m of modules) {
       for (const t of m.Topics ?? []) {
         if (t.Url && LTI_LAUNCH_PATTERN.test(t.Url) && SYLLABUS_PATTERN.test(t.Title)) {
-          sources.push({ title: t.Title, location: "content", url: t.Url });
+          // Keep routing params (ou, type, rcode) so the link still opens the
+          // right tool, but never echo D2L session tokens.
+          sources.push({ title: t.Title, location: "content", url: stripD2lSessionParams(t.Url) });
         }
       }
       walk(m.Modules ?? []);

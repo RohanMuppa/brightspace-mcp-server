@@ -170,6 +170,37 @@ describe("get_syllabus external LTI syllabus sources", () => {
     ]);
   });
 
+  it("strips D2L session params from a content-topic source URL but keeps its routing params (#187)", async () => {
+    const call = setup({
+      overview: EMPTY_OVERVIEW,
+      toc: tocWith([
+        {
+          TopicId: 9,
+          Title: "Course Syllabus",
+          TypeIdentifier: "Link",
+          Url:
+            "/d2l/common/dialogs/quickLink/quickLink.d2l?ou=101&type=lti&rcode=fixture" +
+            "&d2lSessionVal=TEST_SESSION&d2lSecureSessionVal=TEST_SECURE",
+        },
+      ]),
+      ltiLinks: [],
+    });
+
+    const result = await call();
+    const serialized = JSON.stringify(result);
+
+    expect(serialized).not.toContain("TEST_SESSION");
+    expect(serialized).not.toContain("TEST_SECURE");
+    expect(serialized).not.toMatch(/d2lSessionVal|d2lSecureSessionVal/i);
+    expect(result.externalSyllabusSources).toEqual([
+      {
+        title: "Course Syllabus",
+        location: "content",
+        url: "/d2l/common/dialogs/quickLink/quickLink.d2l?ou=101&type=lti&rcode=fixture",
+      },
+    ]);
+  });
+
   it("ignores syllabus-titled content that is not an LTI launch", async () => {
     const call = setup({
       overview: EMPTY_OVERVIEW,

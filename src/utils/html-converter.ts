@@ -6,6 +6,7 @@
 
 import { createRequire } from "node:module";
 import type TurndownServiceType from "turndown";
+import { stripD2lSessionParams } from "./session-params.js";
 
 // turndown is CJS and costs ~50ms to import; defer it to first use via
 // createRequire so callers keep a synchronous API instead of turning async.
@@ -85,7 +86,7 @@ function getTurndownService(): TurndownServiceType {
         // javascript:/data: hrefs aren't content links; drop the link but
         // keep whatever text was inside it.
         if (isUnsafeHref(href)) return content;
-        const cleaned = stripSessionParams(href).replace(/([()])/g, "\\$1");
+        const cleaned = stripD2lSessionParams(href).replace(/([()])/g, "\\$1");
         const title = (node as HTMLElement).getAttribute("title");
         const titlePart = title ? ` "${title.replace(/"/g, '\\"')}"` : "";
         return `[${content}](${cleaned}${titlePart})`;
@@ -97,7 +98,7 @@ function getTurndownService(): TurndownServiceType {
       replacement: (_content, node) => {
         const el = node as HTMLElement;
         const alt = el.getAttribute("alt") ?? "";
-        const src = stripSessionParams(el.getAttribute("src") ?? "");
+        const src = stripD2lSessionParams(el.getAttribute("src") ?? "");
         const title = el.getAttribute("title");
         const titlePart = title ? ` "${title}"` : "";
         return src ? `![${alt}](${src}${titlePart})` : "";
@@ -105,33 +106,6 @@ function getTurndownService(): TurndownServiceType {
     });
   }
   return turndownService;
-}
-
-const SESSION_QUERY_PARAMS = new Set(["d2lsessionval", "d2lsecuresessionval", "_"]);
-
-/**
- * Strip D2L's per-session query params (`d2lSessionVal`, `d2lSecureSessionVal`,
- * and the `_` cache-buster) from a URL. Everything else about the URL --
- * scheme, path, other params -- is left untouched, including a relative href,
- * which is returned as-is apart from this filtering.
- */
-function stripSessionParams(url: string): string {
-  const queryStart = url.indexOf("?");
-  if (queryStart < 0) return url;
-  const earlyHash = url.indexOf("#");
-  if (earlyHash >= 0 && earlyHash < queryStart) {
-    // The "?" falls inside the fragment (e.g. "#frag?x=1"), not a real query
-    // string -- nothing to strip, and treating it as one would mangle the
-    // fragment.
-    return url;
-  }
-  const hashStart = url.indexOf("#", queryStart);
-  const query = url.slice(queryStart + 1, hashStart < 0 ? undefined : hashStart);
-  const hash = hashStart < 0 ? "" : url.slice(hashStart);
-  const kept = query
-    .split("&")
-    .filter((param) => param !== "" && !SESSION_QUERY_PARAMS.has(param.split("=")[0].toLowerCase()));
-  return url.slice(0, queryStart) + (kept.length > 0 ? `?${kept.join("&")}` : "") + hash;
 }
 
 /** True for `javascript:`/`data:` hrefs -- never a legitimate content link. */
