@@ -15,7 +15,7 @@ import {
   extractYouTubeVideoId,
   type VideoPlatform,
 } from "../utils/transcript/platform.js";
-import { isBrightspaceRelativeLink, readLtiLaunchPage } from "../utils/transcript/lti.js";
+import { readLtiLaunchPage, toBrightspacePath } from "../utils/transcript/lti.js";
 import { getKalturaTranscript } from "../utils/transcript/kaltura.js";
 import { getYouTubeTranscript } from "../utils/transcript/youtube.js";
 import { NoTranscriptError, TranscriptFetchError } from "../utils/transcript/errors.js";
@@ -64,7 +64,7 @@ async function followLtiLaunch(apiClient: D2LApiClient, path: string): Promise<s
   for (let page = 0; page < MAX_LTI_PAGES; page++) {
     const html = await apiClient.getPage(next);
     if (html === null) return null;
-    const finding = readLtiLaunchPage(html);
+    const finding = readLtiLaunchPage(html, apiClient.origin);
     if (!finding) return null;
     if ("videoUrl" in finding) return finding.videoUrl;
     next = finding.nextPath;
@@ -172,8 +172,11 @@ export function registerGetVideoTranscript(
           );
         }
 
-        if (isBrightspaceRelativeLink(resolvedUrl)) {
-          const launchedUrl = await followLtiLaunch(apiClient, resolvedUrl);
+        // A relative /d2l/ link, or an absolute one on this Brightspace's own
+        // origin, is requested as the user; any other origin never sees the session.
+        const brightspacePath = toBrightspacePath(resolvedUrl, apiClient.origin);
+        if (brightspacePath !== null) {
+          const launchedUrl = await followLtiLaunch(apiClient, brightspacePath);
           if (!launchedUrl) {
             // resolvedUrl (with any session params) was only for the
             // authenticated getPage above; public output gets the clean form.
