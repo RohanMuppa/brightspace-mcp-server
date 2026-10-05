@@ -157,6 +157,9 @@ const DOWNLOAD_FAILURE_GUIDANCE: Record<DownloadFailureKind, string> = {
   pathTraversal:
     "The name Brightspace gave this file pointed outside the download " +
     "directory and was refused. Pass customFilename to choose one yourself.",
+  tooLarge:
+    "The file is larger than the download size limit. " +
+    "Open it from Brightspace in a browser instead.",
 };
 
 /**
