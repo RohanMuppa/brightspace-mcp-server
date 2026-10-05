@@ -13,6 +13,9 @@ import { ApiError, NetworkError, RateLimitError } from "./errors.js";
  * so this module knows nothing about HTTP. A 429 that names a Retry-After is
  * honored verbatim, even past `maxMs`, because the server has told us
  * exactly when to come back and guessing sooner only earns another 429.
+ * A Retry-After longer than `maxRetryAfterMs` is not waited out at all: the
+ * tool call would block far past any client timeout, so the 429 is surfaced
+ * at once and its message tells the user when to try again.
  *
  * `sleep` and `jitter` are injectable so the backoff sequence is testable
  * without fake timers.
@@ -25,6 +28,8 @@ export interface RetryConfig {
   initialMs?: number;
   /** Ceiling on the computed backoff. Default 5000. Retry-After ignores it. */
   maxMs?: number;
+  /** Longest Retry-After worth waiting out. Default 30000. Longer ones rethrow. */
+  maxRetryAfterMs?: number;
   sleep?: (ms: number) => Promise<void>;
   /** Returns a number in [0, 1). Default Math.random. */
   jitter?: () => number;
@@ -46,6 +51,7 @@ export async function withRetry<T>(fn: () => Promise<T>, options: RetryOptions):
     maxAttempts = 3,
     initialMs = 250,
     maxMs = 5000,
+    maxRetryAfterMs = 30_000,
     sleep = defaultSleep,
     jitter = Math.random,
     shouldRetry,
@@ -61,6 +67,7 @@ export async function withRetry<T>(fn: () => Promise<T>, options: RetryOptions):
       const requested = retryAfterMs?.(error);
       let delay: number;
       if (requested !== undefined) {
+        if (requested > maxRetryAfterMs) throw error;
         delay = requested;
       } else {
         const base = Math.min(initialMs * 2 ** (attempt - 1), maxMs);
