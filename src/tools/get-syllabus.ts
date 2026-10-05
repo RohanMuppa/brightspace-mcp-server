@@ -21,6 +21,94 @@ interface CourseOverview {
   Description: { Text: string; Html: string } | null;
 }
 
+// D2L content table of contents (/content/toc), trimmed to what we read
+interface TocModule {
+  Modules?: TocModule[];
+  Topics?: { Title: string; Url?: string | null }[];
+}
+
+// D2L LtiLinkData, trimmed to what we read (Key/PlainSecret are never touched)
+interface LtiLink {
+  Title: string;
+  Url: string;
+  IsVisible: boolean;
+}
+
+interface ExternalSyllabusSource {
+  title: string;
+  location: "lti-link" | "content";
+  url: string;
+}
+
+const SYLLABUS_PATTERN = /syllab/i;
+const LTI_LAUNCH_PATTERN = /[?&]type=lti\b|\/d2l\/le\/lti\//i;
+
+const EXTERNAL_SYLLABUS_NOTE =
+  "This course links its syllabus through an external LTI tool. The server lists these sources but cannot launch LTI tools, so their contents are not included; open the link in Brightspace to read it.";
+
+/** Launch URL without its query string, which can carry launch parameters. */
+function stripQuery(url: string): string {
+  return url.split(/[?#]/)[0];
+}
+
+/**
+ * Pick the syllabus-related LTI sources out of the course's LTI links and
+ * content tree. Pure: the caller fetches, this only decides.
+ */
+function findExternalSyllabusSources(
+  ltiLinks: LtiLink[],
+  toc: TocModule[]
+): ExternalSyllabusSource[] {
+  const sources: ExternalSyllabusSource[] = ltiLinks
+    .filter((l) => l.IsVisible !== false && (SYLLABUS_PATTERN.test(l.Title) || SYLLABUS_PATTERN.test(l.Url)))
+    .map((l) => ({ title: l.Title, location: "lti-link", url: stripQuery(l.Url) }));
+
+  const walk = (modules: TocModule[]): void => {
+    for (const m of modules) {
+      for (const t of m.Topics ?? []) {
+        if (t.Url && LTI_LAUNCH_PATTERN.test(t.Url) && SYLLABUS_PATTERN.test(t.Title)) {
+          sources.push({ title: t.Title, location: "content", url: t.Url });
+        }
+      }
+      walk(m.Modules ?? []);
+    }
+  };
+  walk(toc);
+  return sources;
+}
+
+/** Fetch a lookup that students may not be permitted to make; failure means "none". */
+async function fetchOrEmpty<T>(fetch: () => Promise<T>, fallback: T, what: string): Promise<T> {
+  try {
+    return await fetch();
+  } catch (error) {
+    log("DEBUG", `get_syllabus: could not read ${what}`, error);
+    return fallback;
+  }
+}
+
+async function discoverExternalSyllabusSources(
+  apiClient: D2LApiClient,
+  courseId: number
+): Promise<Record<string, unknown>> {
+  const [ltiLinks, toc] = await Promise.all([
+    fetchOrEmpty(
+      () => apiClient.get<LtiLink[]>(apiClient.leGlobal(`/lti/link/${courseId}/`), { ttl: DEFAULT_CACHE_TTLS.courseContent }),
+      [],
+      "LTI links"
+    ),
+    fetchOrEmpty(
+      () => apiClient.get<{ Modules?: TocModule[] }>(apiClient.le(courseId, "/content/toc"), { ttl: DEFAULT_CACHE_TTLS.courseContent }),
+      {},
+      "content table of contents"
+    ),
+  ]);
+  const sources = findExternalSyllabusSources(ltiLinks ?? [], toc?.Modules ?? []);
+  return sources.length > 0
+    ? { externalSyllabusSources: sources, externalSyllabusNote: EXTERNAL_SYLLABUS_NOTE }
+    : {};
+}
+
 /**
  * Register get_syllabus tool
  */
@@ -33,7 +121,7 @@ export function registerGetSyllabus(
     {
       title: "Get Course Syllabus",
       description:
-        "Fetch the syllabus/overview text and optional attachment for a course. Returns the course overview description as markdown. If downloadPath is provided, also downloads the syllabus attachment (e.g. PDF). IMPORTANT: You MUST ask the user where they want to save the file before calling this tool with a downloadPath.",
+        "Fetch the syllabus/overview text and optional attachment for a course. Returns the course overview description as markdown. When the syllabus lives in an external LTI tool (e.g. Simple Syllabus), lists those sources in externalSyllabusSources; their contents cannot be read. If downloadPath is provided, also downloads the syllabus attachment (e.g. PDF). IMPORTANT: You MUST ask the user where they want to save the file before calling this tool with a downloadPath.",
       inputSchema: GetSyllabusSchema,
     },
     async (args: any) => {
@@ -80,6 +168,7 @@ export function registerGetSyllabus(
               description: null,
               hasAttachment: false,
               message: "No syllabus/overview found for this course.",
+              ...(await discoverExternalSyllabusSources(apiClient, courseId)),
             });
           }
           throw error;
@@ -194,6 +283,8 @@ export function registerGetSyllabus(
         if (download) {
           result.download = download;
         }
+
+        Object.assign(result, await discoverExternalSyllabusSources(apiClient, courseId));
 
         return toolResponse(result);
       } catch (error) {
