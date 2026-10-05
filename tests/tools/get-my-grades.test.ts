@@ -294,3 +294,75 @@ describe("get_my_grades grade-restricted courses", () => {
     );
   });
 });
+
+/**
+ * A grade row linked to a quiz can carry feedback the gradebook does not: the
+ * quiz's own submissions page may hold it, sometimes behind a restricted viewer
+ * such as Respondus LockDown Browser. The student API cannot read that
+ * feedback, so a null `comments` on such a row must not read as "no feedback".
+ * Quiz-linked rows say where the feedback lives; every other row is unchanged.
+ */
+describe("get_my_grades quiz feedback source", () => {
+  const QUIZ = { QuizId: 77, Name: "Midterm", GradeItemId: 5001, IsActive: true };
+  const quizGrade = { ...grade("Midterm"), GradeObjectIdentifier: "5001" };
+  const quizUrl = "https://brightspace.example.edu/d2l/lms/quizzing/user/quiz_summary.d2l?qi=77&ou=101";
+
+  const respond = (grades: unknown[], quizzes: unknown = { Objects: [QUIZ] }) => (path: string) => {
+    if (path.includes("/enrollments/")) return enrollmentPage(COURSE_A, true);
+    if (path.includes("/quizzes/")) return quizzes;
+    return grades;
+  };
+
+  it("links a quiz grade to its quiz page", async () => {
+    const { call } = setup(respond([quizGrade]));
+
+    const [row] = parse(await call({ courseId: COURSE_A.Id })).grades;
+
+    expect(row.feedbackUrl).toBe(quizUrl);
+  });
+
+  it("notes that feedback may exist on the quiz when the gradebook has no comment", async () => {
+    const { call } = setup(respond([quizGrade]));
+
+    const [row] = parse(await call({ courseId: COURSE_A.Id })).grades;
+
+    expect(row.comments).toBeNull();
+    expect(row.feedbackNote).toMatch(/LockDown Browser/);
+  });
+
+  it("omits the note when the gradebook already carries a comment", async () => {
+    const commented = { ...quizGrade, Comments: { Text: "Nice work", Html: "<p>Nice work</p>" } };
+    const { call } = setup(respond([commented]));
+
+    const [row] = parse(await call({ courseId: COURSE_A.Id })).grades;
+
+    expect(row.feedbackNote).toBeUndefined();
+  });
+
+  it("links quiz grades in the all-courses result too", async () => {
+    const { call } = setup(respond([quizGrade]));
+
+    const [row] = parse(await call({})).courses[0].grades;
+
+    expect(row.feedbackUrl).toBe(quizUrl);
+  });
+
+  it("leaves a grade with no linked quiz unchanged", async () => {
+    const { call } = setup(respond([grade("Homework 1")]));
+
+    const [row] = parse(await call({ courseId: COURSE_A.Id })).grades;
+
+    expect(Object.keys(row)).not.toContain("feedbackUrl");
+  });
+
+  it("still returns grades when the quiz list is refused", async () => {
+    const { call } = setup((path) => {
+      if (path.includes("/quizzes/")) throw Object.assign(new Error("Forbidden"), { status: 403 });
+      return [quizGrade];
+    });
+
+    const payload = parse(await call({ courseId: COURSE_A.Id }));
+
+    expect(payload.grades.map((g: { name: string }) => g.name)).toEqual(["Midterm"]);
+  });
+});
