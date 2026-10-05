@@ -137,14 +137,14 @@ describe("get_video_transcript — Brightspace LTI quickLinks", () => {
     return `<html><body>${body}<script>document.forms[0].submit();</script></body></html>`;
   }
 
-  function setupLti(pages: Record<string, string>) {
+  function setupLti(pages: Record<string, string | null>) {
     const { call, apiClient } = setup(kalturaFetch(), QUICKLINK);
-    const getRaw = vi.fn(async (path: string) => {
-      if (!(path in pages)) throw new Error(`Unexpected getRaw: ${path}`);
-      return new Response(pages[path], { headers: { "content-type": "text/html" } });
+    const getPage = vi.fn(async (path: string) => {
+      if (!(path in pages)) throw new Error(`Unexpected getPage: ${path}`);
+      return pages[path];
     });
-    Object.assign(apiClient, { getRaw });
-    return { call, getRaw };
+    Object.assign(apiClient, { getPage });
+    return { call, getPage };
   }
 
   it("follows the LTI launch form to the Kaltura video and returns its transcript", async () => {
@@ -186,6 +186,14 @@ describe("get_video_transcript — Brightspace LTI quickLinks", () => {
     const body = JSON.parse((await call({ courseId: COURSE_ID, topicId: 55 })).content[0].text);
 
     expect(body.hasTranscript).toBe(true);
+  });
+
+  it("says the LTI link could not be resolved when the page can't be read with the session cookie", async () => {
+    const { call } = setupLti({ [QUICKLINK]: null });
+    const body = JSON.parse((await call({ courseId: COURSE_ID, topicId: 55 })).content[0].text);
+
+    expect(body.hasTranscript).toBe(false);
+    expect(body.message).toMatch(/LTI link/);
   });
 
   it("says the LTI link could not be resolved, rather than calling it an unsupported platform", async () => {

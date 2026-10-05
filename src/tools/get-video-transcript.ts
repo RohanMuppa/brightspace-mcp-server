@@ -61,8 +61,9 @@ const MAX_LTI_PAGES = 2;
 async function followLtiLaunch(apiClient: D2LApiClient, path: string): Promise<string | null> {
   let next = path;
   for (let page = 0; page < MAX_LTI_PAGES; page++) {
-    const response = await apiClient.getRaw(next);
-    const finding = readLtiLaunchPage(await response.text());
+    const html = await apiClient.getPage(next);
+    if (html === null) return null;
+    const finding = readLtiLaunchPage(html);
     if (!finding) return null;
     if ("videoUrl" in finding) return finding.videoUrl;
     next = finding.nextPath;
