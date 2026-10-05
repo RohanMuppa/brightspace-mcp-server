@@ -90,6 +90,15 @@ describe("sanitizeError", () => {
     expect(textOf(result)).toContain("enter 47");
   });
 
+  // The server polls for the approval on the next call, so the model must
+  // call again at once rather than ask the user to report back by hand.
+  it.each([undefined, "47"])("tells the caller to call again immediately while MFA is pending (number: %s)", (numberMatch) => {
+    const result = sanitizeError(new AuthProcessError("mfaPending", "internal detail", numberMatch));
+
+    expect(textOf(result)).toContain("call this tool again right away");
+    expect(textOf(result)).toContain("45 seconds");
+  });
+
   it("never repeats the raw failure text back to the caller", () => {
     const result = sanitizeError(
       new AuthProcessError("failed", "chromium crashed at /home/elliot/.cache/ms-playwright")

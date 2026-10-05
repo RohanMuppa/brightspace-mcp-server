@@ -205,7 +205,7 @@ describe("AuthRunner", () => {
     if (process.platform !== "win32") expect(kill).toHaveBeenCalledWith(-child.pid, "SIGKILL");
   });
 
-  it("re-answers a joiner with the same challenge after a grace window if the child is still running", async () => {
+  it("re-answers a joiner with the same challenge once the 45-second poll window lapses while the child still runs", async () => {
     const runner = new AuthRunner();
     const first = runner.run();
     const firstFailure = expect(first).rejects.toMatchObject({ kind: "mfaPending", numberMatch: "47" });
@@ -214,7 +214,7 @@ describe("AuthRunner", () => {
 
     const second = runner.run();
     const secondFailure = expect(second).rejects.toMatchObject({ kind: "mfaPending", numberMatch: "47" });
-    await vi.advanceTimersByTimeAsync(5000);
+    await vi.advanceTimersByTimeAsync(45000);
     await secondFailure;
 
     expect(spawn).toHaveBeenCalledTimes(1);
@@ -237,13 +237,13 @@ describe("AuthRunner", () => {
 
     const second = runner.run();
     const secondFailure = expect(second).rejects.toMatchObject({ kind: "mfaPending", numberMatch: "73" });
-    await vi.advanceTimersByTimeAsync(5000);
+    await vi.advanceTimersByTimeAsync(45000);
     await secondFailure;
 
     expect(spawn).toHaveBeenCalledTimes(1);
   });
 
-  it("resolves a joiner early when the background child closes within the grace window", async () => {
+  it("resolves a joiner early when the background child closes within the poll window", async () => {
     const runner = new AuthRunner();
     const first = runner.run();
     const firstFailure = expect(first).rejects.toMatchObject({ kind: "mfaPending", numberMatch: "47" });
@@ -254,6 +254,29 @@ describe("AuthRunner", () => {
     await vi.advanceTimersByTimeAsync(2000);
     child.emit("close", 0);
 
+    expect(await second).toBe(true);
+    expect(spawn).toHaveBeenCalledTimes(1);
+  });
+
+  // The client that cannot show a progress message (Claude Desktop sends no
+  // progress token) relays the number, then calls again. That retry is the
+  // poll: it must keep waiting while the user types the number into their
+  // phone, not re-answer after a few seconds and make the model ask the user
+  // to confirm by hand.
+  it("keeps a joiner without onChallenge waiting most of a minute and resolves when the approval lands", async () => {
+    const runner = new AuthRunner();
+    const first = runner.run();
+    const firstFailure = expect(first).rejects.toMatchObject({ kind: "mfaPending", numberMatch: "47" });
+    child.stdout.write("MFA_NUMBER:47\n");
+    await firstFailure;
+
+    let settled = false;
+    const second = runner.run();
+    void second.then(() => { settled = true; }, () => { settled = true; });
+    await vi.advanceTimersByTimeAsync(44000);
+    expect(settled).toBe(false);
+
+    child.emit("close", 0);
     expect(await second).toBe(true);
     expect(spawn).toHaveBeenCalledTimes(1);
   });
