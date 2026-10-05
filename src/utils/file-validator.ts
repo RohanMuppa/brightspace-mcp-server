@@ -66,6 +66,15 @@ const XML_EXTENSION_MIMES: Record<string, string> = {
 export const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50 MB
 
 /**
+ * Maximum bytes of a file a disk-mode download will save. Disk downloads
+ * stream straight to the file, so memory no longer bounds them the way
+ * MAX_FILE_SIZE bounds buffered downloads; this only stops a runaway body
+ * filling the disk. Lecture decks, recordings and submitted decks routinely
+ * pass 50 MB.
+ */
+export const DISK_MAX_FILE_SIZE = 2 * 1024 * 1024 * 1024; // 2 GB
+
+/**
  * Allowlist of MIME types safe for download.
  * Prevents execution of potentially malicious file types (executables, scripts).
  */

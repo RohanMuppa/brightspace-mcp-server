@@ -15,21 +15,18 @@ import { checkTopicAvailability } from "./topic-availability.js";
 // go through; importing it here only made it look as though this file
 // validated anything itself. Inline mode never writes to disk, so it calls
 // validateFileType directly to enforce the same magic-byte allowlist.
-import { validateContentId, validateFileType, MAX_FILE_SIZE } from "../utils/file-validator.js";
+import {
+  validateContentId,
+  validateFileType,
+  MAX_FILE_SIZE,
+  DISK_MAX_FILE_SIZE,
+} from "../utils/file-validator.js";
 import { secureStreamDownload } from "../utils/download-helpers.js";
 import { DownloadError } from "../utils/download-errors.js";
 import { extractPdfText } from "../utils/pdf-extractor.js";
 import { officeDocumentText } from "../utils/zip-extract.js";
 import fs from "node:fs/promises";
 import path from "node:path";
-
-/**
- * Maximum bytes of a file disk mode will save. Disk downloads stream straight
- * to the file, so memory no longer bounds them the way MAX_FILE_SIZE (50 MB)
- * bounds inline mode; this only stops a runaway body filling the disk.
- * Lecture decks and recordings routinely pass 50 MB.
- */
-const DISK_MAX_FILE_SIZE = 2 * 1024 * 1024 * 1024; // 2 GB
 
 /** The size cap for a download: inline mode buffers the file, disk mode streams it. */
 function maxFileSize(downloadPath: string | undefined): number {
