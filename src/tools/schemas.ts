@@ -80,9 +80,9 @@ export const DownloadFileSchema = z.object({
   topicId: z.coerce.number().int().positive().optional()
     .describe("Content topic ID to download (for course content files)."),
   folderId: z.coerce.number().int().positive().optional()
-    .describe("Dropbox folder ID (for submission/feedback file downloads)."),
+    .describe("Dropbox folder ID (for an assignment's instructor attachments or your submission files). Requires fileId."),
   fileId: z.coerce.number().int().positive().optional()
-    .describe("Specific file ID within a dropbox submission, or an announcement attachment's file ID (with newsId)."),
+    .describe("An assignment attachment's file ID (from get_assignment_files) or a submitted file's ID (with folderId), or an announcement attachment's file ID (with newsId)."),
   newsId: z.coerce.number().int().positive().optional()
     .describe("Announcement (news item) ID whose attachment to download. Requires fileId."),
   downloadPath: z.string().min(1).optional()

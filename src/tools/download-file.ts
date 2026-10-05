@@ -11,6 +11,8 @@ import { DownloadFileSchema } from "./schemas.js";
 import { toolResponse, sanitizeError, errorResponse, withUpdateNotice } from "./tool-helpers.js";
 import { log } from "../utils/logger.js";
 import { checkTopicAvailability } from "./topic-availability.js";
+import { listFolders } from "./get-assignment-files.js";
+import type { D2LFileAttachment } from "./attachment-reader.js";
 // Path containment checks belong to secureStreamDownload, which disk-mode downloads
 // go through; importing it here only made it look as though this file
 // validated anything itself. Inline mode never writes to disk, so it calls
@@ -293,7 +295,7 @@ export function registerDownloadFile(
     {
       title: "Download File",
       description:
-        "Download a file from course content, assignment submissions, or an announcement's attachments. Use this when the user wants a file from Brightspace course content, dropbox submissions, or an announcement (newsId + fileId, from get_announcements). Two response modes: (1) INLINE (default — omit downloadPath): the file comes back directly in the tool response — extracted text for PDFs and Office documents, an image block for jpeg/png/gif/webp, or a short description for anything else — so it can be read immediately without touching any filesystem. This is the right choice in clients like Claude Desktop, whose analysis/sandbox tools cannot see a file the MCP server writes to its own host filesystem. (2) DISK (set downloadPath to an absolute path on the HOST filesystem the MCP server runs on): the file is saved there. Ask the user where to save it before using disk mode — never guess a directory. After identifying the file, suggest a clean readable filename (e.g., 'Lecture 7 - Memory Management.pdf' instead of 'L07_CS251_2026SP_v2.pdf') and pass it as customFilename, or omit it to keep the original. If a content-topic download fails because the file isn't released yet, the response explains why when Brightspace's module/topic metadata supports it (not yet open, ended, locked, or hidden).",
+        "Download a file from course content, an assignment (instructor attachments from get_assignment_files, or the user's own submissions; folderId + fileId), or an announcement's attachments. Use this when the user wants a file from Brightspace course content, an assignment, or an announcement (newsId + fileId, from get_announcements). Two response modes: (1) INLINE (default — omit downloadPath): the file comes back directly in the tool response — extracted text for PDFs and Office documents, an image block for jpeg/png/gif/webp, or a short description for anything else — so it can be read immediately without touching any filesystem. This is the right choice in clients like Claude Desktop, whose analysis/sandbox tools cannot see a file the MCP server writes to its own host filesystem. (2) DISK (set downloadPath to an absolute path on the HOST filesystem the MCP server runs on): the file is saved there. Ask the user where to save it before using disk mode — never guess a directory. After identifying the file, suggest a clean readable filename (e.g., 'Lecture 7 - Memory Management.pdf' instead of 'L07_CS251_2026SP_v2.pdf') and pass it as customFilename, or omit it to keep the original. If a content-topic download fails because the file isn't released yet, the response explains why when Brightspace's module/topic metadata supports it (not yet open, ended, locked, or hidden).",
       inputSchema: DownloadFileSchema,
     },
     async (args: any) => {
@@ -348,10 +350,10 @@ export function registerDownloadFile(
             customFilename
           );
         } else if (folderId !== undefined && fileId !== undefined) {
-          // Submission file download
+          // Instructor attachment or submission file download
           validateContentId(folderId);
           validateContentId(fileId);
-          return await downloadSubmissionFile(
+          return await downloadAssignmentFile(
             apiClient,
             courseId,
             folderId,
@@ -373,7 +375,7 @@ export function registerDownloadFile(
           );
         } else {
           return errorResponse(
-            "Either topicId (for content files), both folderId and fileId (for submission files), or both newsId and fileId (for announcement attachments) must be provided"
+            "Either topicId (for content files), both folderId and fileId (for assignment attachments or submission files), or both newsId and fileId (for announcement attachments) must be provided"
           );
         }
       } catch (error) {
@@ -453,9 +455,16 @@ async function downloadContentFile(
 }
 
 /**
- * Download a submission/feedback file using folderId + fileId
+ * Download an assignment file using folderId + fileId: an instructor's
+ * attachment on the dropbox folder (the files get_assignment_files lists), or
+ * one of the student's own submitted files.
+ *
+ * The folder's attachments are checked first. Brightspace hands out file IDs
+ * from one store, so an attachment and a submitted file do not share an ID in
+ * practice; if they ever did, the instructor's file wins, since that is the
+ * ID get_assignment_files hands callers.
  */
-async function downloadSubmissionFile(
+async function downloadAssignmentFile(
   apiClient: D2LApiClient,
   courseId: number,
   folderId: number,
@@ -465,9 +474,41 @@ async function downloadSubmissionFile(
 ): Promise<any> {
   log(
     "INFO",
-    `Downloading submission file: courseId=${courseId}, folderId=${folderId}, fileId=${fileId}`
+    `Downloading assignment file: courseId=${courseId}, folderId=${folderId}, fileId=${fileId}`
   );
 
+  const [folder] = await listFolders(apiClient, courseId, folderId);
+  const attachments = folder?.Attachments ?? [];
+  const attachment = attachments.find((f) => f.FileId === fileId);
+
+  if (attachment) {
+    if (attachment.Size > maxFileSize(downloadPath)) {
+      return tooLargeResponse(attachment.Size, downloadPath);
+    }
+    // GET /d2l/api/le/(version)/(orgUnitId)/dropbox/folders/(folderId)/attachments/(fileId)
+    const response = await apiClient.getRaw(
+      apiClient.le(courseId, `/dropbox/folders/${folderId}/attachments/${fileId}`)
+    );
+    return finishDownload(response, attachment.FileName, downloadPath, customFilename, "Assignment attachment");
+  }
+
+  return downloadSubmissionFile(apiClient, courseId, folderId, fileId, attachments, downloadPath, customFilename);
+}
+
+/**
+ * Download one of the student's submitted files. `attachments` are the
+ * folder's instructor files, named alongside the submissions when the ID
+ * matches neither.
+ */
+async function downloadSubmissionFile(
+  apiClient: D2LApiClient,
+  courseId: number,
+  folderId: number,
+  fileId: number,
+  attachments: D2LFileAttachment[],
+  downloadPath: string | undefined,
+  customFilename?: string
+): Promise<any> {
   // D2L API pattern for submission file downloads:
   // GET /d2l/api/le/(version)/(orgUnitId)/dropbox/folders/(folderId)/submissions/mysubmissions/
   // Then find the file by fileId and construct its download URL
@@ -488,13 +529,7 @@ async function downloadSubmissionFile(
   }
 
   const submissions =
-    await apiClient.get<DropboxSubmission[]>(submissionsPath);
-
-  if (!submissions || submissions.length === 0) {
-    return errorResponse(
-      "No submissions found for this assignment. Upload a submission first."
-    );
-  }
+    (await apiClient.get<DropboxSubmission[]>(submissionsPath)) ?? [];
 
   // Find the file across every submission.
   //
@@ -516,9 +551,9 @@ async function downloadSubmissionFile(
   }
 
   if (!submission || !file) {
-    const available = submissions.flatMap((s) => s.Files ?? []);
+    const available = [...attachments, ...submissions.flatMap((s) => s.Files ?? [])];
     return errorResponse(
-      `File ID ${fileId} not found in submission. Available files: ${available.map((f) => `${f.FileName} (ID: ${f.FileId})`).join(", ")}`
+      `File ID ${fileId} not found on this assignment. Available files: ${available.map((f) => `${f.FileName} (ID: ${f.FileId})`).join(", ")}`
     );
   }
 

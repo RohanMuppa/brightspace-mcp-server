@@ -42,8 +42,8 @@ function unwrapList<T>(raw: unknown): T[] {
   return Array.isArray(raw) ? (raw as T[]) : ((raw as any)?.Objects ?? []);
 }
 
-/** Every visible folder in the course that has at least one attachment. */
-async function listFolders(
+/** Every visible folder in the course, or just the one `folderId` names. */
+export async function listFolders(
   apiClient: D2LApiClient,
   courseId: number,
   folderId?: number

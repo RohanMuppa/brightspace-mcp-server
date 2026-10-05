@@ -175,6 +175,8 @@ interface Setup {
   submissions?: unknown;
   /** What GET .../news/(newsId) answers with. */
   newsItem?: unknown;
+  /** What GET .../dropbox/folders/ (the course's assignment list) answers with. */
+  folders?: unknown;
   /** Content-Length header on the raw download. */
   contentLength?: number;
   body?: Buffer | ReadableStream<Uint8Array>;
@@ -196,12 +198,16 @@ function largePdfStream(megabytes: number): ReadableStream<Uint8Array> {
   });
 }
 
-function setup({ disposition, submissions, newsItem, contentLength, body = pdfBuffer() }: Setup) {
+function setup({ disposition, submissions, newsItem, folders = [], contentLength, body = pdfBuffer() }: Setup) {
   const rawRequested: string[] = [];
 
   const apiClient = {
     le: (orgUnitId: number, p: string) => `/d2l/api/le/1.0/${orgUnitId}${p}`,
-    get: vi.fn(async (p: string) => (p.includes("/news/") ? newsItem : submissions)),
+    get: vi.fn(async (p: string) => {
+      if (p.includes("/news/")) return newsItem;
+      if (p.endsWith("/dropbox/folders/")) return folders;
+      return submissions;
+    }),
     getRaw: vi.fn(async (p: string) => {
       rawRequested.push(p);
       return new Response(body instanceof Buffer ? toArrayBuffer(body) : body, {
@@ -423,6 +429,117 @@ describe("download_file: dropbox submissions", () => {
 
     expect(textOf(result)).not.toContain("An unexpected error occurred");
     expect(parse(result).originalFilename).toBe("final.pdf");
+  });
+});
+
+/**
+ * #194: get_assignment_files lists an instructor's handout and points callers
+ * at download_file to save it, but download_file only ever looked in the
+ * student's own submissions, so the handout answered "Upload a submission
+ * first."
+ */
+describe("download_file: instructor assignment attachments", () => {
+  const folder = (attachments: unknown[]) => ({
+    Id: 5,
+    Name: "Lab 3",
+    DueDate: null,
+    IsHidden: false,
+    Attachments: attachments,
+  });
+  const file = (fileId: number, fileName: string, size = 1024) => ({
+    FileId: fileId,
+    FileName: fileName,
+    Size: size,
+  });
+
+  it("saves an instructor attachment to disk when the student has no submission", async () => {
+    const handout = fakeDocxBuffer("Lab 3 handout");
+    const { call } = setup({
+      folders: [folder([file(31, "handout.docx")])],
+      submissions: [],
+      body: handout,
+    });
+
+    const result = await call({
+      courseId: COURSE,
+      folderId: 5,
+      fileId: 31,
+      downloadPath: targetDir,
+      customFilename: "official-handout-working.docx",
+    });
+
+    expect(result.isError).toBeUndefined();
+    expect(await fs.readFile(path.join(targetDir, "official-handout-working.docx"))).toEqual(handout);
+  });
+
+  it("keeps the attachment's original filename when no customFilename is given", async () => {
+    const { call } = setup({
+      folders: [folder([file(31, "handout.docx")])],
+      submissions: [],
+      body: fakeDocxBuffer("Lab 3 handout"),
+    });
+
+    const result = await call({ courseId: COURSE, folderId: 5, fileId: 31, downloadPath: targetDir });
+
+    expect(parse(result).filePath).toBe(path.join(targetDir, "handout.docx"));
+  });
+
+  it("returns an instructor attachment's text inline", async () => {
+    const { call } = setup({
+      folders: [folder([file(31, "handout.docx")])],
+      submissions: [],
+      body: fakeDocxBuffer("Measure the resistor twice"),
+    });
+
+    const result = await call({ courseId: COURSE, folderId: 5, fileId: 31 });
+
+    expect(textOf(result)).toContain("Measure the resistor twice");
+  });
+
+  it("fetches the attachment from the dropbox attachment endpoint, not a submission", async () => {
+    const { call, rawRequested } = setup({
+      folders: [folder([file(31, "handout.pdf")])],
+      submissions: [{ Id: 900, Files: [file(31, "my-answer.pdf")] }],
+    });
+
+    await call({ courseId: COURSE, folderId: 5, fileId: 31, downloadPath: targetDir });
+
+    expect(rawRequested).toEqual([`/d2l/api/le/1.0/${COURSE}/dropbox/folders/5/attachments/31`]);
+  });
+
+  it("still downloads a submission file the folder does not list as an attachment", async () => {
+    const { call, rawRequested } = setup({
+      folders: [folder([file(31, "handout.pdf")])],
+      submissions: [{ Id: 900, Files: [file(22, "final.pdf")] }],
+    });
+
+    await call({ courseId: COURSE, folderId: 5, fileId: 22, downloadPath: targetDir });
+
+    expect(rawRequested[0]).toContain("/submissions/900/files/22/download");
+  });
+
+  it("reports an unknown file id as not found instead of asking for an upload", async () => {
+    const { call } = setup({
+      folders: [folder([file(31, "handout.pdf")])],
+      submissions: [],
+    });
+
+    const result = await call({ courseId: COURSE, folderId: 5, fileId: 99, downloadPath: targetDir });
+
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toBe("File ID 99 not found on this assignment. Available files: handout.pdf (ID: 31)");
+  });
+
+  it("refuses an attachment whose listed size is over the inline cap before fetching it", async () => {
+    const { call, rawRequested } = setup({
+      folders: [folder([file(31, "recording.pdf", 150 * 1024 * 1024)])],
+      submissions: [],
+    });
+
+    const result = await call({ courseId: COURSE, folderId: 5, fileId: 31 });
+
+    expect(textOf(result)).toContain("too large");
+    expect(rawRequested).toEqual([]);
   });
 });
 
