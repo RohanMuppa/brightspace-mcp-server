@@ -81,36 +81,92 @@ function findExternalSyllabusSources(
   return sources;
 }
 
-/** Fetch a lookup that students may not be permitted to make; failure means "none". */
-async function fetchOrEmpty<T>(fetch: () => Promise<T>, fallback: T, what: string): Promise<T> {
+type DiscoveryLookup = "lti-links" | "content-toc";
+
+interface UnavailableLookup {
+  lookup: DiscoveryLookup;
+  reason: "permission-denied" | "request-failed";
+  /** HTTP status when the server answered; absent for transport failures. */
+  status?: number;
+}
+
+const LOOKUP_LABELS: Record<DiscoveryLookup, string> = {
+  "lti-links": "course LTI links",
+  "content-toc": "course content table of contents",
+};
+
+type LookupOutcome<T> = { ok: true; value: T } | { ok: false; unavailable: UnavailableLookup };
+
+/**
+ * Run a lookup that students may not be permitted to make. A failure is
+ * reported as unavailable rather than folded into "nothing found", so callers
+ * can tell an empty search from one that could not be completed. Only the
+ * HTTP status is kept; raw error bodies never reach the tool output.
+ */
+async function tryLookup<T>(lookup: DiscoveryLookup, fetch: () => Promise<T>): Promise<LookupOutcome<T>> {
   try {
-    return await fetch();
+    return { ok: true, value: await fetch() };
   } catch (error) {
-    log("DEBUG", `get_syllabus: could not read ${what}`, error);
-    return fallback;
+    log("DEBUG", `get_syllabus: could not read ${LOOKUP_LABELS[lookup]}`, error);
+    if (error instanceof ApiError) {
+      const forbidden = error.status === 401 || error.status === 403;
+      return {
+        ok: false,
+        unavailable: { lookup, reason: forbidden ? "permission-denied" : "request-failed", status: error.status },
+      };
+    }
+    return { ok: false, unavailable: { lookup, reason: "request-failed" } };
   }
+}
+
+function describeUnavailable(u: UnavailableLookup): string {
+  const why =
+    u.reason === "permission-denied"
+      ? "permission denied"
+      : u.status !== undefined
+        ? `request failed (HTTP ${u.status})`
+        : "request failed (network error)";
+  return `${LOOKUP_LABELS[u.lookup]}: ${why}`;
+}
+
+interface ExternalDiscovery {
+  /** Fields merged into the tool output. Empty when discovery was complete and found nothing. */
+  fields: Record<string, unknown>;
+  complete: boolean;
 }
 
 async function discoverExternalSyllabusSources(
   apiClient: D2LApiClient,
   courseId: number
-): Promise<Record<string, unknown>> {
-  const [ltiLinks, toc] = await Promise.all([
-    fetchOrEmpty(
-      () => apiClient.get<LtiLink[]>(apiClient.leGlobal(`/lti/link/${courseId}/`), { ttl: DEFAULT_CACHE_TTLS.courseContent }),
-      [],
-      "LTI links"
+): Promise<ExternalDiscovery> {
+  const [lti, toc] = await Promise.all([
+    tryLookup("lti-links", () =>
+      apiClient.get<LtiLink[]>(apiClient.leGlobal(`/lti/link/${courseId}/`), { ttl: DEFAULT_CACHE_TTLS.courseContent })
     ),
-    fetchOrEmpty(
-      () => apiClient.get<{ Modules?: TocModule[] }>(apiClient.le(courseId, "/content/toc"), { ttl: DEFAULT_CACHE_TTLS.courseContent }),
-      {},
-      "content table of contents"
+    tryLookup("content-toc", () =>
+      apiClient.get<{ Modules?: TocModule[] }>(apiClient.le(courseId, "/content/toc"), { ttl: DEFAULT_CACHE_TTLS.courseContent })
     ),
   ]);
-  const sources = findExternalSyllabusSources(ltiLinks ?? [], toc?.Modules ?? []);
-  return sources.length > 0
-    ? { externalSyllabusSources: sources, externalSyllabusNote: EXTERNAL_SYLLABUS_NOTE }
-    : {};
+  const ltiLinks = lti.ok ? (Array.isArray(lti.value) ? lti.value : []) : [];
+  const modules = toc.ok ? (toc.value?.Modules ?? []) : [];
+  const sources = findExternalSyllabusSources(ltiLinks, modules);
+  const unavailable = [lti, toc].flatMap((o) => (o.ok ? [] : [o.unavailable]));
+
+  const fields: Record<string, unknown> = {};
+  if (sources.length > 0) {
+    fields.externalSyllabusSources = sources;
+    fields.externalSyllabusNote = EXTERNAL_SYLLABUS_NOTE;
+  }
+  if (unavailable.length > 0) {
+    fields.externalSyllabusDiscovery = {
+      complete: false,
+      unavailable,
+      note:
+        `Could not check every place an external syllabus may be linked (${unavailable.map(describeUnavailable).join("; ")}). ` +
+        "Missing external sources here does not mean the course has no syllabus.",
+    };
+  }
+  return { fields, complete: unavailable.length === 0 };
 }
 
 /**
@@ -125,7 +181,7 @@ export function registerGetSyllabus(
     {
       title: "Get Course Syllabus",
       description:
-        "Fetch the syllabus/overview text and optional attachment for a course. Returns the course overview description as markdown. When the syllabus lives in an external LTI tool (e.g. Simple Syllabus), lists those sources in externalSyllabusSources; their contents cannot be read. If downloadPath is provided, also downloads the syllabus attachment (e.g. PDF). IMPORTANT: You MUST ask the user where they want to save the file before calling this tool with a downloadPath.",
+        "Fetch the syllabus/overview text and optional attachment for a course. Returns the course overview description as markdown. When the syllabus lives in an external LTI tool (e.g. Simple Syllabus), lists those sources in externalSyllabusSources; their contents cannot be read. If some of those lookups could not be completed (e.g. permission denied), externalSyllabusDiscovery says which, and an empty result is then not proof the course has no syllabus. If downloadPath is provided, also downloads the syllabus attachment (e.g. PDF). IMPORTANT: You MUST ask the user where they want to save the file before calling this tool with a downloadPath.",
       inputSchema: GetSyllabusSchema,
     },
     async (args: any) => {
@@ -167,12 +223,15 @@ export function registerGetSyllabus(
           );
         } catch (error) {
           if (error instanceof ApiError && error.status === 404) {
+            const discovery = await discoverExternalSyllabusSources(apiClient, courseId);
             return toolResponse({
               courseId,
               description: null,
               hasAttachment: false,
-              message: "No syllabus/overview found for this course.",
-              ...(await discoverExternalSyllabusSources(apiClient, courseId)),
+              message: discovery.complete
+                ? "No syllabus/overview found for this course."
+                : "No course overview found, but external syllabus discovery was incomplete, so the course may still have a syllabus elsewhere.",
+              ...discovery.fields,
             });
           }
           throw error;
@@ -292,7 +351,7 @@ export function registerGetSyllabus(
           result.download = download;
         }
 
-        Object.assign(result, await discoverExternalSyllabusSources(apiClient, courseId));
+        Object.assign(result, (await discoverExternalSyllabusSources(apiClient, courseId)).fields);
 
         return toolResponse(result);
       } catch (error) {
