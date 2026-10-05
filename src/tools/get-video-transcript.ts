@@ -128,7 +128,8 @@ export function registerGetVideoTranscript(
         "Call it with courseId and topicId from get_course_content (typeFilter: 'video' or 'other'), or with videoUrl " +
         "directly if you already have the link. Returns transcript text with timestamps, plus title and duration when " +
         "available. Currently supports Kaltura (e.g. BoilerCast) and YouTube; other platforms return a clear message " +
-        "naming what isn't supported yet. Use offset/maxChars to page through a long transcript. Read only — this " +
+        "naming what isn't supported yet. Each call returns at most maxChars characters (up to 100000); to read a whole " +
+        "transcript, call again with offset set to the returned nextOffset until truncated is false. Read only — this " +
         "never marks the video as watched.",
       inputSchema: GetVideoTranscriptSchema,
     },

@@ -143,7 +143,7 @@ export const GetVideoTranscriptSchema = z.object({
   offset: z.coerce.number().int().min(0).default(0)
     .describe("Character offset into the transcript to resume from. Pass back nextOffset from a truncated response to fetch the next piece."),
   maxChars: z.coerce.number().int().positive().max(100000).default(12000)
-    .describe("Maximum characters of transcript text to return in one call. The response reports whether it was truncated."),
+    .describe("Maximum characters of transcript text to return in one call, from 1 to 100000 (default 12000). The response reports whether it was truncated; to read past this limit, page with offset/nextOffset."),
 });
 
 export const GetRosterSchema = z.object({
