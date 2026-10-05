@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { secureDownload, secureStreamDownload, resolveFilenameConflict } from "../../src/utils/download-helpers.js";
 import { DownloadError } from "../../src/utils/download-errors.js";
+import { MAX_FILE_SIZE } from "../../src/utils/file-validator.js";
 
 /**
  * secureDownload is the only thing standing between a filename Brightspace
@@ -289,4 +290,30 @@ describe("secureStreamDownload", () => {
 
     await expect(attempt).rejects.toBeInstanceOf(DownloadError);
   });
+});
+
+/**
+ * Regression coverage for issue #184. Plain text has no magic bytes, and the
+ * on-disk validator refused any such file over MAX_FILE_SIZE (50 MB) even
+ * though the disk download limit is 2 GB, so a large .txt, .csv or .json was
+ * streamed to disk and then deleted as undetectable.
+ */
+describe("secureStreamDownload: large plain text", () => {
+  it("accepts valid UTF-8 text larger than MAX_FILE_SIZE", async () => {
+    const line = Buffer.from("café, naïve, 日本語 — plain notes\n");
+    const chunk = Buffer.concat(Array(Math.ceil((1024 * 1024) / line.length)).fill(line));
+    const chunks: Buffer[] = Array(51).fill(chunk);
+
+    const result = await secureStreamDownload({
+      targetDir,
+      filename: "notes.txt",
+      body: streamOf(...chunks),
+      maxBytes: 2 * 1024 * 1024 * 1024,
+    });
+
+    expect(result.mime).toBe("text/plain");
+    expect(result.size).toBe(chunk.length * 51);
+    expect(result.size).toBeGreaterThan(MAX_FILE_SIZE);
+    expect((await fs.stat(result.path)).size).toBe(result.size);
+  }, 30_000);
 });
