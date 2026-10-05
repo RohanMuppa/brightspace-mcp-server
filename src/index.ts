@@ -10,6 +10,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { enableStdoutGuard, log } from "./utils/logger.js";
+import { guardServerProcess } from "./utils/process-guard.js";
 import { loadConfig } from "./utils/config.js";
 import { TokenManager, AuthRunner } from "./auth/index.js";
 import { D2LApiClient } from "./api/index.js";
@@ -81,10 +82,9 @@ if (subcommand === 'setup') {
   // CRITICAL: Enable stdout guard IMMEDIATELY to prevent corruption of stdio transport
   enableStdoutGuard();
 
-  // Unhandled rejection handler
-  process.on('unhandledRejection', (reason) => {
-    log('ERROR', 'Unhandled promise rejection', reason);
-  });
+  // A stray exception or a closed pipe must not silently drop the client's
+  // transport; see guardServerProcess.
+  guardServerProcess();
 
   async function main(): Promise<void> {
     try {
