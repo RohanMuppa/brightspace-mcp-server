@@ -9,7 +9,8 @@ import { D2LApiClient, ApiError, DEFAULT_CACHE_TTLS } from "../api/index.js";
 import { GetSyllabusSchema } from "./schemas.js";
 import { toolResponse, sanitizeError, errorResponse } from "./tool-helpers.js";
 import { convertHtmlToMarkdown } from "../utils/html-converter.js";
-import { secureDownload } from "../utils/download-helpers.js";
+import { secureDownload, readBodyCapped } from "../utils/download-helpers.js";
+import { DownloadError } from "../utils/download-errors.js";
 import { MAX_FILE_SIZE } from "../utils/file-validator.js";
 import { extractPdfText } from "../utils/pdf-extractor.js";
 import { log } from "../utils/logger.js";
@@ -211,12 +212,16 @@ export function registerGetSyllabus(
             }
 
             // Download body as buffer
-            attachmentBuffer = Buffer.from(await response.arrayBuffer());
-
-            if (attachmentBuffer.length > MAX_FILE_SIZE) {
-              return errorResponse(
-                `Attachment too large (${Math.round(attachmentBuffer.length / 1024 / 1024)}MB). Maximum allowed: ${MAX_FILE_SIZE / 1024 / 1024}MB`
-              );
+            // Capped read: Content-Length can be missing or understated.
+            try {
+              attachmentBuffer = await readBodyCapped(response, MAX_FILE_SIZE);
+            } catch (error) {
+              if (error instanceof DownloadError && error.kind === "tooLarge") {
+                return errorResponse(
+                  `Attachment too large (over ${MAX_FILE_SIZE / 1024 / 1024}MB). Maximum allowed: ${MAX_FILE_SIZE / 1024 / 1024}MB`
+                );
+              }
+              throw error;
             }
           }
         } catch (error) {

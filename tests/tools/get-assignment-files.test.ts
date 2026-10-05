@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { deflateRawSync } from "node:zlib";
 import { registerGetAssignmentFiles, fileKind } from "../../src/tools/get-assignment-files.js";
+import { oversizeBody, CHUNKS_AT_CAP } from "./oversize-body.js";
 
 /**
  * Reading the spec document attached to an assignment was the one student
@@ -73,7 +74,7 @@ function docxBuffer(text: string): Buffer {
 
 interface Setup {
   folders: unknown;
-  file?: Buffer | (() => never);
+  file?: Buffer | (() => never) | ReadableStream<Uint8Array>;
 }
 
 function setup({ folders, file }: Setup) {
@@ -89,15 +90,10 @@ function setup({ folders, file }: Setup) {
     getRaw: vi.fn(async (path: string) => {
       rawRequested.push(path);
       if (typeof file === "function") file();
-      return {
-        ok: true,
-        status: 200,
-        headers: new Headers(),
-        arrayBuffer: async () => (file as Buffer).buffer.slice(
-          (file as Buffer).byteOffset,
-          (file as Buffer).byteOffset + (file as Buffer).byteLength
-        ),
-      };
+      if (file instanceof ReadableStream) {
+        return new Response(file, { status: 200, headers: { "Content-Length": "1" } });
+      }
+      return new Response(new Uint8Array(file as Buffer), { status: 200 });
     }),
   };
 
@@ -259,6 +255,34 @@ describe("get_assignment_files reading one file", () => {
     );
 
     expect(payload.file.text).toBeNull();
+    expect(rawRequested).toEqual([]);
+  });
+
+  it("stops reading an attachment whose body runs past the extraction limit", async () => {
+    // Content-Length: 1 and a listed Size of 1, but the body keeps going.
+    const { stream, state } = oversizeBody();
+    const { call } = setup({
+      folders: [folder(1, "Lab 4", [attachment(11, "spec.pdf", 1)])],
+      file: stream,
+    });
+
+    const payload = parse(await call({ courseId: COURSE, folderId: 1, fileId: 11 }));
+
+    expect(payload.file).toMatchObject({ fileId: 11, text: null });
+    expect(payload.file.note).toMatch(/extraction limit.*downloadPath/);
+    expect(state.cancelled).toBe(true);
+    expect(state.pulled).toBeLessThanOrEqual(CHUNKS_AT_CAP + 2);
+    expect(state.pulled).toBeLessThan(state.totalChunks);
+  });
+
+  it("refuses an attachment listed over the extraction limit without fetching it", async () => {
+    const { call, rawRequested } = setup({
+      folders: [folder(1, "Lab 4", [attachment(11, "huge.pdf", 3 * 1024 * 1024 * 1024)])],
+    });
+
+    const payload = parse(await call({ courseId: COURSE, folderId: 1, fileId: 11 }));
+
+    expect(payload.file.note).toMatch(/extraction limit/);
     expect(rawRequested).toEqual([]);
   });
 

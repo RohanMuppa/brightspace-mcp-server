@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { secureDownload, secureStreamDownload, resolveFilenameConflict } from "../../src/utils/download-helpers.js";
+import { secureDownload, secureStreamDownload, resolveFilenameConflict, readBodyCapped } from "../../src/utils/download-helpers.js";
 import { DownloadError } from "../../src/utils/download-errors.js";
 import { MAX_FILE_SIZE } from "../../src/utils/file-validator.js";
 
@@ -316,4 +316,32 @@ describe("secureStreamDownload: large plain text", () => {
     expect(result.size).toBeGreaterThan(MAX_FILE_SIZE);
     expect((await fs.stat(result.path)).size).toBe(result.size);
   }, 30_000);
+});
+
+describe("readBodyCapped", () => {
+  it("returns a body at or under the cap", async () => {
+    const buffer = await readBodyCapped(new Response(new Uint8Array([1, 2, 3])), 3);
+    expect([...buffer]).toEqual([1, 2, 3]);
+  });
+
+  it("cancels the stream and throws tooLarge once the body passes the cap", async () => {
+    let pulled = 0;
+    let cancelled = false;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulled += 1;
+        controller.enqueue(new Uint8Array(4));
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+
+    const error = await readBodyCapped(new Response(body), 10).catch((e) => e);
+
+    expect(error).toBeInstanceOf(DownloadError);
+    expect(error.kind).toBe("tooLarge");
+    expect(cancelled).toBe(true);
+    expect(pulled).toBeLessThanOrEqual(4);
+  });
 });

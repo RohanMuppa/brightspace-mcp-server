@@ -211,3 +211,32 @@ async function publishExclusively(
   }
   throw new Error("Could not resolve filename conflict after 100 attempts");
 }
+
+/**
+ * Read a response body into memory, refusing to hold more than `maxBytes`.
+ *
+ * response.arrayBuffer() buffers whatever the server sends, so a missing or
+ * understated Content-Length let an arbitrarily large body be allocated before
+ * any size check ran. This counts the bytes actually received and cancels the
+ * stream as soon as they pass the cap.
+ *
+ * @throws DownloadError("tooLarge") once the body passes maxBytes
+ */
+export async function readBodyCapped(response: Response, maxBytes: number): Promise<Buffer> {
+  if (!response.body) return Buffer.alloc(0);
+
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > maxBytes) {
+      await reader.cancel().catch(() => {});
+      throw new DownloadError("tooLarge", `File exceeds ${maxBytes} bytes`);
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks, size);
+}

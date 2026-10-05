@@ -7,6 +7,9 @@
 import { D2LApiClient } from "../api/index.js";
 import { extractPdfText } from "../utils/pdf-extractor.js";
 import { officeDocumentText } from "../utils/zip-extract.js";
+import { readBodyCapped } from "../utils/download-helpers.js";
+import { DownloadError } from "../utils/download-errors.js";
+import { MAX_FILE_SIZE } from "../utils/file-validator.js";
 
 /**
  * Reading an attached file as text, wherever Brightspace hangs it: an
@@ -71,8 +74,25 @@ export async function readAttachment(
   const base = describeAttachment(attachment);
   if (!extract) return { ...base, text: null, note: "Text extraction was not requested." };
 
+  // Extraction holds the whole file in memory, so it is capped: refused from
+  // the listed size when that is already over, and cut off mid-read when the
+  // listed size (or Content-Length) understated it.
+  const tooLarge = {
+    ...base,
+    text: null,
+    truncated: false,
+    note: `This file is over the ${MAX_FILE_SIZE / 1024 / 1024}MB text extraction limit. Use download_file with an absolute downloadPath to save it to disk instead.`,
+  };
+  if (attachment.Size > MAX_FILE_SIZE) return tooLarge;
+
   const response = await apiClient.getRaw(sourcePath);
-  const buffer = Buffer.from(await response.arrayBuffer());
+  let buffer: Buffer;
+  try {
+    buffer = await readBodyCapped(response, MAX_FILE_SIZE);
+  } catch (error) {
+    if (error instanceof DownloadError && error.kind === "tooLarge") return tooLarge;
+    throw error;
+  }
 
   let text: string | null = null;
   let note: string | undefined;
