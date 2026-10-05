@@ -23,7 +23,8 @@ export type DownloadFailureKind =
   | "unsupportedType"
   | "undetectableType"
   | "badFilename"
-  | "pathTraversal";
+  | "pathTraversal"
+  | "tooLarge";
 
 export class DownloadError extends Error {
   constructor(
