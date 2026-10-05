@@ -71,6 +71,7 @@ School-specific quirks: [docs/sign-in.md](docs/sign-in.md#per-school-notes).
 | Quizzes and exams | "Which quizzes close this week?" · "Is there a midterm in the gradebook that isn't on my assignments list?" |
 | Announcements | "Did any professor post something important today?" · "Read the file attached to today's announcement" |
 | Course content | "Find the midterm review slides" · "Download every PDF from Module 5" · "Search this course for office hours" · or just read a file inline instead of saving it |
+| Syllabus | "What's the late policy in ECE 264's syllabus?" (if the course keeps its syllabus in an external tool such as Simple Syllabus, you get the link to open instead) |
 | People | "Who are the TAs for ECE 264?" · "Who is in my project group?" |
 | Discussions | "Summarize the latest posts in the final project thread" |
 | Lecture videos | "What did the professor say about pinch-off in Tuesday's recording?" (Kaltura, including BoilerCast LTI links, and YouTube) |
