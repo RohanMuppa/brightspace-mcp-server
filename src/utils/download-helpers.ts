@@ -5,8 +5,19 @@
  */
 
 import fs from "node:fs/promises";
+import { createWriteStream } from "node:fs";
 import path from "node:path";
-import { validateDownloadPath, validateFileType, MAX_FILE_SIZE } from "./file-validator.js";
+import { randomUUID } from "node:crypto";
+import { Readable, Transform } from "node:stream";
+import { pipeline } from "node:stream/promises";
+import type { ReadableStream as WebReadableStream } from "node:stream/web";
+import {
+  validateDownloadPath,
+  validateFileType,
+  validateFileTypeOfFile,
+  MAX_FILE_SIZE,
+} from "./file-validator.js";
+import { DownloadError } from "./download-errors.js";
 import { log } from "./logger.js";
 
 /**
@@ -119,4 +130,54 @@ export async function secureDownload(options: {
     size,
     mime,
   };
+}
+
+/**
+ * secureDownload for a response body that is streamed to disk rather than
+ * held in memory, so a file's size is bounded by `maxBytes` instead of by
+ * MAX_FILE_SIZE. The body is written to a hidden temporary file in targetDir,
+ * type-checked there, and only then renamed to its final name; a refused or
+ * failed download leaves nothing behind.
+ *
+ * @throws DownloadError("tooLarge") once the body passes maxBytes
+ */
+export async function secureStreamDownload(options: {
+  targetDir: string;
+  filename: string;
+  body: ReadableStream<Uint8Array>;
+  maxBytes: number;
+}): Promise<{ path: string; size: number; mime: string }> {
+  const { targetDir, filename, body, maxBytes } = options;
+
+  const safeFilename = path.basename(validateDownloadPath(targetDir, filename));
+  const partialPath = path.join(targetDir, `.download-${randomUUID()}.part`);
+
+  let size = 0;
+  const limit = new Transform({
+    transform(chunk: Buffer, _encoding, callback) {
+      size += chunk.length;
+      if (size > maxBytes) {
+        callback(new DownloadError("tooLarge", `File exceeds ${maxBytes} bytes`));
+      } else {
+        callback(null, chunk);
+      }
+    },
+  });
+
+  try {
+    await pipeline(
+      Readable.fromWeb(body as WebReadableStream<Uint8Array>),
+      limit,
+      createWriteStream(partialPath, { flags: "wx" })
+    );
+    const { mime } = await validateFileTypeOfFile(partialPath, undefined, safeFilename);
+    const resolvedFilename = await resolveFilenameConflict(targetDir, safeFilename);
+    const finalPath = path.join(targetDir, resolvedFilename);
+    await fs.rename(partialPath, finalPath);
+    log("INFO", `Downloaded file to ${finalPath} (${size} bytes, ${mime})`);
+    return { path: finalPath, size, mime };
+  } catch (error) {
+    await fs.rm(partialPath, { force: true });
+    throw error;
+  }
 }

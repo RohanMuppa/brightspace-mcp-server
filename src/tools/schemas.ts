@@ -46,7 +46,7 @@ export const GetMyGradesSchema = z.object({
 
 export const GetAnnouncementsSchema = z.object({
   courseId: z.coerce.number().int().positive().optional().describe("Course ID to get announcements for. If omitted, returns recent announcements across all courses."),
-  count: z.coerce.number().int().min(1).max(50).default(10).describe("Maximum number of announcements to return"),
+  count: z.coerce.number().int().min(1).max(50).default(10).describe("Maximum number of announcements to return, newest first (1-50, default 10). There is no pagination or offset: when more announcements exist than count, only the newest are returned. To get fuller coverage, call once per course with courseId so courses do not compete for the same slots, and use modifiedSince to return only announcements changed since a cutoff."),
   modifiedSince: z.string().datetime({ offset: true, message: "modifiedSince must be an ISO 8601 datetime, e.g. 2026-01-15T00:00:00Z" }).optional()
     .describe("Only return announcements last modified at or after this ISO 8601 datetime (e.g. 2026-01-15T00:00:00Z). Announcements with no modified timestamp are always included. When set, the response reports how many announcements were filtered out."),
 });

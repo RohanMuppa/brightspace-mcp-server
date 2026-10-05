@@ -11,16 +11,41 @@ import { DownloadFileSchema } from "./schemas.js";
 import { toolResponse, sanitizeError, errorResponse, withUpdateNotice } from "./tool-helpers.js";
 import { log } from "../utils/logger.js";
 import { checkTopicAvailability } from "./topic-availability.js";
-// Path containment checks belong to secureDownload, which disk-mode downloads
+// Path containment checks belong to secureStreamDownload, which disk-mode downloads
 // go through; importing it here only made it look as though this file
 // validated anything itself. Inline mode never writes to disk, so it calls
 // validateFileType directly to enforce the same magic-byte allowlist.
 import { validateContentId, validateFileType, MAX_FILE_SIZE } from "../utils/file-validator.js";
-import { secureDownload } from "../utils/download-helpers.js";
+import { secureStreamDownload } from "../utils/download-helpers.js";
+import { DownloadError } from "../utils/download-errors.js";
 import { extractPdfText } from "../utils/pdf-extractor.js";
 import { officeDocumentText } from "../utils/zip-extract.js";
 import fs from "node:fs/promises";
 import path from "node:path";
+
+/**
+ * Maximum bytes of a file disk mode will save. Disk downloads stream straight
+ * to the file, so memory no longer bounds them the way MAX_FILE_SIZE (50 MB)
+ * bounds inline mode; this only stops a runaway body filling the disk.
+ * Lecture decks and recordings routinely pass 50 MB.
+ */
+const DISK_MAX_FILE_SIZE = 2 * 1024 * 1024 * 1024; // 2 GB
+
+/** The size cap for a download: inline mode buffers the file, disk mode streams it. */
+function maxFileSize(downloadPath: string | undefined): number {
+  return downloadPath === undefined ? MAX_FILE_SIZE : DISK_MAX_FILE_SIZE;
+}
+
+/** The refusal for a file over its mode's cap, pointing inline callers at disk mode. */
+function tooLargeResponse(bytes: number, downloadPath: string | undefined): CallToolResult {
+  const hint =
+    downloadPath === undefined
+      ? " Provide an absolute downloadPath to save it to disk instead."
+      : "";
+  return errorResponse(
+    `File too large (${Math.round(bytes / 1024 / 1024)}MB). Maximum allowed: ${maxFileSize(downloadPath) / 1024 / 1024}MB.${hint}`
+  );
+}
 
 /**
  * Maximum bytes of a file we'll embed inline in a tool response. Base64
@@ -113,8 +138,8 @@ async function respondInline(
     );
   }
 
-  // Enforces the same magic-byte allowlist as disk mode (secureDownload calls
-  // validateFileType internally); inline mode never writes to disk, so it has
+  // Enforces the same magic-byte allowlist as disk mode (secureStreamDownload calls
+  // validateFileTypeOfFile internally); inline mode never writes to disk, so it has
   // to call this itself. Throws DownloadError on an unsupported or
   // undetectable type, handled by the caller's sanitizeError.
   const { mime } = await validateFileType(buffer, undefined, effectiveFilename);
@@ -199,28 +224,45 @@ async function respondInline(
 }
 
 /**
- * Finish a download once the bytes are in hand: write to disk when
+ * Finish a download once the response is in hand: stream it to disk when
  * `downloadPath` is given (unchanged response shape, plus a new `mode: "disk"`
- * field), otherwise return the file inline in the tool response.
+ * field), otherwise buffer it and return the file inline in the tool response.
  */
 async function finishDownload(
-  buffer: Buffer,
+  response: Response,
   originalFilename: string,
   downloadPath: string | undefined,
   customFilename: string | undefined,
   sourceLabel: string
 ): Promise<CallToolResult> {
+  // Check Content-Length BEFORE reading the body (prevent memory exhaustion)
+  const contentLength = parseInt(response.headers.get("Content-Length") ?? "0", 10);
+  if (contentLength > maxFileSize(downloadPath)) {
+    return tooLargeResponse(contentLength, downloadPath);
+  }
+
   if (downloadPath === undefined) {
+    const buffer = Buffer.from(await response.arrayBuffer());
+    // Double-check actual size
+    if (buffer.length > MAX_FILE_SIZE) {
+      return tooLargeResponse(buffer.length, downloadPath);
+    }
     return respondInline(buffer, originalFilename, customFilename);
   }
 
   const effectiveFilename = customFilename || originalFilename;
 
-  // Use secureDownload for path traversal prevention, file type validation, and conflict resolution
-  const result = await secureDownload({
+  if (!response.body) {
+    throw new DownloadError("undetectableType", "File is empty (0 bytes)");
+  }
+
+  // Streams to disk with path traversal prevention, file type validation,
+  // conflict resolution, and the disk size cap
+  const result = await secureStreamDownload({
     targetDir: downloadPath,
     filename: effectiveFilename,
-    data: buffer,
+    body: response.body,
+    maxBytes: DISK_MAX_FILE_SIZE,
   });
 
   log(
@@ -399,36 +441,15 @@ async function downloadContentFile(
     throw error;
   }
 
-  // Check Content-Length BEFORE downloading body (prevent memory exhaustion)
-  const contentLength = parseInt(
-    response.headers.get("Content-Length") ?? "0",
-    10
-  );
-  if (contentLength > MAX_FILE_SIZE) {
-    return errorResponse(
-      `File too large (${Math.round(contentLength / 1024 / 1024)}MB). Maximum allowed: ${MAX_FILE_SIZE / 1024 / 1024}MB`
-    );
-  }
-
   // Get filename from Content-Disposition header
   const disposition = response.headers.get("Content-Disposition") ?? "";
   const filename = parseContentDispositionFilename(disposition) ?? "download";
 
   log("DEBUG", `Content-Disposition filename: ${filename}`);
 
-  // Download body as buffer
-  const buffer = Buffer.from(await response.arrayBuffer());
-
-  // Double-check actual size
-  if (buffer.length > MAX_FILE_SIZE) {
-    return errorResponse(
-      `File too large (${Math.round(buffer.length / 1024 / 1024)}MB). Maximum allowed: ${MAX_FILE_SIZE / 1024 / 1024}MB`
-    );
-  }
-
   const originalFilename = filename;
 
-  return finishDownload(buffer, originalFilename, downloadPath, customFilename, "Content file");
+  return finishDownload(response, originalFilename, downloadPath, customFilename, "Content file");
 }
 
 /**
@@ -502,10 +523,8 @@ async function downloadSubmissionFile(
   }
 
   // Check file size before downloading
-  if (file.Size > MAX_FILE_SIZE) {
-    return errorResponse(
-      `File too large (${Math.round(file.Size / 1024 / 1024)}MB). Maximum allowed: ${MAX_FILE_SIZE / 1024 / 1024}MB`
-    );
+  if (file.Size > maxFileSize(downloadPath)) {
+    return tooLargeResponse(file.Size, downloadPath);
   }
 
   // D2L file download URL pattern for submission files
@@ -518,19 +537,9 @@ async function downloadSubmissionFile(
   // Fetch file
   const response = await apiClient.getRaw(downloadApiPath);
 
-  // Download body as buffer
-  const buffer = Buffer.from(await response.arrayBuffer());
-
-  // Double-check actual size
-  if (buffer.length > MAX_FILE_SIZE) {
-    return errorResponse(
-      `File too large (${Math.round(buffer.length / 1024 / 1024)}MB). Maximum allowed: ${MAX_FILE_SIZE / 1024 / 1024}MB`
-    );
-  }
-
   const originalFilename = file.FileName;
 
-  return finishDownload(buffer, originalFilename, downloadPath, customFilename, "Submission file");
+  return finishDownload(response, originalFilename, downloadPath, customFilename, "Submission file");
 }
 
 /**
@@ -571,10 +580,8 @@ async function downloadNewsAttachment(
     );
   }
 
-  if (file.Size > MAX_FILE_SIZE) {
-    return errorResponse(
-      `File too large (${Math.round(file.Size / 1024 / 1024)}MB). Maximum allowed: ${MAX_FILE_SIZE / 1024 / 1024}MB`
-    );
+  if (file.Size > maxFileSize(downloadPath)) {
+    return tooLargeResponse(file.Size, downloadPath);
   }
 
   // GET /d2l/api/le/(version)/(orgUnitId)/news/(newsItemId)/attachments/(fileId)
@@ -582,31 +589,10 @@ async function downloadNewsAttachment(
     apiClient.le(courseId, `/news/${newsId}/attachments/${fileId}`)
   );
 
-  // Check Content-Length BEFORE downloading body (prevent memory exhaustion)
-  const contentLength = parseInt(
-    response.headers.get("Content-Length") ?? "0",
-    10
-  );
-  if (contentLength > MAX_FILE_SIZE) {
-    return errorResponse(
-      `File too large (${Math.round(contentLength / 1024 / 1024)}MB). Maximum allowed: ${MAX_FILE_SIZE / 1024 / 1024}MB`
-    );
-  }
-
   const disposition = response.headers.get("Content-Disposition") ?? "";
   const filename = parseContentDispositionFilename(disposition) ?? file.FileName;
 
-  // Download body as buffer
-  const buffer = Buffer.from(await response.arrayBuffer());
-
-  // Double-check actual size
-  if (buffer.length > MAX_FILE_SIZE) {
-    return errorResponse(
-      `File too large (${Math.round(buffer.length / 1024 / 1024)}MB). Maximum allowed: ${MAX_FILE_SIZE / 1024 / 1024}MB`
-    );
-  }
-
   const originalFilename = filename;
 
-  return finishDownload(buffer, originalFilename, downloadPath, customFilename, "Announcement attachment");
+  return finishDownload(response, originalFilename, downloadPath, customFilename, "Announcement attachment");
 }
