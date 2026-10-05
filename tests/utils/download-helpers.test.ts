@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -26,6 +26,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await fs.rm(root, { recursive: true, force: true });
 });
 
@@ -235,6 +236,36 @@ describe("secureStreamDownload", () => {
     });
 
     expect(path.basename(result.path)).toBe("deck(1).pdf");
+  });
+
+  it("keeps both files when two same-name downloads race", async () => {
+    // Hold both existence checks for deck.pdf until each download has made
+    // one, so both see the name as free before either publishes.
+    const realAccess = fs.access.bind(fs);
+    const target = path.join(targetDir, "deck.pdf");
+    let waiting = 0;
+    let release!: () => void;
+    const bothChecked = new Promise<void>((resolve) => (release = resolve));
+    vi.spyOn(fs, "access").mockImplementation(async (p, mode) => {
+      if (p === target && waiting < 2) {
+        if (++waiting === 2) release();
+        await bothChecked;
+      }
+      return realAccess(p, mode);
+    });
+
+    const first = Buffer.concat([Buffer.from("%PDF-1.4\n"), Buffer.alloc(512, 1)]);
+    const second = Buffer.concat([Buffer.from("%PDF-1.4\n"), Buffer.alloc(512, 2)]);
+    const results = await Promise.all([
+      secureStreamDownload({ targetDir, filename: "deck.pdf", body: streamOf(first), maxBytes: 1024 * 1024 }),
+      secureStreamDownload({ targetDir, filename: "deck.pdf", body: streamOf(second), maxBytes: 1024 * 1024 }),
+    ]);
+
+    expect(waiting).toBe(2);
+    expect(results[0].path).not.toBe(results[1].path);
+    expect(await fs.readFile(results[0].path)).toEqual(first);
+    expect(await fs.readFile(results[1].path)).toEqual(second);
+    expect((await fs.readdir(targetDir)).sort()).toEqual(["deck(1).pdf", "deck.pdf"]);
   });
 
   it("still accepts a plain text file, which has no magic bytes", async () => {
