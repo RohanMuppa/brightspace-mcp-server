@@ -329,3 +329,5 @@ Always bump `version` in `package.json` in the same commit as any code or docs c
 ## Stability guarantees
 
 Before renaming a tool, removing or renaming a response field, or changing a CLI flag, an env var, or an on-disk path, read [STABILITY.md](./STABILITY.md). It lists exactly what outside integrations and PRs may rely on; changes there need to be additive.
+
+Instructor-provided assignment handouts use `download_file` with `courseId`, `folderId`, `fileId`, and `source: "assignmentAttachment"`. `get_assignment_files` includes these arguments as `downloadArgs` on each attachment. Omit `downloadPath` for inline text, or supply an absolute host directory to save the original file. Leaving `source` unspecified preserves downloads of your own submissions.

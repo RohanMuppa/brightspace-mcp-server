@@ -402,8 +402,10 @@ export class PurdueSSOFlow {
         const challengeVisible = number !== null ||
           await page.locator("#idDiv_SAOTCAS_Title").first().isVisible().catch(() => false) ||
           await page.locator("#idDiv_SAOTCC_Title").first().isVisible().catch(() => false);
+        // The checkbox can render after the heading or number. Recheck during
+        // the existing poll without delaying the first challenge announcement.
+        if (challengeVisible) await this.rememberMfaDevice(page);
         if (challengeVisible && !challenged) {
-          await this.rememberMfaDevice(page);
           challenged = true;
           log("WARN", "Waiting up to 5 minutes for Microsoft MFA approval on your device.");
           this.config.onMfaChallenge?.(number);
@@ -558,13 +560,13 @@ export class PurdueSSOFlow {
   }
 
   /**
-   * Tick Entra's "Don't ask again" box, once per login and never in a loop.
+   * Tick Entra's "Don't ask again" box once; retry absent controls on later MFA polls.
    * Opt-in: without an explicit true the box is left alone and the outcome
    * is recorded as "off", so get_server_info can say why nothing was ticked.
    * An already-checked box is left alone so this can never untick it.
    */
   private async rememberMfaDevice(page: Page): Promise<void> {
-    if (this.rememberMfa) return;
+    if (this.rememberMfa && this.rememberMfa.outcome !== "absent") return;
     if (this.config.rememberMfa !== true) {
       this.rememberMfa = { outcome: "off", at: new Date().toISOString() };
       log("INFO", `Entra remember-MFA checkbox: ${REMEMBER_MFA_LOG.off}`);
@@ -588,6 +590,7 @@ export class PurdueSSOFlow {
     } catch {
       outcome = "unknown";
     }
+    if (this.rememberMfa?.outcome === outcome) return;
     this.rememberMfa = { outcome, at: new Date().toISOString() };
     log("INFO", `Entra remember-MFA checkbox: ${REMEMBER_MFA_LOG[outcome]}`);
   }

@@ -75,14 +75,16 @@ export const GetClasslistEmailsSchema = z.object({
 });
 
 export const DownloadFileSchema = z.object({
+  source: z.enum(["submission", "assignmentAttachment"]).optional()
+    .describe("For folderId + fileId: assignmentAttachment downloads an instructor-provided handout from get_assignment_files; submission (default) downloads your own submitted file. Do not combine source with topicId or newsId."),
   courseId: z.coerce.number().int().positive()
     .describe("Course ID the file belongs to."),
   topicId: z.coerce.number().int().positive().optional()
     .describe("Content topic ID to download (for course content files)."),
   folderId: z.coerce.number().int().positive().optional()
-    .describe("Dropbox folder ID (for submission/feedback file downloads)."),
+    .describe("Dropbox folder ID. Downloads your submission by default; set source to assignmentAttachment for an instructor-provided handout."),
   fileId: z.coerce.number().int().positive().optional()
-    .describe("Specific file ID within a dropbox submission, or an announcement attachment's file ID (with newsId)."),
+    .describe("Specific file ID within a dropbox submission, instructor assignment attachment (with source: assignmentAttachment), or announcement attachment (with newsId)."),
   newsId: z.coerce.number().int().positive().optional()
     .describe("Announcement (news item) ID whose attachment to download. Requires fileId."),
   downloadPath: z.string().min(1).optional()

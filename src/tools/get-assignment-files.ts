@@ -111,6 +111,7 @@ export function registerGetAssignmentFiles(
             extractText,
             maxChars
           );
+          file.downloadArgs = { courseId, folderId, fileId, source: "assignmentAttachment" };
           return toolResponse({
             courseId,
             folderId,
@@ -128,7 +129,10 @@ export function registerGetAssignmentFiles(
             folderName: folder.Name,
             dueDate: folder.DueDate,
             url: baseUrl ? assignmentUrl(baseUrl, courseId, folder.Id) : null,
-            attachments: (folder.Attachments ?? []).map(describeAttachment),
+            attachments: (folder.Attachments ?? []).map((attachment) => ({
+              ...describeAttachment(attachment),
+              downloadArgs: { courseId, folderId: folder.Id, fileId: attachment.FileId, source: "assignmentAttachment" },
+            })),
           }));
 
         log(

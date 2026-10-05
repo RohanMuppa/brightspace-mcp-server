@@ -146,6 +146,7 @@ describe("get_assignment_files discovery", () => {
       fileName: "spec.pdf",
       size: 2048,
       kind: "pdf",
+      downloadArgs: { courseId: COURSE, folderId: 1, fileId: 11, source: "assignmentAttachment" },
     });
     expect(payload.assignments[1].attachments.map((a: any) => a.kind)).toEqual(["xlsx", "docx"]);
     expect(rawRequested).toEqual([]);

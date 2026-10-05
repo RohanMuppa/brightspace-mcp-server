@@ -25,6 +25,8 @@ interface PageSetup {
   boxes?: Record<string, Checkbox>;
   /** A checkbox reachable only through its "Don't ask again" label. */
   labelled?: Checkbox;
+  boxAppearsAtPoll?: number;
+  mfaPolls?: number;
 }
 
 /** One MFA poll on the given page, then verified Brightspace home on the next. */
@@ -32,9 +34,9 @@ function makePage(setup: PageSetup) {
   let poll = 0;
   const events: string[] = [];
   const checks: string[] = [];
-  const onEntra = () => poll === 0;
+  const onEntra = () => poll < (setup.mfaPolls ?? 1);
   const box = (name: string, target: Checkbox | undefined) => ({
-    isVisible: async () => onEntra() && target !== undefined,
+    isVisible: async () => onEntra() && poll >= (setup.boxAppearsAtPoll ?? 0) && target !== undefined,
     isChecked: async () => target?.checked ?? false,
     check: async () => {
       checks.push(name);
@@ -112,6 +114,17 @@ describe("Entra remember-MFA checkbox", () => {
     const { page, checks } = makePage({ boxes: { [NUMBER_MATCH_BOX]: { checked: false } } });
     await handleMFA(flowFor(), page);
     expect(checks).toEqual([NUMBER_MATCH_BOX]);
+  });
+
+  it("ticks a checkbox rendered after the first challenge without delaying its announcement", async () => {
+    const { page, checks, events } = makePage({
+      boxes: { [NUMBER_MATCH_BOX]: { checked: false } }, boxAppearsAtPoll: 1, mfaPolls: 2,
+    });
+    const flow = flowFor({ events });
+    await handleMFA(flow, page);
+    expect(checks).toEqual([NUMBER_MATCH_BOX]);
+    expect(events).toEqual(["announce", "check"]);
+    expect(flow.rememberMfaResult()?.outcome).toBe("ticked");
   });
 
   it("ticks the box before the number is announced", async () => {

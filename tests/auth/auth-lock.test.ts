@@ -1,26 +1,44 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as os from "node:os";
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { once } from "node:events";
+import { spawn } from "node:child_process";
 import ts from "typescript";
 import { acquireProcessLock, AuthenticationInProgressError, lockOps } from "../../src/auth/auth-lock.js";
+import { watchProcess, waitForExit, stopProcess, STARTUP_TIMEOUT_MS, EXIT_TIMEOUT_MS, type ProcessFixture } from "./process-fixture.js";
 
 let lockPath: string;
 let moduleUrl: string;
+let directory: string;
+interface ProcessScope { processes: ProcessFixture[]; closed: boolean }
+let processScope: ProcessScope;
 
-beforeEach(async () => {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "brightspace-lock-test-"));
-  lockPath = path.join(directory, "auth.lock");
+beforeAll(async () => {
   const source = await fs.readFile(new URL("../../src/auth/auth-lock.ts", import.meta.url), "utf8");
   const compiled = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ES2022 } }).outputText;
   moduleUrl = `data:text/javascript;base64,${Buffer.from(compiled).toString("base64")}`;
 });
 
+beforeEach(async () => {
+  directory = await fs.mkdtemp(path.join(os.tmpdir(), "brightspace-lock-test-"));
+  lockPath = path.join(directory, "auth.lock");
+  processScope = { processes: [], closed: false };
+});
+
+afterEach(async () => {
+  processScope.closed = true;
+  const cleanup = await Promise.allSettled(processScope.processes.map(stopProcess));
+  vi.restoreAllMocks();
+  // This is the exact directory created by mkdtemp for this test.
+  await fs.rm(directory, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+  const failure = cleanup.find(result => result.status === "rejected");
+  if (failure?.status === "rejected") throw failure.reason;
+});
+
 // A winning child holds the lock until its stdin receives data, so the hold
 // never depends on how long the other contenders take to start.
-function child(): ChildProcessWithoutNullStreams {
+function child(targetLockPath: string, scope: ProcessScope): ProcessFixture {
+  if (scope.closed) throw new Error("Cannot start a child after test cleanup has begun");
   const script = `
     const { acquireProcessLock } = await import(process.argv[1]);
     try {
@@ -29,23 +47,19 @@ function child(): ChildProcessWithoutNullStreams {
       process.stdin.once("data", async () => { await release(); process.exit(0); });
     } catch (error) { process.stdout.write(error.code + "\\n"); process.exitCode = 2; }
   `;
-  return spawn(process.execPath, ["--input-type=module", "-e", script, moduleUrl, lockPath], { stdio: "pipe" });
-}
-
-async function firstLine(process: ChildProcessWithoutNullStreams): Promise<string> {
-  const [data] = await once(process.stdout, "data");
-  return String(data).trim();
+  const fixture = watchProcess(spawn(process.execPath, ["--input-type=module", "-e", script, moduleUrl, targetLockPath], { stdio: "pipe" }));
+  scope.processes.push(fixture);
+  return fixture;
 }
 
 // Starts four contenders at once and returns each one's acquisition result.
 // Winners are released only after every result is in, so a slow-starting
 // contender always meets a held lock.
-async function contend(): Promise<string[]> {
-  const processes = Array.from({ length: 4 }, () => child());
-  const exits = processes.map(process => once(process, "exit"));
-  const messages = await Promise.all(processes.map(firstLine));
-  processes.forEach((process, index) => { if (messages[index] === "locked") process.stdin.write("release\n"); });
-  await Promise.all(exits);
+async function contend(targetLockPath: string, scope: ProcessScope): Promise<string[]> {
+  const contenders = Array.from({ length: 4 }, () => child(targetLockPath, scope));
+  const messages = await Promise.all(contenders.map(process => process.ready));
+  contenders.forEach((process, index) => { if (messages[index] === "locked") process.child.stdin.write("release\n"); });
+  await Promise.all(contenders.map(process => waitForExit(process)));
   return messages;
 }
 
@@ -66,51 +80,52 @@ describe("process-shared authentication lock", () => {
   });
 
   it("allows only one of four real processes to authenticate", async () => {
-    const messages = await contend();
+    const messages = await contend(lockPath, processScope);
     expect(messages.filter(message => message === "locked")).toHaveLength(1);
     expect(messages.filter(message => message === "AUTH_IN_PROGRESS")).toHaveLength(3);
   });
 
   it("recovers a lock after its actual process dies", async () => {
-    const owner = child();
-    const exit = once(owner, "exit");
-    expect(await firstLine(owner)).toBe("locked");
-    owner.kill("SIGKILL");
-    await exit;
-    const ownerFile = path.join(lockPath, "owner.json");
+    const testLockPath = lockPath;
+    const scope = processScope;
+    const owner = child(testLockPath, scope);
+    expect(await owner.ready).toBe("locked");
+    await stopProcess(owner);
+    const ownerFile = path.join(testLockPath, "owner.json");
     const metadata = JSON.parse(await fs.readFile(ownerFile, "utf8"));
     await fs.writeFile(ownerFile, JSON.stringify({ ...metadata, host: "previous-dhcp-hostname" }));
-    await (await acquireProcessLock(lockPath))();
+    await (await acquireProcessLock(testLockPath))();
   });
 
   it("serializes competing processes recovering a dead owner", async () => {
-    const owner = child();
-    const exit = once(owner, "exit");
-    expect(await firstLine(owner)).toBe("locked");
-    owner.kill("SIGKILL");
-    await exit;
-    const messages = await contend();
+    const testLockPath = lockPath;
+    const scope = processScope;
+    const owner = child(testLockPath, scope);
+    expect(await owner.ready).toBe("locked");
+    await stopProcess(owner);
+    const messages = await contend(testLockPath, scope);
     expect(messages.filter(message => message === "locked")).toHaveLength(1);
     expect(messages.filter(message => message === "AUTH_IN_PROGRESS")).toHaveLength(3);
-  });
+  // Two sequential waves (owner, then contenders), each with bounded startup
+  // and exit. The default 5s timed out under parallel Windows test runs.
+  }, 2 * (STARTUP_TIMEOUT_MS + EXIT_TIMEOUT_MS) + 1_000);
 
   it("recovers when a stale-recovery process also died", async () => {
-    const owner = child();
-    const exit = once(owner, "exit");
-    expect(await firstLine(owner)).toBe("locked");
-    owner.kill("SIGKILL");
-    await exit;
-    const metadata = await fs.readFile(path.join(lockPath, "owner.json"), "utf8");
-    const claimPath = path.join(lockPath, "reclaim.lock");
+    const testLockPath = lockPath;
+    const scope = processScope;
+    const owner = child(testLockPath, scope);
+    expect(await owner.ready).toBe("locked");
+    await stopProcess(owner);
+    const metadata = await fs.readFile(path.join(testLockPath, "owner.json"), "utf8");
+    const claimPath = path.join(testLockPath, "reclaim.lock");
     await fs.mkdir(claimPath);
     await fs.writeFile(path.join(claimPath, "owner.json"), metadata);
-    await (await acquireProcessLock(lockPath))();
-  });
+    await (await acquireProcessLock(testLockPath))();
+  // Budget the bounded child startup and shutdown plus filesystem recovery.
+  }, STARTUP_TIMEOUT_MS + EXIT_TIMEOUT_MS + 1_000);
 });
 
 describe("explicit takeover of a live automatic owner", () => {
-  afterEach(() => vi.restoreAllMocks());
-
   async function writeOwner(nonce: string, pid: number, mode: "automatic" | "explicit") {
     await fs.mkdir(lockPath);
     await fs.writeFile(path.join(lockPath, "owner.json"), JSON.stringify({ pid, host: "other-host", nonce, mode }));
