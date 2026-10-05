@@ -108,6 +108,15 @@ describe("dev activity", () => {
     devActivity("private-event" as any);
     expect(records()).toHaveLength(1);
   });
+  it("records a sign-in phase and its duration", () => {
+    devActivity("auth_phase", { phase: "silentSso", elapsedMs: 30000 });
+    expect(records()[0]).toMatchObject({ event: "auth_phase", phase: "silentSso", elapsedMs: 30000 });
+  });
+  it("drops a phase outside the allowlist", () => {
+    devActivity("auth_phase", { phase: "private-phase", elapsedMs: 5 } as any);
+    expect(records()[0]).not.toHaveProperty("phase");
+    expect(JSON.stringify(records())).not.toContain("private-");
+  });
   it("correlates a real API client's rejected credential and recovery request to the tool", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response("private-response", { status: 401 })));
     const api = new D2LApiClient({ baseUrl: "https://example.com",

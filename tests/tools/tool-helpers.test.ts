@@ -72,6 +72,7 @@ describe("sanitizeError", () => {
     ["timeout", "did not finish in time"],
     ["failed", "did not complete"],
     ["mfaPending", "Approve the sign-in request"],
+    ["inProgress", "still starting in the background"],
   ];
 
   it.each(expectedGuidance)("explains a %s sign-in failure", (kind, expected) => {

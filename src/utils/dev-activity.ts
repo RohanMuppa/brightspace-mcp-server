@@ -3,12 +3,13 @@ import { randomUUID } from "node:crypto";
 import { appendFileSync, mkdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { AUTH_PHASES, type AuthPhase } from "../auth/auth-phases.js";
 
 type Event = "tool_started" | "tool_finished" | "http_response" | "auth_required"
   | "token_mint_started" | "token_mint_finished" | "recovery_started"
-  | "mfa_observed" | "recovery_finished";
+  | "mfa_observed" | "recovery_finished" | "auth_phase";
 type Outcome = "success" | "error" | "sessionExpired" | "transport";
-interface Fields { elapsedMs?: number; status?: number; outcome?: Outcome; reason?: string }
+interface Fields { elapsedMs?: number; status?: number; outcome?: Outcome; reason?: string; phase?: AuthPhase }
 interface CallContext { callId: string; tool: string }
 const calls = new AsyncLocalStorage<CallContext>();
 const runId = randomUUID();
@@ -33,7 +34,7 @@ export function devActivity(event: Event, fields: Fields = {}): void {
 function write(event: Event, fields: Fields, context = calls.getStore(), idleMs?: number, sinceSuccessMs?: number): void {
   if (!directory) return;
   if (!["tool_started", "tool_finished", "http_response", "auth_required", "token_mint_started",
-    "token_mint_finished", "recovery_started", "mfa_observed", "recovery_finished"].includes(event)) return;
+    "token_mint_finished", "recovery_started", "mfa_observed", "recovery_finished", "auth_phase"].includes(event)) return;
   const at = new Date().toISOString();
   const record: Record<string, unknown> = { at, runId, pid: process.pid, event };
   if (context) Object.assign(record, context);
@@ -42,6 +43,7 @@ function write(event: Event, fields: Fields, context = calls.getStore(), idleMs?
   }
   if (["success", "error", "sessionExpired", "transport"].includes(fields.outcome ?? "")) record.outcome = fields.outcome;
   if (["busy", "cooldown", "unsupported", "secureStorage", "transport", "timeout", "failed", "mfaPending"].includes(fields.reason ?? "")) record.reason = fields.reason;
+  if ((AUTH_PHASES as readonly string[]).includes(fields.phase ?? "")) record.phase = fields.phase;
   try {
     mkdirSync(directory, { recursive: true, mode: 0o700 });
     const file = join(directory, `activity-${at.slice(0, 10)}-${process.pid}-${runId}.jsonl`);

@@ -3,9 +3,11 @@ import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { spawn, execFileSync } from "node:child_process";
 import { AuthRunner } from "../../src/auth/auth-runner.js";
+import { devActivity } from "../../src/utils/dev-activity.js";
 
 vi.mock("node:child_process", () => ({ spawn: vi.fn(), execFileSync: vi.fn() }));
 vi.mock("../../src/utils/logger.js", () => ({ log: vi.fn() }));
+vi.mock("../../src/utils/dev-activity.js", () => ({ devActivity: vi.fn() }));
 
 function mockChild() {
   return Object.assign(new EventEmitter(), {
@@ -314,12 +316,89 @@ describe("AuthRunner", () => {
   });
 
   it("allows five minutes of MFA plus preflight before timing out", async () => {
-    const result = new AuthRunner().run();
+    const runner = new AuthRunner();
+    void runner.run().catch(() => {});
     await vi.advanceTimersByTimeAsync(6 * 60000);
     expect(kill).not.toHaveBeenCalled();
     expect(child.kill).not.toHaveBeenCalled();
+    const joined = runner.run();
     child.emit("close", 0);
-    await result;
+    expect(await joined).toBe(true);
+  });
+
+  describe("a sign-in that has not reached MFA by the end of the call budget", () => {
+    it("answers the caller 55 seconds into the call that it is still signing in", async () => {
+      const result = new AuthRunner().run();
+      const failure = expect(result).rejects.toMatchObject({ kind: "inProgress" });
+      await vi.advanceTimersByTimeAsync(55000);
+      await failure;
+    });
+
+    it("is still waiting just before 55 seconds into the call", async () => {
+      let settled = false;
+      void new AuthRunner().run().then(() => { settled = true; }, () => { settled = true; });
+      await vi.advanceTimersByTimeAsync(54000);
+
+      expect(settled).toBe(false);
+    });
+
+    it("keeps the sign-in running in the background", async () => {
+      const result = new AuthRunner().run();
+      const failure = expect(result).rejects.toMatchObject({ kind: "inProgress" });
+      await vi.advanceTimersByTimeAsync(55000);
+      await failure;
+
+      expect(kill).not.toHaveBeenCalled();
+      expect(child.kill).not.toHaveBeenCalled();
+    });
+
+    it("lets the next call join that same sign-in and answer with its challenge", async () => {
+      const runner = new AuthRunner();
+      const first = expect(runner.run()).rejects.toMatchObject({ kind: "inProgress" });
+      await vi.advanceTimersByTimeAsync(55000);
+      await first;
+
+      const second = expect(runner.run()).rejects.toMatchObject({ kind: "mfaPending", numberMatch: "47" });
+      child.stdout.write("MFA_NUMBER:47\n");
+      await second;
+
+      expect(spawn).toHaveBeenCalledTimes(1);
+    });
+
+    it("bounds a caller who would otherwise poll for the approval", async () => {
+      const onChallenge = vi.fn();
+      const result = new AuthRunner().run(onChallenge);
+      const failure = expect(result).rejects.toMatchObject({ kind: "inProgress" });
+      await vi.advanceTimersByTimeAsync(55000);
+      await failure;
+
+      expect(onChallenge).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("sign-in phase timings", () => {
+    it("records each phase the child reports as a dev activity event, not a log line", async () => {
+      const result = new AuthRunner().run();
+      child.stdout.write("AUTH_PHASE:launch:1234\nAUTH_PHASE:approvalWait:20500\n");
+      child.emit("close", 0);
+      await result;
+
+      expect(vi.mocked(devActivity).mock.calls.filter(([event]) => event === "auth_phase")).toEqual([
+        ["auth_phase", { phase: "launch", elapsedMs: 1234 }],
+        ["auth_phase", { phase: "approvalWait", elapsedMs: 20500 }],
+      ]);
+    });
+
+    it.each(["AUTH_PHASE:password:10", "AUTH_PHASE:launch:-5", "AUTH_PHASE:launch:12 extra", "AUTH_PHASE:launch"])(
+      "never records a malformed or unknown phase marker (%s)", async (line) => {
+        const result = new AuthRunner().run();
+        child.stdout.write(`${line}\n`);
+        child.emit("close", 0);
+        await result;
+
+        expect(vi.mocked(devActivity).mock.calls.filter(([event]) => event === "auth_phase")).toEqual([]);
+      },
+    );
   });
 
   it("force-stops a hung child tree and releases its in-process lock", async () => {
@@ -430,16 +509,5 @@ describe("AuthRunner", () => {
       expect(settled).toBe(false);
     });
 
-    it("answers at once without waiting when the challenge arrives after 55 seconds", async () => {
-      const onChallenge = vi.fn();
-      const result = new AuthRunner().run(onChallenge);
-      const failure = expect(result).rejects.toMatchObject({ kind: "mfaPending", numberMatch: "47" });
-      await vi.advanceTimersByTimeAsync(56000);
-      child.stdout.write("MFA_NUMBER:47\n");
-      await vi.advanceTimersByTimeAsync(0);
-      await failure;
-
-      expect(onChallenge).not.toHaveBeenCalled();
-    });
   });
 });

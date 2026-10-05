@@ -12,6 +12,7 @@ import { log } from "../utils/logger.js";
 import { AuthError } from "../utils/errors.js";
 import { AUTH_COMMAND } from "../utils/commands.js";
 import { devActivity } from "../utils/dev-activity.js";
+import { parsePhaseMarker } from "./auth-phases.js";
 
 /**
  * Timeout for the auth process. It has to outlast the child's own MFA wait,
@@ -36,12 +37,13 @@ const KILL_GRACE_MS = 5000;
 const MFA_POLL_MS = 45000;
 
 /**
- * The latest a polling caller is answered, counted from when it called run().
+ * The latest any caller is answered, counted from when it called run().
  * Browser launch and the SSO pages can take half a minute before the
- * challenge even appears, so the poll is cut short to fit this budget. It
- * stays under the 60-second request timeout MCP clients commonly apply, so a
- * client that never shows the mid-call notice still gets the number in the
- * answer.
+ * challenge even appears, so the poll is cut short to fit this budget, and a
+ * sign-in that has not reached MFA by then answers "still signing in" while
+ * it keeps running. It stays under the 60-second request timeout MCP clients
+ * commonly apply, so a client that never shows the mid-call notice still gets
+ * the number in the answer.
  */
 const CALL_BUDGET_MS = 55000;
 
@@ -51,11 +53,12 @@ function pollWindowMs(elapsedMs: number): number {
 }
 
 /**
- * The only two lines auth-cli.ts is allowed to hand back as structured data.
- * Deliberately strict (whole line, 1-3 digits or the literal word) so this
- * can never become a channel for arbitrary child-process text to reach a
- * tool response — anything that doesn't match exactly is just another log
- * line.
+ * The only two lines auth-cli.ts is allowed to hand back as structured data
+ * for a tool response; parsePhaseMarker adds stage timings for the dev
+ * activity log only. Deliberately strict (whole line, 1-3 digits or the
+ * literal word) so this can never become a channel for arbitrary
+ * child-process text to reach a tool response — anything that doesn't match
+ * exactly is just another log line.
  */
 const MFA_NUMBER_MARKER = /^MFA_NUMBER:(\d{1,3})$/;
 const MFA_PENDING_MARKER = /^MFA_PENDING$/;
@@ -67,7 +70,7 @@ function mfaPendingFailure(numberMatch: string | undefined): [AuthFailureKind, s
     : ["mfaPending", "An MFA approval was not completed in time. Try again."];
 }
 
-export type AuthFailureKind = "busy" | "cooldown" | "unsupported" | "secureStorage" | "transport" | "timeout" | "failed" | "mfaPending";
+export type AuthFailureKind = "busy" | "cooldown" | "unsupported" | "secureStorage" | "transport" | "timeout" | "failed" | "mfaPending" | "inProgress";
 
 export class AuthProcessError extends AuthError {
   constructor(
@@ -89,6 +92,23 @@ export class AuthProcessError extends AuthError {
 export interface AuthRunnerOptions {
   timeoutMs?: number;
   onProgress?: (line: string) => void;
+}
+
+/**
+ * Settle with work's outcome, or with inProgress once CALL_BUDGET_MS has
+ * passed since startedAt. Only the caller stops waiting: work carries on.
+ */
+function withinCallBudget(work: Promise<boolean>, startedAt: number): Promise<boolean> {
+  return new Promise<boolean>((resolve, reject) => {
+    const budgetTimer = setTimeout(() => {
+      reject(new AuthProcessError("inProgress", "Sign-in is still running in the background. Try again."));
+    }, Math.max(0, CALL_BUDGET_MS - (Date.now() - startedAt)));
+    budgetTimer.unref?.();
+    work.then(
+      (value) => { clearTimeout(budgetTimer); resolve(value); },
+      (error) => { clearTimeout(budgetTimer); reject(error); },
+    );
+  });
 }
 
 /** Chromium can lead a separate process group, so a forced stop needs its PID. */
@@ -205,12 +225,14 @@ export class AuthRunner {
    * and the first call itself keeps waiting the same way. Either way an
    * approval within the window completes the caller's original request; past
    * it, the caller gets the same mfaPending answer again and is expected to
-   * call once more.
+   * call once more. No caller waits past CALL_BUDGET_MS: a sign-in still
+   * short of its challenge by then answers inProgress and keeps running for
+   * the next call to join.
    */
   async run(onChallenge?: (numberMatch: string | undefined) => void): Promise<boolean> {
     const startedAt = Date.now();
     try {
-      return await this.runOnce(startedAt);
+      return await withinCallBudget(this.runOnce(startedAt), startedAt);
     } catch (error) {
       const childDone = this.childDone;
       if (!onChallenge || !childDone || !(error instanceof AuthProcessError) || error.kind !== "mfaPending") throw error;
@@ -448,7 +470,10 @@ export class AuthRunner {
       // immediately, without killing the child — see the class doc comment.
       forwardLines(child.stdout, (line) => {
         const numberMarker = MFA_NUMBER_MARKER.exec(line);
-        if (numberMarker) {
+        const phaseMarker = parsePhaseMarker(line);
+        if (phaseMarker) {
+          devActivity("auth_phase", phaseMarker);
+        } else if (numberMarker) {
           numberMatch = numberMarker[1];
           publishChallenge(numberMatch);
         } else if (MFA_PENDING_MARKER.test(line)) {

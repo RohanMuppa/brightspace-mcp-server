@@ -17,6 +17,7 @@ import { isDuoPrompt } from "./duo-mfa.js";
 import { BrowserStateStore, type BrowserState } from "./browser-state-store.js";
 import { hasNewerEntraState, recordMicrosoftSession } from "./microsoft-session.js";
 import { acquireProcessLock } from "./auth-lock.js";
+import type { AuthPhase } from "./auth-phases.js";
 import { AuthCooldown } from "./auth-cooldown.js";
 import { mintAccessToken } from "./token-mint.js";
 import { isMissingBrowserError, PLAYWRIGHT_INSTALL_HINT } from "../utils/browser-install.js";
@@ -70,6 +71,8 @@ export interface BrowserAuthOptions {
   requestMfaCode?: RequestMfaCode;
   /** See PurdueSSOConfig.onMfaChallenge — fired early so a caller can answer without blocking on the full MFA wait, and again if the number changes. */
   onMfaChallenge?: OnMfaChallenge;
+  /** Told how long each sign-in stage took, as it ends, whether it succeeded or not. */
+  onPhase?: (phase: AuthPhase, elapsedMs: number) => void;
 }
 
 export class BrowserAuth {
@@ -77,12 +80,35 @@ export class BrowserAuth {
   private ssoFlow: SSOFlow;
   private readonly stateStore: BrowserStateStore;
   private readonly cooldown: AuthCooldown;
+  private readonly onPhase?: (phase: AuthPhase, elapsedMs: number) => void;
+  /** When the current login first reported an MFA challenge; splits credentials from approvalWait. */
+  private challengeSeenAt: number | undefined;
 
   constructor(config: AppConfig, options: BrowserAuthOptions = {}) {
     this.config = config;
-    this.ssoFlow = createSSOFlow(config, options.requestMfaCode, options.onMfaChallenge);
+    this.onPhase = options.onPhase;
+    const { onMfaChallenge } = options;
+    this.ssoFlow = createSSOFlow(config, options.requestMfaCode, onMfaChallenge && ((number) => {
+      this.challengeSeenAt ??= Date.now();
+      onMfaChallenge(number);
+    }));
     this.stateStore = new BrowserStateStore(config.sessionDir);
     this.cooldown = new AuthCooldown(config.sessionDir);
+  }
+
+  /** Report a stage that ran from startedAt to endedAt; a listener failure never interrupts sign-in. */
+  private phaseEnded(phase: AuthPhase, startedAt: number, endedAt = Date.now()): void {
+    try { this.onPhase?.(phase, endedAt - startedAt); } catch { /* Reporting must not interrupt authentication. */ }
+  }
+
+  /** Run one stage and report its duration however it ends. */
+  private async timed<T>(phase: AuthPhase, work: () => Promise<T>): Promise<T> {
+    const startedAt = Date.now();
+    try {
+      return await work();
+    } finally {
+      this.phaseEnded(phase, startedAt);
+    }
   }
 
   private static isWSLOrDocker(): boolean {
@@ -127,6 +153,7 @@ export class BrowserAuth {
     let interrupted = false;
     let state: BrowserState | undefined;
     let stateSaved = false;
+    let tokenStartedAt: number | undefined;
     const closeOnSignal = () => {
       interrupted = true;
       void browser?.close().catch(() => {});
@@ -138,7 +165,7 @@ export class BrowserAuth {
       if (BrowserAuth.isWSLOrDocker()) args.push("--no-sandbox", "--disable-setuid-sandbox");
       // Use Playwright's own timeout, which cleans up an unsuccessful launch.
       try {
-        browser = await chromium.launch({ headless: this.config.headless, timeout: 60000, args });
+        browser = await this.timed("launch", () => chromium.launch({ headless: this.config.headless, timeout: 60000, args }));
       } catch (launchError) {
         // Keep the remedy attached to the failure. Without this the hint is
         // lost when the auth runner flattens errors into "Authentication failed".
@@ -165,6 +192,7 @@ export class BrowserAuth {
       // away newly renewed Entra or Brightspace cookies.
       await this.saveBrowserState(await context.storageState());
       stateSaved = true;
+      tokenStartedAt = Date.now();
       const material = await this.harvestSessionMaterial(page, context);
       let token: TokenData | null = null;
       if (material.cookieHeader && material.csrfToken) {
@@ -198,6 +226,7 @@ export class BrowserAuth {
       if (context && !stateSaved) await this.keepNewerMicrosoftState(context, state);
       throw error;
     } finally {
+      if (tokenStartedAt !== undefined) this.phaseEnded("token", tokenStartedAt);
       process.removeListener("SIGINT", closeOnSignal);
       process.removeListener("SIGTERM", closeOnSignal);
       if (page && listener) page.removeListener("request", listener);
@@ -349,10 +378,10 @@ export class BrowserAuth {
     let navigationError: unknown;
     let response;
     try {
-      response = await page.goto(`${this.config.baseUrl}/d2l/home`, {
+      response = await this.timed("navigation", () => page.goto(`${this.config.baseUrl}/d2l/home`, {
         waitUntil: "domcontentloaded",
         timeout: INITIAL_NAVIGATION_TIMEOUT_MS,
-      });
+      }));
     } catch (error) {
       // Brightspace Bar tolerates a navigation timeout because SAML may keep
       // redirecting after Playwright stops waiting. Continue with the same
@@ -368,7 +397,7 @@ export class BrowserAuth {
     if (response && (response.status() >= 500 || response.status() === 429)) {
       throw new BrowserAuthTransportError(`Brightspace temporarily returned HTTP ${response.status()}. Saved state is preserved.`);
     }
-    if (await this.awaitSilentSSO(page)) {
+    if (await this.timed("silentSso", () => this.awaitSilentSSO(page))) {
       log("INFO", "Saved session is active");
       return true;
     }
@@ -392,6 +421,8 @@ export class BrowserAuth {
         navigationError === undefined ? undefined : { cause: navigationError }
       );
     }
+    const loginStartedAt = Date.now();
+    this.challengeSeenAt = undefined;
     try {
       if (!await this.ssoFlow.login(page)) {
         throw new UnsupportedAuthenticationError("The identity provider could not complete automatic sign-in.");
@@ -399,6 +430,12 @@ export class BrowserAuth {
     } catch (error) {
       if (error instanceof MfaApprovalError) await this.cooldown.recordMfaFailure();
       throw error;
+    } finally {
+      if (this.challengeSeenAt === undefined) this.phaseEnded("credentials", loginStartedAt);
+      else {
+        this.phaseEnded("credentials", loginStartedAt, this.challengeSeenAt);
+        this.phaseEnded("approvalWait", this.challengeSeenAt);
+      }
     }
     if (!await this.hasLiveSession(page)) {
       throw new BrowserAuthError("Sign-in did not produce a verified Brightspace session.", "session_validation");

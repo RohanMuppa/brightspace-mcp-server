@@ -11,6 +11,7 @@ import { BrowserAuth, TokenManager } from "./auth/index.js";
 import { MfaApprovalError } from "./auth/sso-flow.js";
 import { NativeCredentialStoreError } from "./auth/credential-store.js";
 import { retireLegacyProfile } from "./auth/legacy-profile.js";
+import { formatPhaseMarker, type AuthPhase } from "./auth/auth-phases.js";
 import { AUTH_COMMAND, SETUP_COMMAND } from "./utils/commands.js";
 import { initUpdateChecker, peekUpdateNotice } from "./utils/update-checker.js";
 import { reexecLatestIfStale } from "./utils/self-update.js";
@@ -69,7 +70,11 @@ async function main(): Promise<void> {
     const onMfaChallenge = automatic
       ? (number: string | null) => console.log(number ? `MFA_NUMBER:${number}` : "MFA_PENDING")
       : undefined;
-    await new BrowserAuth(config, { requestMfaCode: codePrompt, onMfaChallenge }).authenticate({
+    // Stage timings for the server's dev activity log, same stdout channel.
+    const onPhase = automatic
+      ? (phase: AuthPhase, elapsedMs: number) => console.log(formatPhaseMarker(phase, elapsedMs))
+      : undefined;
+    await new BrowserAuth(config, { requestMfaCode: codePrompt, onMfaChallenge, onPhase }).authenticate({
       automatic,
       onAuthenticated: async (token) => {
         await tokenManager.setToken(token);

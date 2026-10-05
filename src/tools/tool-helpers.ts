@@ -120,6 +120,11 @@ const AUTH_FAILURE_GUIDANCE: Record<AuthFailureKind, string> = {
     "Tell the user that, then call this tool again right away without waiting for them to " +
     "confirm: each call waits up to 45 seconds for the approval and returns the result as soon " +
     "as the sign-in completes. Keep calling until it succeeds or reports a different error.",
+  inProgress:
+    "Brightspace sign-in is still starting in the background (opening the browser and the " +
+    "school's login pages). Call this tool again right away: the next call joins the same " +
+    "sign-in, so it sends no second MFA prompt, and returns the number to approve as soon as " +
+    "one appears. Don't ask the user to do anything yet.",
 };
 
 /**

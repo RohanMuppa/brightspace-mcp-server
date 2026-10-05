@@ -23,6 +23,14 @@ joining an existing recovery share that operation; its events retain the
 initiating call's ID. A mint outcome describes the token service response;
 `recovery_finished` describes the browser child process outcome.
 
+During background recovery, `auth_phase` records how long each browser sign-in
+stage took, as `phase` and `elapsedMs`: `launch` (starting Chromium),
+`navigation` (the first Brightspace page load), `silentSso` (waiting for a saved
+session to resume), `credentials` (the identity provider's login up to an MFA
+challenge), `approvalWait` (from that challenge until the login finished), and
+`token` (acquiring the API token). A stage is recorded when it ends, including
+when it fails, so the last one shows where a slow or stalled sign-in was.
+
 To investigate inactivity, find the last `http_response` with a 2xx status and
 the next 401, `auth_required`, or `mfa_observed`. This bounds when authentication
 became unusable; it does **not** reveal the exact expiry time during an idle gap.
