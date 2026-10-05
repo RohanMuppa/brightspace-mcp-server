@@ -62,6 +62,50 @@ function isExpiredSessionRedirect(body: string, baseUrl: string): boolean {
  * Braces are used because D2L paths never contain them, so a substitution can
  * never collide with a real path segment.
  */
+/**
+ * An abort signal that fires after `ms` without progress. Each touch() restarts
+ * the countdown, so a slow transfer that keeps moving is never cut off while a
+ * stalled one still fails.
+ */
+function idleTimeout(ms: number) {
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const clear = () => clearTimeout(timer);
+  const touch = () => {
+    clear();
+    timer = setTimeout(
+      () => controller.abort(new DOMException("The operation was aborted due to timeout", "TimeoutError")),
+      ms,
+    );
+  };
+  touch();
+  return { signal: controller.signal, touch, clear };
+}
+
+/** Restart the idle timer on every chunk of the body; stop it at the end. */
+function touchOnProgress(response: Response, idle: ReturnType<typeof idleTimeout>): Response {
+  if (!response.body) {
+    idle.clear();
+    return response;
+  }
+  const body = response.body.pipeThrough(
+    new TransformStream<Uint8Array, Uint8Array>({
+      transform(chunk, controller) {
+        idle.touch();
+        controller.enqueue(chunk);
+      },
+      flush() {
+        idle.clear();
+      },
+    }),
+  );
+  return new Response(body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers,
+  });
+}
+
 const LP_VERSION = "{lp}";
 const LE_VERSION = "{le}";
 
@@ -480,6 +524,9 @@ export class D2LApiClient {
   ): Promise<Response> {
     const url = `${this.baseUrl}${path}`;
     const headers = this.buildAuthHeaders(token);
+    // A file can take far longer than timeoutMs to arrive. Time out on a
+    // stall rather than on total duration, for the headers and the body alike.
+    const idle = idleTimeout(this.timeoutMs);
 
     try {
       log("DEBUG", `Requesting GET ${path} (raw)`);
@@ -487,7 +534,7 @@ export class D2LApiClient {
       const response = await fetch(url, {
         method: "GET",
         headers,
-        signal: AbortSignal.timeout(this.timeoutMs),
+        signal: idle.signal,
       });
       this.recordStatus(response.status);
 
@@ -536,6 +583,7 @@ export class D2LApiClient {
         }
         // A legitimate HTML page: hand back an equivalent response with the
         // body we already consumed.
+        idle.clear();
         return new Response(body, {
           status: response.status,
           statusText: response.statusText,
@@ -544,8 +592,9 @@ export class D2LApiClient {
       }
 
       // Return raw response for caller to process
-      return response;
+      return touchOnProgress(response, idle);
     } catch (error) {
+      idle.clear();
       // Re-throw our own errors
       if (
         error instanceof ApiError ||
