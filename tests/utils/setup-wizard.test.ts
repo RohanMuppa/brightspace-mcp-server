@@ -160,6 +160,22 @@ describe("saved settings on a repeat run", () => {
     expect(saved.activeOnly).toBe(false);
   });
 
+  it("saves the remember-MFA answer", () => {
+    expect(buildConfigToSave(null, { ...answers, rememberMfa: true }).rememberMfa).toBe(true);
+    expect(buildConfigToSave({ baseUrl: answers.baseUrl, rememberMfa: true }, { ...answers, rememberMfa: false }).rememberMfa)
+      .toBe(false);
+  });
+
+  it("keeps a saved remember-MFA choice when the same school is set up again without an answer", () => {
+    const saved = buildConfigToSave({ baseUrl: answers.baseUrl, rememberMfa: true }, answers);
+    expect(saved.rememberMfa).toBe(true);
+  });
+
+  it("drops a saved remember-MFA choice when the school changes", () => {
+    const saved = buildConfigToSave({ baseUrl: "https://purdue.brightspace.com", rememberMfa: true }, answers);
+    expect(saved.rememberMfa).toBeUndefined();
+  });
+
   it("writes just the answers when there is nothing saved yet", () => {
     expect(buildConfigToSave(null, { ...answers, campus: "SUNY Poly" })).toEqual({
       ...answers,

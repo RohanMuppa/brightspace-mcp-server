@@ -12,7 +12,7 @@ The number to approve shows up right in the tool's response, and sign-in finishe
 
 **Duo:** sign-in auto-answers "Is this your device?" with **yes**, since a headless run has nobody to click it — this also makes Duo remember the device, so skip it on shared machines. Set `D2L_DUO_PASSCODE` to swap the push for a typed passcode.
 
-**Microsoft "Don't ask again":** setting `D2L_REMEMBER_MFA=true` makes the server tick that box when your school offers it, so later sign-ins can skip the second factor; how long that lasts is the school's setting, not the server's. It is off by default — leave it off on a shared machine — and `get_server_info` shows whether the box was ticked, offered, or left alone. How often you're asked for MFA at all is your school's sign-in frequency setting, the same approval you'd see in a regular browser.
+**Microsoft "Don't ask again":** answering yes to `setup`'s "Remember this device" question (saved as `rememberMfa` in `config.json`; `D2L_REMEMBER_MFA` overrides it) makes the server tick that box when your school offers it, so later sign-ins can skip the second factor; how long that lasts is the school's setting, not the server's. It is off by default — leave it off on a shared machine — and `get_server_info` shows whether the box was ticked, offered, or left alone. How often you're asked for MFA at all is your school's sign-in frequency setting, the same approval you'd see in a regular browser.
 
 ## If it gets stuck
 

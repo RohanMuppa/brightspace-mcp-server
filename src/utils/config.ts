@@ -58,9 +58,11 @@ export async function loadConfig(): Promise<AppConfig> {
     ?? true;
 
   // Opt-in: ask Microsoft to skip the second factor for its "Don't ask again"
-  // window. Off unless D2L_REMEMBER_MFA=true, so a shared machine never
-  // remembers MFA without the user choosing it.
-  const rememberMfa = envBoolean(process.env.D2L_REMEMBER_MFA, "D2L_REMEMBER_MFA") ?? false;
+  // window. Off unless the user said yes in setup or set D2L_REMEMBER_MFA=true,
+  // so a shared machine never remembers MFA without the user choosing it.
+  const rememberMfa = envBoolean(process.env.D2L_REMEMBER_MFA, "D2L_REMEMBER_MFA")
+    ?? store?.rememberMfa
+    ?? false;
 
   // Resolve tokenTtl: env > store > default (3600)
   const tokenTtl = positiveSeconds(process.env.D2L_TOKEN_TTL, "D2L_TOKEN_TTL")
