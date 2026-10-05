@@ -117,6 +117,16 @@ describe("D2LApiClient resilience", () => {
     expect(waited).toBeLessThanOrEqual(30_000);
   });
 
+  it("surfaces a 429 at once when its Retry-After is too long to wait out", async () => {
+    const c = await client();
+    fetchMock.mockResolvedValueOnce(json({}, { status: 429, headers: { "Retry-After": "3600" } }));
+
+    await expect(c.get("/d2l/api/lp/1.62/users/whoami")).rejects.toMatchObject({ retryAfter: 3600 });
+    expect(sleep).not.toHaveBeenCalled();
+    // The version discovery call plus one attempt.
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it("consumes a rate limiter token on every attempt, not once per call", async () => {
     const c = await client();
     const consume = vi.fn(async () => {});

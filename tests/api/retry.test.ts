@@ -67,6 +67,29 @@ describe("withRetry", () => {
     expect(sleep).toHaveBeenCalledWith(30_000);
   });
 
+  it("rethrows at once when Retry-After exceeds maxRetryAfterMs", async () => {
+    const sleep = vi.fn(async () => {});
+    const err = new RateLimitError("/x", 3600);
+    const fn = failing([err, "ok"]);
+    await expect(
+      withRetry(fn, { sleep, shouldRetry: isRetryableFailure, retryAfterMs: retryAfterMsFrom })
+    ).rejects.toBe(err);
+    expect(sleep).not.toHaveBeenCalled();
+    expect(fn).toHaveBeenCalledTimes(1);
+  });
+
+  it("waits out a Retry-After exactly at maxRetryAfterMs", async () => {
+    const sleep = vi.fn(async () => {});
+    const fn = failing([new RateLimitError("/x", 10), "ok"]);
+    await withRetry(fn, {
+      maxRetryAfterMs: 10_000,
+      sleep,
+      shouldRetry: isRetryableFailure,
+      retryAfterMs: retryAfterMsFrom,
+    });
+    expect(sleep).toHaveBeenCalledWith(10_000);
+  });
+
   it("recovers from a 503 on the second attempt", async () => {
     const sleep = vi.fn(async () => {});
     const fn = failing([new ApiError(503, "/x", "unavailable"), "ok"]);
