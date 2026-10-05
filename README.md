@@ -65,15 +65,16 @@ School-specific quirks: [docs/sign-in.md](docs/sign-in.md#per-school-notes).
 
 | About | Try |
 |-------|-----|
-| Grades | "Am I passing all my classes?" · "Compare my grades across courses" |
+| Grades | "Am I passing all my classes?" · "Compare my grades across courses" · "Is there feedback on my midterm?" (quiz-scored grades link to the quiz, since quiz feedback, including feedback only viewable in LockDown Browser, isn't readable through the API) |
 | Due dates | "What's due in the next 48 hours?" · "Build me a study schedule for the week" |
 | Assignments and rubrics | "What does the lab 4 spec actually ask for?" · "Why did I lose points on the analysis criterion?" |
 | Quizzes and exams | "Which quizzes close this week?" · "Is there a midterm in the gradebook that isn't on my assignments list?" |
 | Announcements | "Did any professor post something important today?" · "Read the file attached to today's announcement" |
 | Course content | "Find the midterm review slides" · "Download every PDF from Module 5" · "Search this course for office hours" · or just read a file inline instead of saving it |
+| Syllabus | "What's the late policy in ECE 264's syllabus?" (if the course keeps its syllabus in an external tool such as Simple Syllabus, you get the link to open instead) |
 | People | "Who are the TAs for ECE 264?" · "Who is in my project group?" |
 | Discussions | "Summarize the latest posts in the final project thread" |
-| Lecture videos | "What did the professor say about pinch-off in Tuesday's recording?" (Kaltura and YouTube) |
+| Lecture videos | "What did the professor say about pinch-off in Tuesday's recording?" (Kaltura, including BoilerCast LTI links, and YouTube) |
 | Calendar | "When is my midterm?" · "Is lab cancelled on Thursday?" |
 | For instructors and TAs | "Which students haven't submitted Lab 4 yet?" · "What feedback did I leave on this student's homework?" · "Download that student's submitted PDF" (students see a clear "instructor access required" note) |
 
@@ -94,7 +95,7 @@ All optional, set in your AI app's MCP `env` config or your shell. The full list
 
 | Setting | What it does |
 |---------|--------------|
-| `D2L_REMEMBER_MFA=true` | Tick Microsoft's "Don't ask again" box so later sign-ins skip the second factor (off by default; not for shared computers) |
+| `D2L_REMEMBER_MFA=true` | Tick Microsoft's "Don't ask again" box so later sign-ins skip the second factor (off by default; not for shared computers). `setup` asks this and saves it as `rememberMfa` in `config.json`; the env var overrides it |
 | `D2L_HEADLESS=false` | Show the browser window during sign-in, for MFA methods that need a click |
 | `D2L_DUO_PASSCODE=1` | On Duo, type a passcode instead of waiting for a push |
 | `D2L_SESSION_COOKIE` / `D2L_ACCESS_TOKEN` | Skip the browser entirely with a pasted cookie or token ([how](docs/sign-in.md#no-browser-paste-a-session-cookie-or-token)) |
@@ -105,7 +106,7 @@ All optional, set in your AI app's MCP `env` config or your shell. The full list
 
 ## When it asks you to sign in
 
-There's no separate login — asking a question signs you in, and it stays signed in on its own most days. When your school wants two-factor again, the number to approve shows up right in the answer; approve it on your phone and ask again. If your AI client shows tool progress messages, the number appears while the question is still running instead, and approving within 45 seconds (less if sign-in was slow to reach two-factor) finishes the original answer without asking again. If it ever gets stuck, run this in a terminal:
+There's no separate login — asking a question signs you in, and it stays signed in on its own most days. When your school wants two-factor again, the number to approve shows up right in the answer; approve it on your phone and the assistant keeps checking on its own — each check waits up to 45 seconds and the original question completes as soon as the sign-in does, without you having to say you've approved it. If your AI client shows tool progress messages, the number appears while the question is still running instead. If it ever gets stuck, run this in a terminal:
 
 ```bash
 npx -y brightspace-mcp-server@latest auth

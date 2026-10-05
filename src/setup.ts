@@ -386,6 +386,8 @@ export interface WizardAnswers {
   username: string;
   password: string;
   headless: boolean;
+  /** Left undefined, the saved choice for the same school is kept. */
+  rememberMfa?: boolean;
   campus?: string;
 }
 
@@ -437,6 +439,7 @@ export function buildConfigToSave(
     password: answers.password,
     headless: answers.headless,
   };
+  if (answers.rememberMfa !== undefined) config.rememberMfa = answers.rememberMfa;
   if (answers.campus) config.campus = answers.campus;
   return config;
 }
@@ -583,8 +586,11 @@ async function main(): Promise<void> {
   console.log("    1. I approve on my phone, or I type a code from an authenticator app (recommended)");
   console.log("    2. Something else — open a browser window I can use");
   let savedHeadless: boolean | undefined;
+  let savedRememberMfa: boolean | undefined;
   try {
-    savedHeadless = configStoreExists() ? loadConfigStore().headless : undefined;
+    const saved = configStoreExists() ? loadConfigStore() : undefined;
+    savedHeadless = saved?.headless;
+    savedRememberMfa = saved?.rememberMfa;
   } catch {
     // An invalid old config is replaced by the setup values below.
   }
@@ -600,12 +606,29 @@ async function main(): Promise<void> {
     : "  A browser window will open when authentication is needed."));
   console.log("");
 
+  // Opt-in only: a shared computer must never skip MFA unless asked to.
+  const defaultRemember = savedRememberMfa === true ? "yes" : "no";
+  let rememberAnswer = "";
+  while (!/^(y(es)?|no?)$/i.test(rememberAnswer)) {
+    rememberAnswer = await ask(
+      rl2,
+      `  Remember this device so later sign-ins can skip the second factor? Not for shared computers. (yes/no) [${defaultRemember}]: `,
+    ) || defaultRemember;
+    if (!/^(y(es)?|no?)$/i.test(rememberAnswer)) console.log(yellow("  Please enter yes or no."));
+  }
+  const rememberMfa = /^y/i.test(rememberAnswer);
+  console.log(dim(rememberMfa
+    ? "  Later sign-ins will ask Microsoft not to repeat the second factor on this device."
+    : "  Every sign-in will ask for the second factor."));
+  console.log("");
+
   // ── Step 5: Save config ──────────────────────────────────────────
   const config = buildConfigToSave(readExistingConfig(), {
     baseUrl,
     username,
     password,
     headless,
+    rememberMfa,
     campus: campus || undefined,
   });
 

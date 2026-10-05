@@ -116,8 +116,10 @@ const AUTH_FAILURE_GUIDANCE: Record<AuthFailureKind, string> = {
     `The sign-in did not complete. Run \`${AUTH_COMMAND}\` in a terminal (from your home folder) to see why, ` +
     "or `brightspace-setup` if your saved school or username is wrong.",
   mfaPending:
-    "Approve the sign-in request on your phone (Microsoft Authenticator or Duo), " +
-    "then call this tool again — the sign-in is finishing in the background.",
+    "Approve the sign-in request on your phone (Microsoft Authenticator or Duo). " +
+    "Tell the user that, then call this tool again right away without waiting for them to " +
+    "confirm: each call waits up to 45 seconds for the approval and returns the result as soon " +
+    "as the sign-in completes. Keep calling until it succeeds or reports a different error.",
 };
 
 /**
@@ -129,8 +131,10 @@ const AUTH_FAILURE_GUIDANCE: Record<AuthFailureKind, string> = {
  */
 function authFailureMessage(error: AuthProcessError): string {
   if (error.kind === "mfaPending" && error.numberMatch) {
-    return `Open Microsoft Authenticator and enter ${error.numberMatch} within 5 minutes, ` +
-      "then call this tool again — the sign-in is finishing in the background.";
+    return `Open Microsoft Authenticator and enter ${error.numberMatch} within 5 minutes. ` +
+      "Tell the user that number, then call this tool again right away without waiting for them " +
+      "to confirm: each call waits up to 45 seconds for the approval and returns the result as " +
+      "soon as the sign-in completes. Keep calling until it succeeds or reports a different error.";
   }
   return AUTH_FAILURE_GUIDANCE[error.kind];
 }

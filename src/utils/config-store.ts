@@ -19,6 +19,11 @@ export interface ConfigStoreData {
   sessionDir?: string;
   tokenTtl?: number;
   headless?: boolean;
+  /**
+   * Tick Microsoft's "Don't ask again" box so later sign-ins can skip the
+   * second factor. Asked by setup, off by default; D2L_REMEMBER_MFA overrides.
+   */
+  rememberMfa?: boolean;
   includeCourses?: number[];
   excludeCourses?: number[];
   activeOnly?: boolean;

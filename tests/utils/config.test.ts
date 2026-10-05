@@ -104,6 +104,22 @@ describe("resolved authentication configuration", () => {
     expect((await loadConfig()).rememberMfa).toBe(expected);
   });
 
+  it("honours rememberMfa saved by setup in config.json", async () => {
+    fake.store = { rememberMfa: true };
+    expect((await loadConfig()).rememberMfa).toBe(true);
+  });
+
+  it("lets D2L_REMEMBER_MFA=false override rememberMfa in config.json", async () => {
+    vi.stubEnv("D2L_REMEMBER_MFA", "false");
+    fake.store = { rememberMfa: true };
+    expect((await loadConfig()).rememberMfa).toBe(false);
+  });
+
+  it("leaves remember-MFA off when config.json has no rememberMfa", async () => {
+    fake.store = { baseUrl: "https://school.example", headless: true };
+    expect((await loadConfig()).rememberMfa).toBe(false);
+  });
+
   it("treats an empty D2L_HEADLESS as unset so the setup preference applies", async () => {
     vi.stubEnv("D2L_HEADLESS", "");
     fake.store = { headless: false };
