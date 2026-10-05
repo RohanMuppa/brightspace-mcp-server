@@ -15,6 +15,7 @@ import {
   extractYouTubeVideoId,
   type VideoPlatform,
 } from "../utils/transcript/platform.js";
+import { isBrightspaceRelativeLink, readLtiLaunchPage } from "../utils/transcript/lti.js";
 import { getKalturaTranscript } from "../utils/transcript/kaltura.js";
 import { getYouTubeTranscript } from "../utils/transcript/youtube.js";
 import { NoTranscriptError, TranscriptFetchError } from "../utils/transcript/errors.js";
@@ -51,6 +52,23 @@ async function resolveVideoUrl(
     };
   }
   return { url: topic.Url };
+}
+
+/** The quickLink itself, plus one Brightspace page it frames (the tool launch). */
+const MAX_LTI_PAGES = 2;
+
+/** Request a Brightspace LTI link as the user and read its launch for the video it opens. */
+async function followLtiLaunch(apiClient: D2LApiClient, path: string): Promise<string | null> {
+  let next = path;
+  for (let page = 0; page < MAX_LTI_PAGES; page++) {
+    const html = await apiClient.getPage(next);
+    if (html === null) return null;
+    const finding = readLtiLaunchPage(html);
+    if (!finding) return null;
+    if ("videoUrl" in finding) return finding.videoUrl;
+    next = finding.nextPath;
+  }
+  return null;
 }
 
 async function fetchTranscript(
@@ -127,7 +145,7 @@ export function registerGetVideoTranscript(
         "Read the transcript of a video embedded in course content, such as a recorded lecture or explainer clip. " +
         "Call it with courseId and topicId from get_course_content (typeFilter: 'video' or 'other'), or with videoUrl " +
         "directly if you already have the link. Returns transcript text with timestamps, plus title and duration when " +
-        "available. Currently supports Kaltura (e.g. BoilerCast) and YouTube; other platforms return a clear message " +
+        "available. Currently supports Kaltura (e.g. BoilerCast, including its Brightspace LTI links) and YouTube; other platforms return a clear message " +
         "naming what isn't supported yet. Use offset/maxChars to page through a long transcript. Read only — this " +
         "never marks the video as watched.",
       inputSchema: GetVideoTranscriptSchema,
@@ -150,6 +168,24 @@ export function registerGetVideoTranscript(
           return errorResponse(
             "Provide either videoUrl, or both courseId and topicId to look up the video from course content."
           );
+        }
+
+        if (isBrightspaceRelativeLink(resolvedUrl)) {
+          const launchedUrl = await followLtiLaunch(apiClient, resolvedUrl);
+          if (!launchedUrl) {
+            return toolResponse({
+              courseId,
+              topicId,
+              videoUrl: resolvedUrl,
+              platform: "unknown",
+              hasTranscript: false,
+              message:
+                `This is a Brightspace LTI link (${resolvedUrl}), and its launch did not reveal which video it opens. ` +
+                "Some tools only hand over the video after a browser sign-in to the tool itself, which this server " +
+                "can't do. The video platform itself may still be supported. Open it in Brightspace directly.",
+            });
+          }
+          resolvedUrl = launchedUrl;
         }
 
         const platform = detectVideoPlatform(resolvedUrl);

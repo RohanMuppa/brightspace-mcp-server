@@ -129,3 +129,85 @@ describe("get_video_transcript — unsupported and unresolved cases", () => {
     expect(result.isError).toBe(true);
   });
 });
+
+describe("get_video_transcript — Brightspace LTI quickLinks", () => {
+  const QUICKLINK = "/d2l/common/dialogs/quickLink/quickLink.d2l?ou=101&type=lti&rcode=PU-123&srcou=6606";
+
+  function launchPage(body: string) {
+    return `<html><body>${body}<script>document.forms[0].submit();</script></body></html>`;
+  }
+
+  function setupLti(pages: Record<string, string | null>) {
+    const { call, apiClient } = setup(kalturaFetch(), QUICKLINK);
+    const getPage = vi.fn(async (path: string) => {
+      if (!(path in pages)) throw new Error(`Unexpected getPage: ${path}`);
+      return pages[path];
+    });
+    Object.assign(apiClient, { getPage });
+    return { call, getPage };
+  }
+
+  it("follows the LTI launch form to the Kaltura video and returns its transcript", async () => {
+    const { call } = setupLti({
+      [QUICKLINK]: launchPage(
+        `<form id="LtiRequestForm" method="post" action="https://cdnapisec.kaltura.com/html5/html5lib/v2.9/mwEmbedFrame.php?wid=_123456&amp;entry_id=1_abcdefg">` +
+          `<input type="hidden" name="lti_version" value="LTI-1p0" /></form>`
+      ),
+    });
+    const body = JSON.parse((await call({ courseId: COURSE_ID, topicId: 55 })).content[0].text);
+
+    expect(body.hasTranscript).toBe(true);
+    expect(body.platform).toBe("kaltura");
+    expect(body.transcript).toBe(
+      "[0:00:01] Welcome back to lecture seven.\n[0:00:04] Today: pinch-off in a MOSFET."
+    );
+  });
+
+  it("takes the Kaltura partner ID from the LTI consumer key when a school's KAF launch URL omits it", async () => {
+    const { call } = setupLti({
+      [QUICKLINK]: launchPage(
+        `<form method="post" action="https://kaf.example.edu/browseandembed/index/media/entry_id/1_abcdefg">` +
+          `<input type="hidden" name="oauth_consumer_key" value="123456" /></form>`
+      ),
+    });
+    const body = JSON.parse((await call({ courseId: COURSE_ID, topicId: 55 })).content[0].text);
+
+    expect(body.hasTranscript).toBe(true);
+    expect(body.platform).toBe("kaltura");
+  });
+
+  it("follows a quickLink page that frames the Brightspace tool launch", async () => {
+    const { call } = setupLti({
+      [QUICKLINK]: `<html><body><iframe src="/d2l/le/lti/101/toolLaunch/77?topicId=55&amp;x=1"></iframe></body></html>`,
+      "/d2l/le/lti/101/toolLaunch/77?topicId=55&x=1": launchPage(
+        `<form method="post" action="https://kaf.kaltura.com/browseandembed/index/media/entry_id/1_abcdefg/wid/_123456"></form>`
+      ),
+    });
+    const body = JSON.parse((await call({ courseId: COURSE_ID, topicId: 55 })).content[0].text);
+
+    expect(body.hasTranscript).toBe(true);
+  });
+
+  it("says the LTI link could not be resolved when the page can't be read with the session cookie", async () => {
+    const { call } = setupLti({ [QUICKLINK]: null });
+    const body = JSON.parse((await call({ courseId: COURSE_ID, topicId: 55 })).content[0].text);
+
+    expect(body.hasTranscript).toBe(false);
+    expect(body.message).toMatch(/LTI link/);
+  });
+
+  it("says the LTI link could not be resolved, rather than calling it an unsupported platform", async () => {
+    const { call } = setupLti({
+      [QUICKLINK]: launchPage(
+        `<form method="post" action="https://tool.example.com/lti/login">` +
+          `<input type="hidden" name="login_hint" value="abc" /></form>`
+      ),
+    });
+    const result = await call({ courseId: COURSE_ID, topicId: 55 });
+    const body = JSON.parse(result.content[0].text);
+
+    expect(body.hasTranscript).toBe(false);
+    expect(body.message).toMatch(/LTI link/);
+    expect(body.message).not.toMatch(/supported video platform/);
+  });
+});
