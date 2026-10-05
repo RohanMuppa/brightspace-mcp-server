@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { oversizeBody, CHUNKS_AT_CAP } from "./oversize-body.js";
 
 vi.mock("../../src/utils/update-checker.js", () => ({ getUpdateNotice: vi.fn(() => null) }));
 
@@ -556,6 +557,27 @@ describe("download_file: files over 50 MB", () => {
 
     expect(result.isError).toBe(true);
     expect(textOf(result)).toContain("downloadPath");
+  });
+
+  it.each([
+    ["no Content-Length", undefined],
+    ["Content-Length: 1", 1],
+  ])("stops reading an inline body past 50 MB with %s", async (_label, contentLength) => {
+    const { stream, state } = oversizeBody();
+    const { call } = setup({
+      disposition: 'attachment; filename="Lecture 12.pdf"',
+      contentLength,
+      body: stream,
+    });
+
+    const result = await call({ courseId: COURSE, topicId: 7 });
+
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain("File too large");
+    expect(textOf(result)).toContain("downloadPath");
+    expect(state.cancelled).toBe(true);
+    expect(state.pulled).toBeLessThanOrEqual(CHUNKS_AT_CAP + 2);
+    expect(state.pulled).toBeLessThan(state.totalChunks);
   });
 });
 

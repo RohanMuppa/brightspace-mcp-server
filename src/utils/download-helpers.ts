@@ -5,7 +5,7 @@
  */
 
 import fs from "node:fs/promises";
-import { createWriteStream } from "node:fs";
+import { createWriteStream, constants as fsConstants } from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { Readable, Transform } from "node:stream";
@@ -136,7 +136,7 @@ export async function secureDownload(options: {
  * secureDownload for a response body that is streamed to disk rather than
  * held in memory, so a file's size is bounded by `maxBytes` instead of by
  * MAX_FILE_SIZE. The body is written to a hidden temporary file in targetDir,
- * type-checked there, and only then renamed to its final name; a refused or
+ * type-checked there, and only then published under its final name; a refused or
  * failed download leaves nothing behind.
  *
  * @throws DownloadError("tooLarge") once the body passes maxBytes
@@ -171,13 +171,72 @@ export async function secureStreamDownload(options: {
       createWriteStream(partialPath, { flags: "wx" })
     );
     const { mime } = await validateFileTypeOfFile(partialPath, undefined, safeFilename);
-    const resolvedFilename = await resolveFilenameConflict(targetDir, safeFilename);
-    const finalPath = path.join(targetDir, resolvedFilename);
-    await fs.rename(partialPath, finalPath);
+    const finalPath = await publishExclusively(partialPath, targetDir, safeFilename);
     log("INFO", `Downloaded file to ${finalPath} (${size} bytes, ${mime})`);
     return { path: finalPath, size, mime };
-  } catch (error) {
+  } finally {
     await fs.rm(partialPath, { force: true });
-    throw error;
   }
+}
+
+/**
+ * Give a finished temporary file its final name without ever replacing an
+ * existing file. resolveFilenameConflict only reports a name that was free a
+ * moment ago, and rename() overwrites, so two concurrent downloads of the same
+ * name could both pick it and the later rename silently replaced the earlier
+ * file. link() and COPYFILE_EXCL fail with EEXIST instead, and we try the next
+ * free name. The caller removes the temporary file.
+ */
+async function publishExclusively(
+  partialPath: string,
+  targetDir: string,
+  filename: string
+): Promise<string> {
+  for (let attempt = 0; attempt <= 100; attempt++) {
+    const finalPath = path.join(targetDir, await resolveFilenameConflict(targetDir, filename));
+    try {
+      try {
+        await fs.link(partialPath, finalPath);
+      } catch (error) {
+        // Some filesystems (FAT/exFAT drives, certain network shares) have no
+        // hard links; copy instead, still refusing to overwrite.
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code !== "EPERM" && code !== "ENOTSUP" && code !== "ENOSYS") throw error;
+        await fs.copyFile(partialPath, finalPath, fsConstants.COPYFILE_EXCL);
+      }
+      return finalPath;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    }
+  }
+  throw new Error("Could not resolve filename conflict after 100 attempts");
+}
+
+/**
+ * Read a response body into memory, refusing to hold more than `maxBytes`.
+ *
+ * response.arrayBuffer() buffers whatever the server sends, so a missing or
+ * understated Content-Length let an arbitrarily large body be allocated before
+ * any size check ran. This counts the bytes actually received and cancels the
+ * stream as soon as they pass the cap.
+ *
+ * @throws DownloadError("tooLarge") once the body passes maxBytes
+ */
+export async function readBodyCapped(response: Response, maxBytes: number): Promise<Buffer> {
+  if (!response.body) return Buffer.alloc(0);
+
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > maxBytes) {
+      await reader.cancel().catch(() => {});
+      throw new DownloadError("tooLarge", `File exceeds ${maxBytes} bytes`);
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks, size);
 }

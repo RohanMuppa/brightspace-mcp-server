@@ -23,6 +23,36 @@ export function isBrightspaceRelativeLink(url: string): boolean {
   return url.startsWith("/d2l/");
 }
 
+/**
+ * The path and query of a link into the user's own Brightspace, or null for
+ * anything else. A relative `/d2l/` link qualifies, and so does an absolute
+ * URL whose origin is exactly the configured Brightspace origin and whose
+ * path starts with `/d2l/`, so both take the same authenticated route. A URL
+ * on any other origin (a lookalike host, an http: downgrade, a different
+ * port, a protocol-relative `//host/...`, or one carrying userinfo) is never
+ * a Brightspace link: the session must not travel there.
+ */
+export function toBrightspacePath(url: string, origin?: string): string | null {
+  const trimmed = url.trim();
+  let expectedOrigin: string;
+  try {
+    expectedOrigin = new URL(origin ?? "https://brightspace.invalid").origin;
+  } catch {
+    return null;
+  }
+  const relative = isBrightspaceRelativeLink(trimmed);
+  if (!relative && (!origin || !/^https?:\/\//i.test(trimmed))) return null;
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed, expectedOrigin);
+  } catch {
+    return null;
+  }
+  if (parsed.origin !== expectedOrigin || parsed.username || parsed.password) return null;
+  if (!parsed.pathname.startsWith("/d2l/")) return null;
+  return `${parsed.pathname}${parsed.search}`;
+}
+
 function decodeEntities(value: string): string {
   return value
     .replace(/&#x([0-9a-f]+);/gi, (_, hex: string) => String.fromCodePoint(parseInt(hex, 16)))
@@ -79,7 +109,13 @@ function asVideoUrl(candidate: string, consumerKey: string | undefined): string 
   return namesVideo(withPartner.href) ? withPartner.href : null;
 }
 
-export function readLtiLaunchPage(html: string): LaunchPageFinding {
+/**
+ * Read an LTI launch page for the video it opens, or for the one Brightspace
+ * page it frames. Pass the Brightspace `origin` so an absolute link back into
+ * the same Brightspace counts as a page to follow; without it only relative
+ * `/d2l/` links do.
+ */
+export function readLtiLaunchPage(html: string, origin?: string): LaunchPageFinding {
   const inputs = tagAttributes(html, "input");
   const consumerKey = inputs.find(input => input.get("name") === "oauth_consumer_key")?.get("value");
   const candidates = [
@@ -92,6 +128,9 @@ export function readLtiLaunchPage(html: string): LaunchPageFinding {
     const videoUrl = asVideoUrl(candidate, consumerKey);
     if (videoUrl) return { videoUrl };
   }
-  const nextPath = candidates.find(isBrightspaceRelativeLink);
-  return nextPath ? { nextPath } : null;
+  for (const candidate of candidates) {
+    const nextPath = toBrightspacePath(candidate, origin);
+    if (nextPath) return { nextPath };
+  }
+  return null;
 }

@@ -1,9 +1,10 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { secureDownload, secureStreamDownload, resolveFilenameConflict } from "../../src/utils/download-helpers.js";
+import { secureDownload, secureStreamDownload, resolveFilenameConflict, readBodyCapped } from "../../src/utils/download-helpers.js";
 import { DownloadError } from "../../src/utils/download-errors.js";
+import { MAX_FILE_SIZE } from "../../src/utils/file-validator.js";
 
 /**
  * secureDownload is the only thing standing between a filename Brightspace
@@ -26,6 +27,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await fs.rm(root, { recursive: true, force: true });
 });
 
@@ -237,6 +239,36 @@ describe("secureStreamDownload", () => {
     expect(path.basename(result.path)).toBe("deck(1).pdf");
   });
 
+  it("keeps both files when two same-name downloads race", async () => {
+    // Hold both existence checks for deck.pdf until each download has made
+    // one, so both see the name as free before either publishes.
+    const realAccess = fs.access.bind(fs);
+    const target = path.join(targetDir, "deck.pdf");
+    let waiting = 0;
+    let release!: () => void;
+    const bothChecked = new Promise<void>((resolve) => (release = resolve));
+    vi.spyOn(fs, "access").mockImplementation(async (p, mode) => {
+      if (p === target && waiting < 2) {
+        if (++waiting === 2) release();
+        await bothChecked;
+      }
+      return realAccess(p, mode);
+    });
+
+    const first = Buffer.concat([Buffer.from("%PDF-1.4\n"), Buffer.alloc(512, 1)]);
+    const second = Buffer.concat([Buffer.from("%PDF-1.4\n"), Buffer.alloc(512, 2)]);
+    const results = await Promise.all([
+      secureStreamDownload({ targetDir, filename: "deck.pdf", body: streamOf(first), maxBytes: 1024 * 1024 }),
+      secureStreamDownload({ targetDir, filename: "deck.pdf", body: streamOf(second), maxBytes: 1024 * 1024 }),
+    ]);
+
+    expect(waiting).toBe(2);
+    expect(results[0].path).not.toBe(results[1].path);
+    expect(await fs.readFile(results[0].path)).toEqual(first);
+    expect(await fs.readFile(results[1].path)).toEqual(second);
+    expect((await fs.readdir(targetDir)).sort()).toEqual(["deck(1).pdf", "deck.pdf"]);
+  });
+
   it("still accepts a plain text file, which has no magic bytes", async () => {
     const result = await secureStreamDownload({
       targetDir,
@@ -257,5 +289,59 @@ describe("secureStreamDownload", () => {
     });
 
     await expect(attempt).rejects.toBeInstanceOf(DownloadError);
+  });
+});
+
+/**
+ * Regression coverage for issue #184. Plain text has no magic bytes, and the
+ * on-disk validator refused any such file over MAX_FILE_SIZE (50 MB) even
+ * though the disk download limit is 2 GB, so a large .txt, .csv or .json was
+ * streamed to disk and then deleted as undetectable.
+ */
+describe("secureStreamDownload: large plain text", () => {
+  it("accepts valid UTF-8 text larger than MAX_FILE_SIZE", async () => {
+    const line = Buffer.from("café, naïve, 日本語 — plain notes\n");
+    const chunk = Buffer.concat(Array(Math.ceil((1024 * 1024) / line.length)).fill(line));
+    const chunks: Buffer[] = Array(51).fill(chunk);
+
+    const result = await secureStreamDownload({
+      targetDir,
+      filename: "notes.txt",
+      body: streamOf(...chunks),
+      maxBytes: 2 * 1024 * 1024 * 1024,
+    });
+
+    expect(result.mime).toBe("text/plain");
+    expect(result.size).toBe(chunk.length * 51);
+    expect(result.size).toBeGreaterThan(MAX_FILE_SIZE);
+    expect((await fs.stat(result.path)).size).toBe(result.size);
+  }, 30_000);
+});
+
+describe("readBodyCapped", () => {
+  it("returns a body at or under the cap", async () => {
+    const buffer = await readBodyCapped(new Response(new Uint8Array([1, 2, 3])), 3);
+    expect([...buffer]).toEqual([1, 2, 3]);
+  });
+
+  it("cancels the stream and throws tooLarge once the body passes the cap", async () => {
+    let pulled = 0;
+    let cancelled = false;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulled += 1;
+        controller.enqueue(new Uint8Array(4));
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+
+    const error = await readBodyCapped(new Response(body), 10).catch((e) => e);
+
+    expect(error).toBeInstanceOf(DownloadError);
+    expect(error.kind).toBe("tooLarge");
+    expect(cancelled).toBe(true);
+    expect(pulled).toBeLessThanOrEqual(4);
   });
 });

@@ -15,21 +15,18 @@ import { checkTopicAvailability } from "./topic-availability.js";
 // go through; importing it here only made it look as though this file
 // validated anything itself. Inline mode never writes to disk, so it calls
 // validateFileType directly to enforce the same magic-byte allowlist.
-import { validateContentId, validateFileType, MAX_FILE_SIZE } from "../utils/file-validator.js";
-import { secureStreamDownload } from "../utils/download-helpers.js";
+import {
+  validateContentId,
+  validateFileType,
+  MAX_FILE_SIZE,
+  DISK_MAX_FILE_SIZE,
+} from "../utils/file-validator.js";
+import { secureStreamDownload, readBodyCapped } from "../utils/download-helpers.js";
 import { DownloadError } from "../utils/download-errors.js";
 import { extractPdfText } from "../utils/pdf-extractor.js";
 import { officeDocumentText } from "../utils/zip-extract.js";
 import fs from "node:fs/promises";
 import path from "node:path";
-
-/**
- * Maximum bytes of a file disk mode will save. Disk downloads stream straight
- * to the file, so memory no longer bounds them the way MAX_FILE_SIZE (50 MB)
- * bounds inline mode; this only stops a runaway body filling the disk.
- * Lecture decks and recordings routinely pass 50 MB.
- */
-const DISK_MAX_FILE_SIZE = 2 * 1024 * 1024 * 1024; // 2 GB
 
 /** The size cap for a download: inline mode buffers the file, disk mode streams it. */
 function maxFileSize(downloadPath: string | undefined): number {
@@ -37,13 +34,15 @@ function maxFileSize(downloadPath: string | undefined): number {
 }
 
 /** The refusal for a file over its mode's cap, pointing inline callers at disk mode. */
-function tooLargeResponse(bytes: number, downloadPath: string | undefined): CallToolResult {
+function tooLargeResponse(bytes: number | null, downloadPath: string | undefined): CallToolResult {
   const hint =
     downloadPath === undefined
       ? " Provide an absolute downloadPath to save it to disk instead."
       : "";
+  // null: the body was cut off at the cap, so its full size is unknown.
+  const size = bytes === null ? "over the limit" : `${Math.round(bytes / 1024 / 1024)}MB`;
   return errorResponse(
-    `File too large (${Math.round(bytes / 1024 / 1024)}MB). Maximum allowed: ${maxFileSize(downloadPath) / 1024 / 1024}MB.${hint}`
+    `File too large (${size}). Maximum allowed: ${maxFileSize(downloadPath) / 1024 / 1024}MB.${hint}`
   );
 }
 
@@ -242,10 +241,16 @@ async function finishDownload(
   }
 
   if (downloadPath === undefined) {
-    const buffer = Buffer.from(await response.arrayBuffer());
-    // Double-check actual size
-    if (buffer.length > MAX_FILE_SIZE) {
-      return tooLargeResponse(buffer.length, downloadPath);
+    // Content-Length can be missing or understated, so the read itself is
+    // capped and stops at the limit rather than buffering the whole body.
+    let buffer: Buffer;
+    try {
+      buffer = await readBodyCapped(response, MAX_FILE_SIZE);
+    } catch (error) {
+      if (error instanceof DownloadError && error.kind === "tooLarge") {
+        return tooLargeResponse(null, downloadPath);
+      }
+      throw error;
     }
     return respondInline(buffer, originalFilename, customFilename);
   }

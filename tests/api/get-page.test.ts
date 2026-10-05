@@ -66,4 +66,23 @@ describe("D2LApiClient.getPage", () => {
     expect(await client.getPage("/d2l/le/lti/101/toolLaunch/77")).toBeNull();
     expect(onAuthExpired).not.toHaveBeenCalled();
   });
+
+  it.each([
+    "@evil.example/d2l/home",
+    ".evil.example/d2l/home",
+    ":8443/d2l/home",
+    "//evil.example/d2l/home",
+    "/\\evil.example/d2l/home",
+    "https://evil.example/d2l/home",
+  ])("refuses %s without reading the cookie or sending a request", async path => {
+    const { client, fetchMock } = makeClient(browserToken());
+
+    expect(await client.getPage(path)).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("exposes the configured origin", () => {
+    const { client } = makeClient(browserToken());
+    expect(client.origin).toBe("https://purdue.brightspace.com");
+  });
 });
