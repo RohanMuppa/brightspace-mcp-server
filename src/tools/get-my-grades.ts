@@ -19,7 +19,7 @@ import {
 } from "./tool-helpers.js";
 import { log } from "../utils/logger.js";
 import { applyCourseFilter } from "../utils/course-filter.js";
-import { gradebookUrl } from "../utils/deep-links.js";
+import { gradebookUrl, quizUrl } from "../utils/deep-links.js";
 import type { AppConfig } from "../types/index.js";
 
 interface GradeValue {
@@ -34,6 +34,75 @@ interface GradeValue {
   PrivateComments: { Text: string; Html: string } | null;
   LastModified: string;
   ReleasedDate: string | null;
+}
+
+interface QuizListItem {
+  QuizId: number;
+  GradeItemId?: number | null;
+}
+
+/**
+ * The quiz a grade row is scored from can hold feedback the gradebook does
+ * not, and the student API cannot read it: quiz attempts are refused to
+ * students, and some quizzes only show feedback inside a restricted viewer.
+ */
+const QUIZ_FEEDBACK_NOTE =
+  "The gradebook has no comment for this item, but it is scored from a quiz, and quiz " +
+  "feedback lives on the quiz's own submissions page, which Brightspace does not expose " +
+  "to the student API. Feedback may exist there, sometimes viewable only in a restricted " +
+  "browser such as Respondus LockDown Browser. Open feedbackUrl to check; do not report " +
+  "this item as having no feedback.";
+
+/**
+ * The course's quizzes, or none when the route refuses or fails. A missing
+ * quiz list only costs the feedback links, never the grades themselves.
+ */
+async function fetchQuizzes(apiClient: D2LApiClient, courseId: number): Promise<QuizListItem[]> {
+  try {
+    const raw = await apiClient.get<{ Objects: QuizListItem[] } | QuizListItem[]>(
+      apiClient.le(courseId, "/quizzes/"),
+      { ttl: DEFAULT_CACHE_TTLS.assignments }
+    );
+    return Array.isArray(raw) ? raw : raw?.Objects ?? [];
+  } catch (error) {
+    log("DEBUG", `get_my_grades: quiz list unavailable for course ${courseId}`, error);
+    return [];
+  }
+}
+
+/**
+ * Clean grade rows. Rows scored from a quiz also carry feedbackUrl, and a
+ * feedbackNote when the gradebook comment is empty; other rows are unchanged.
+ */
+function toGradeItems(
+  gradeValues: GradeValue[],
+  quizzes: QuizListItem[],
+  baseUrl: string,
+  courseId: number
+) {
+  const quizByGradeItem = new Map(
+    quizzes
+      .filter((q) => q.GradeItemId != null)
+      .map((q) => [String(q.GradeItemId), q.QuizId])
+  );
+  return gradeValues.map((gv) => {
+    const comments = gv.Comments?.Text || null;
+    const quizId = quizByGradeItem.get(String(gv.GradeObjectIdentifier));
+    return {
+      name: gv.GradeObjectName,
+      displayGrade: gv.DisplayedGrade,
+      pointsNumerator: gv.PointsNumerator,
+      pointsDenominator: gv.PointsDenominator,
+      weightedNumerator: gv.WeightedNumerator,
+      weightedDenominator: gv.WeightedDenominator,
+      comments,
+      lastModified: gv.LastModified,
+      ...(quizId === undefined ? {} : {
+        feedbackUrl: quizUrl(baseUrl, courseId, quizId),
+        ...(comments ? {} : { feedbackNote: QUIZ_FEEDBACK_NOTE }),
+      }),
+    };
+  });
 }
 
 interface EnrollmentItem {
@@ -78,6 +147,7 @@ export function registerGetMyGrades(
         // Single course case
         if (courseId) {
           const path = apiClient.le(courseId, "/grades/values/myGradeValues/");
+          const quizzesPromise = fetchQuizzes(apiClient, courseId);
           let gradeValues: GradeValue[];
           try {
             gradeValues = await apiClient.get<GradeValue[]>(path, {
@@ -120,16 +190,7 @@ export function registerGetMyGrades(
           }
 
           // Map to clean objects
-          const grades = gradeValues.map((gv) => ({
-            name: gv.GradeObjectName,
-            displayGrade: gv.DisplayedGrade,
-            pointsNumerator: gv.PointsNumerator,
-            pointsDenominator: gv.PointsDenominator,
-            weightedNumerator: gv.WeightedNumerator,
-            weightedDenominator: gv.WeightedDenominator,
-            comments: gv.Comments?.Text || null,
-            lastModified: gv.LastModified,
-          }));
+          const grades = toGradeItems(gradeValues, await quizzesPromise, config.baseUrl, courseId);
 
           log("INFO", `get_my_grades: Retrieved ${grades.length} grade items for course ${courseId}`);
           return toolResponse({ courseId, grades });
@@ -173,20 +234,12 @@ export function registerGetMyGrades(
               item.OrgUnit.Id,
               "/grades/values/myGradeValues/"
             );
-            const gradeValues = await apiClient.get<GradeValue[]>(path, {
-              ttl: DEFAULT_CACHE_TTLS.grades,
-            });
+            const [gradeValues, quizzes] = await Promise.all([
+              apiClient.get<GradeValue[]>(path, { ttl: DEFAULT_CACHE_TTLS.grades }),
+              fetchQuizzes(apiClient, item.OrgUnit.Id),
+            ]);
 
-            const grades = gradeValues.map((gv) => ({
-              name: gv.GradeObjectName,
-              displayGrade: gv.DisplayedGrade,
-              pointsNumerator: gv.PointsNumerator,
-              pointsDenominator: gv.PointsDenominator,
-              weightedNumerator: gv.WeightedNumerator,
-              weightedDenominator: gv.WeightedDenominator,
-              comments: gv.Comments?.Text || null,
-              lastModified: gv.LastModified,
-            }));
+            const grades = toGradeItems(gradeValues, quizzes, config.baseUrl, item.OrgUnit.Id);
 
             return {
               restricted: false as const,

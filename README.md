@@ -65,7 +65,7 @@ School-specific quirks: [docs/sign-in.md](docs/sign-in.md#per-school-notes).
 
 | About | Try |
 |-------|-----|
-| Grades | "Am I passing all my classes?" · "Compare my grades across courses" |
+| Grades | "Am I passing all my classes?" · "Compare my grades across courses" · "Is there feedback on my midterm?" (quiz-scored grades link to the quiz, since quiz feedback, including feedback only viewable in LockDown Browser, isn't readable through the API) |
 | Due dates | "What's due in the next 48 hours?" · "Build me a study schedule for the week" |
 | Assignments and rubrics | "What does the lab 4 spec actually ask for?" · "Why did I lose points on the analysis criterion?" |
 | Quizzes and exams | "Which quizzes close this week?" · "Is there a midterm in the gradebook that isn't on my assignments list?" |
