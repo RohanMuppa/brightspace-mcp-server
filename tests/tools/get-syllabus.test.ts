@@ -170,6 +170,37 @@ describe("get_syllabus external LTI syllabus sources", () => {
     ]);
   });
 
+  it("strips D2L session params from a content-topic source URL but keeps its routing params (#187)", async () => {
+    const call = setup({
+      overview: EMPTY_OVERVIEW,
+      toc: tocWith([
+        {
+          TopicId: 9,
+          Title: "Course Syllabus",
+          TypeIdentifier: "Link",
+          Url:
+            "/d2l/common/dialogs/quickLink/quickLink.d2l?ou=101&type=lti&rcode=fixture" +
+            "&d2lSessionVal=TEST_SESSION&d2lSecureSessionVal=TEST_SECURE",
+        },
+      ]),
+      ltiLinks: [],
+    });
+
+    const result = await call();
+    const serialized = JSON.stringify(result);
+
+    expect(serialized).not.toContain("TEST_SESSION");
+    expect(serialized).not.toContain("TEST_SECURE");
+    expect(serialized).not.toMatch(/d2lSessionVal|d2lSecureSessionVal/i);
+    expect(result.externalSyllabusSources).toEqual([
+      {
+        title: "Course Syllabus",
+        location: "content",
+        url: "/d2l/common/dialogs/quickLink/quickLink.d2l?ou=101&type=lti&rcode=fixture",
+      },
+    ]);
+  });
+
   it("ignores syllabus-titled content that is not an LTI launch", async () => {
     const call = setup({
       overview: EMPTY_OVERVIEW,
@@ -218,5 +249,112 @@ describe("get_syllabus external LTI syllabus sources", () => {
     const result = await call();
 
     expect(result.description).toContain("Welcome");
+  });
+});
+
+describe("get_syllabus external discovery outcome (#188)", () => {
+  const networkError = () => new TypeError("fetch failed");
+
+  it("adds no discovery notice when both lookups succeed with nothing found", async () => {
+    const call = setup({ overview: EMPTY_OVERVIEW, toc: { Modules: [] }, ltiLinks: [] });
+
+    const result = await call();
+
+    expect(result.externalSyllabusSources).toBeUndefined();
+    expect(result.externalSyllabusNote).toBeUndefined();
+    expect(result.externalSyllabusDiscovery).toBeUndefined();
+  });
+
+  it("keeps the plain 404 message when discovery succeeded empty", async () => {
+    const call = setup({ overview: undefined, toc: { Modules: [] }, ltiLinks: [] });
+
+    const result = await call();
+
+    expect(result.message).toBe("No syllabus/overview found for this course.");
+    expect(result.externalSyllabusDiscovery).toBeUndefined();
+  });
+
+  it("reports both lookups as permission-denied when they return 403", async () => {
+    const call = setup({
+      overview: EMPTY_OVERVIEW,
+      toc: new ApiError(403, "/content/toc", "Forbidden: secret body"),
+      ltiLinks: new ApiError(403, "/lti/link/101/", "Forbidden: secret body"),
+    });
+
+    const result = await call();
+
+    expect(result.description).toBeNull();
+    expect(result.externalSyllabusSources).toBeUndefined();
+    expect(result.externalSyllabusDiscovery).toMatchObject({
+      complete: false,
+      unavailable: [
+        { lookup: "lti-links", reason: "permission-denied", status: 403 },
+        { lookup: "content-toc", reason: "permission-denied", status: 403 },
+      ],
+    });
+    expect(result.externalSyllabusDiscovery.note).toMatch(/permission denied/);
+    expect(JSON.stringify(result)).not.toContain("secret body");
+  });
+
+  it("reports transport failures distinctly from permission failures", async () => {
+    const call = setup({ overview: EMPTY_OVERVIEW, toc: networkError(), ltiLinks: networkError() });
+
+    const result = await call();
+
+    expect(result.externalSyllabusDiscovery.unavailable).toEqual([
+      { lookup: "lti-links", reason: "request-failed" },
+      { lookup: "content-toc", reason: "request-failed" },
+    ]);
+    expect(result.externalSyllabusDiscovery.note).toMatch(/network error/);
+    expect(JSON.stringify(result)).not.toContain("fetch failed");
+  });
+
+  it("does not claim the course has no syllabus when the overview 404s and discovery failed", async () => {
+    const call = setup({
+      overview: undefined,
+      toc: new ApiError(403, "/content/toc", "Forbidden"),
+      ltiLinks: networkError(),
+    });
+
+    const result = await call();
+
+    expect(result.message).not.toBe("No syllabus/overview found for this course.");
+    expect(result.message).toMatch(/incomplete/);
+    expect(result.externalSyllabusDiscovery.unavailable).toEqual([
+      { lookup: "lti-links", reason: "request-failed" },
+      { lookup: "content-toc", reason: "permission-denied", status: 403 },
+    ]);
+  });
+
+  it("reports partial discovery: sources from the lookup that worked, notice for the one that failed", async () => {
+    const call = setup({
+      overview: EMPTY_OVERVIEW,
+      toc: networkError(),
+      ltiLinks: [{ LtiLinkId: 7, Title: "Simple Syllabus", Url: "https://s.example/lti", IsVisible: true }],
+    });
+
+    const result = await call();
+
+    expect(result.externalSyllabusSources).toHaveLength(1);
+    expect(result.externalSyllabusNote).toMatch(/LTI/);
+    expect(result.externalSyllabusDiscovery).toMatchObject({
+      complete: false,
+      unavailable: [{ lookup: "content-toc", reason: "request-failed" }],
+    });
+  });
+
+  it("reports partial discovery with nothing found when one lookup succeeds empty and the other is forbidden", async () => {
+    const call = setup({
+      overview: EMPTY_OVERVIEW,
+      toc: { Modules: [] },
+      ltiLinks: new ApiError(403, "/lti/link/101/", "Forbidden"),
+    });
+
+    const result = await call();
+
+    expect(result.externalSyllabusSources).toBeUndefined();
+    expect(result.externalSyllabusDiscovery.unavailable).toEqual([
+      { lookup: "lti-links", reason: "permission-denied", status: 403 },
+    ]);
   });
 });

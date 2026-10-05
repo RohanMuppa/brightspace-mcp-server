@@ -239,6 +239,11 @@ export class D2LApiClient {
     await this.ensureVersions();
   }
 
+  /** The configured Brightspace origin (scheme, host and port), e.g. `https://purdue.brightspace.com`. */
+  get origin(): string {
+    return new URL(this.baseUrl).origin;
+  }
+
   /**
    * Get discovered API versions.
    * @throws Error if no request has discovered them yet
@@ -344,6 +349,13 @@ export class D2LApiClient {
    * read by a read-only tool is not worth an MFA prompt.
    */
   async getPage(path: string): Promise<string | null> {
+    // The cookie belongs to this Brightspace alone. A path that would make
+    // `${baseUrl}${path}` name another host (`@evil.example/`, `.evil.example/`,
+    // `//evil.example/`) is refused before the cookie is ever read.
+    if (!this.isSameOriginPath(path)) {
+      log("WARN", "getPage refused a path outside the Brightspace origin");
+      return null;
+    }
     const token = await this.tokenManager.getToken();
     if (!token?.cookieHeader) return null;
     const cookieToken: TokenData = { ...token, accessToken: `cookie:${token.cookieHeader}` };
@@ -353,6 +365,17 @@ export class D2LApiClient {
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) return null;
       throw error;
+    }
+  }
+
+  /** True when `path` is a root-relative path that keeps a request on the configured origin. */
+  private isSameOriginPath(path: string): boolean {
+    if (!path.startsWith("/") || path.startsWith("//") || path.includes("\\")) return false;
+    try {
+      const target = new URL(`${this.baseUrl}${path}`);
+      return target.origin === this.origin && !target.username && !target.password;
+    } catch {
+      return false;
     }
   }
 

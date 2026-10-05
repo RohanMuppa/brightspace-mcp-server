@@ -1,6 +1,10 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import {
   validateFileType,
+  validateFileTypeOfFile,
   validateDownloadPath,
   validateBaseUrl,
 } from "../../src/utils/file-validator.js";
@@ -261,5 +265,64 @@ describe("validateDownloadPath", () => {
     // sanitize-filename strips the separators, so this lands on either guard;
     // what matters is that it is typed and never escapes as a plain Error.
     if (error !== null) expect(error).toBeInstanceOf(DownloadError);
+  });
+});
+
+/**
+ * Regression coverage for issue #184: a file on disk with no magic bytes is
+ * checked a chunk at a time, so the checks must still see every chunk, not
+ * just the first one the read stream hands over.
+ */
+describe("validateFileTypeOfFile: text fallback", () => {
+  let dir: string;
+  beforeEach(async () => {
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), "file-validator-"));
+  });
+  afterEach(async () => {
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  /** Well past one read-stream chunk (64 KiB) of plain ASCII text. */
+  const filler = () => Buffer.alloc(1024 * 1024, "a");
+
+  async function write(name: string, ...parts: Buffer[]): Promise<string> {
+    const file = path.join(dir, name);
+    await fs.writeFile(file, Buffer.concat(parts));
+    return file;
+  }
+
+  it("accepts UTF-8 text with multi-byte characters across chunk boundaries", async () => {
+    const text = Buffer.from("é日本😀".repeat(100_000));
+    const file = await write("notes.txt", text);
+    await expect(validateFileTypeOfFile(file)).resolves.toEqual({ mime: "text/plain", ext: "txt" });
+  });
+
+  it("rejects invalid UTF-8 beyond the first chunk", async () => {
+    const file = await write("notes.txt", filler(), Buffer.from([0xc3, 0x28]), filler());
+    await expect(validateFileTypeOfFile(file)).rejects.toMatchObject({ kind: "undetectableType" });
+  });
+
+  it("rejects a truncated multi-byte character at end of file", async () => {
+    const file = await write("notes.txt", filler(), Buffer.from([0xe6, 0x97]));
+    await expect(validateFileTypeOfFile(file)).rejects.toMatchObject({ kind: "undetectableType" });
+  });
+
+  it("rejects a NUL byte beyond the first chunk", async () => {
+    const file = await write("notes.txt", filler(), Buffer.from([0]), filler());
+    await expect(validateFileTypeOfFile(file)).rejects.toMatchObject({ kind: "undetectableType" });
+  });
+
+  it("still sniffs HTML and SVG from the leading text", async () => {
+    const html = await write("page.html", Buffer.from("\uFEFF  \n<!DOCTYPE html><p>"), filler());
+    await expect(validateFileTypeOfFile(html)).resolves.toEqual({ mime: "text/html", ext: "html" });
+    const svg = await write("icon.svg", Buffer.from("<svg xmlns='http://www.w3.org/2000/svg'/>"));
+    await expect(validateFileTypeOfFile(svg)).resolves.toEqual({ mime: "image/svg+xml", ext: "svg" });
+  });
+
+  it("refuses text when text/plain is not allowed", async () => {
+    const file = await write("notes.txt", Buffer.from("hello"));
+    await expect(validateFileTypeOfFile(file, ["application/pdf"])).rejects.toMatchObject({
+      kind: "undetectableType",
+    });
   });
 });

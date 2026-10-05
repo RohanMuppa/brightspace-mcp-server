@@ -4,6 +4,7 @@
  * Licensed under MIT — see LICENSE file for details.
  */
 
+import { createReadStream } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import sanitizeFilename from "sanitize-filename";
@@ -63,6 +64,15 @@ const XML_EXTENSION_MIMES: Record<string, string> = {
  * Prevents memory exhaustion from malicious large file requests.
  */
 export const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50 MB
+
+/**
+ * Maximum bytes of a file a disk-mode download will save. Disk downloads
+ * stream straight to the file, so memory no longer bounds them the way
+ * MAX_FILE_SIZE bounds buffered downloads; this only stops a runaway body
+ * filling the disk. Lecture decks, recordings and submitted decks routinely
+ * pass 50 MB.
+ */
+export const DISK_MAX_FILE_SIZE = 2 * 1024 * 1024 * 1024; // 2 GB
 
 /**
  * Allowlist of MIME types safe for download.
@@ -180,8 +190,9 @@ export async function validateFileType(
 /**
  * validateFileType for a file already on disk, so a download streamed there
  * is never read back into memory whole. Magic bytes are read from the file
- * itself; only a file with none, the text fallback's case, is read in, and
- * only when it is within MAX_FILE_SIZE.
+ * itself; a file with none, the text fallback's case, is streamed through the
+ * same UTF-8 and NUL checks a chunk at a time, so plain text, CSV and JSON
+ * are held to the disk download limit rather than to MAX_FILE_SIZE.
  */
 export async function validateFileTypeOfFile(
   filePath: string,
@@ -197,13 +208,7 @@ export async function validateFileTypeOfFile(
   const detected = await fileTypeFromFile(filePath);
 
   if (detected) return allowDetectedType(detected, allowedTypes, filename);
-  if (size > MAX_FILE_SIZE) {
-    throw new DownloadError(
-      "undetectableType",
-      "Could not determine file type or type not allowed"
-    );
-  }
-  return allowTextType(await fs.readFile(filePath), allowedTypes);
+  return allowTextTypeOfFile(filePath, allowedTypes);
 }
 
 /** The allowlist decision for a type file-type recognised from magic bytes. */
@@ -259,30 +264,75 @@ function allowTextType(
       // Invalid UTF-8 — treat as binary.
     }
 
-    if (decoded !== null) {
-      const noBom =
-        decoded.charCodeAt(0) === 0xfeff ? decoded.slice(1) : decoded;
-      const head = noBom.trimStart().toLowerCase();
-      let mime = "text/plain";
-      let ext = "txt";
-      if (head.startsWith("<!doctype html") || head.startsWith("<html")) {
-        mime = "text/html";
-        ext = "html";
-      } else if (head.startsWith("<svg") || head.startsWith("<!doctype svg")) {
-        // An SVG without the XML prolog reaches the fallback instead of being
-        // detected. Naming it text/plain told the caller the wrong type for a
-        // file the allowlist has an entry for.
-        mime = "image/svg+xml";
-        ext = "svg";
-      }
-
-      if (allowedTypes.includes(mime)) {
-        return { mime, ext };
-      }
-    }
+    if (decoded !== null) return allowTextHead(decoded, allowedTypes);
   }
 
-  throw new DownloadError(
+  throw undetectableText();
+}
+
+/**
+ * allowTextType for a file on disk, read a chunk at a time so memory stays
+ * bounded however large the file is. The decoder runs in streaming mode, so a
+ * multi-byte character split across chunks is still decoded, and only enough
+ * of the leading text to sniff HTML and SVG is kept.
+ */
+async function allowTextTypeOfFile(
+  filePath: string,
+  allowedTypes: string[]
+): Promise<{ mime: string; ext: string }> {
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  let head = "";
+  try {
+    for await (const chunk of createReadStream(filePath)) {
+      const bytes = chunk as Buffer;
+      if (bytes.includes(0)) throw undetectableText();
+      const text = decoder.decode(bytes, { stream: true });
+      if (head.length < TEXT_HEAD_CHARS) {
+        // Leading whitespace is dropped by the sniff anyway; trimming it here
+        // keeps a file of nothing but whitespace from growing `head` unbounded.
+        head = (head + text.slice(0, TEXT_HEAD_CHARS)).trimStart();
+      }
+    }
+    head += decoder.decode();
+  } catch (error) {
+    if (error instanceof DownloadError) throw error;
+    if (error instanceof TypeError) throw undetectableText(); // Invalid UTF-8.
+    throw error;
+  }
+  return allowTextHead(head, allowedTypes);
+}
+
+/** Enough leading characters to recognise every prefix allowTextHead tests. */
+const TEXT_HEAD_CHARS = 64;
+
+/** Name decoded text by its leading characters and apply the allowlist. */
+function allowTextHead(
+  decoded: string,
+  allowedTypes: string[]
+): { mime: string; ext: string } {
+  const noBom = decoded.charCodeAt(0) === 0xfeff ? decoded.slice(1) : decoded;
+  const head = noBom.trimStart().toLowerCase();
+  let mime = "text/plain";
+  let ext = "txt";
+  if (head.startsWith("<!doctype html") || head.startsWith("<html")) {
+    mime = "text/html";
+    ext = "html";
+  } else if (head.startsWith("<svg") || head.startsWith("<!doctype svg")) {
+    // An SVG without the XML prolog reaches the fallback instead of being
+    // detected. Naming it text/plain told the caller the wrong type for a
+    // file the allowlist has an entry for.
+    mime = "image/svg+xml";
+    ext = "svg";
+  }
+
+  if (allowedTypes.includes(mime)) {
+    return { mime, ext };
+  }
+  throw undetectableText();
+}
+
+function undetectableText(): DownloadError {
+  return new DownloadError(
     "undetectableType",
     "Could not determine file type or type not allowed"
   );

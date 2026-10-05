@@ -7,17 +7,19 @@
 // Adapted from @el2060's fork (el2060/brightspace-mcp-server, MIT) —
 // permission handling rewritten to this project's ApiError/sanitizeError
 // conventions, and the download itself routed through this project's
-// secureDownload/MAX_FILE_SIZE (magic-byte file-type validation, path
-// containment, filename conflict resolution) instead of writing the buffer
-// directly as the fork did.
+// secureStreamDownload/DISK_MAX_FILE_SIZE (magic-byte file-type validation,
+// path containment, filename conflict resolution, streamed to disk like
+// download_file's disk mode) instead of writing the buffer directly as the
+// fork did.
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { D2LApiClient, ApiError } from "../api/index.js";
 import { DownloadDropboxSubmissionFileSchema } from "./schemas.js";
 import { toolResponse, sanitizeError, errorResponse } from "./tool-helpers.js";
 import { log } from "../utils/logger.js";
-import { validateContentId, MAX_FILE_SIZE } from "../utils/file-validator.js";
-import { secureDownload } from "../utils/download-helpers.js";
+import { validateContentId, DISK_MAX_FILE_SIZE } from "../utils/file-validator.js";
+import { secureStreamDownload } from "../utils/download-helpers.js";
+import { DownloadError } from "../utils/download-errors.js";
 import path from "node:path";
 import fs from "node:fs/promises";
 
@@ -30,6 +32,14 @@ interface D2LSubmissionFile {
 interface D2LSubmission {
   Id: number;
   Files: D2LSubmissionFile[];
+}
+
+/** The refusal for a file over the disk download cap. */
+function tooLargeResponse(bytes: number) {
+  return errorResponse(
+    `File too large (${Math.round(bytes / 1024 / 1024)}MB). ` +
+      `Maximum allowed: ${DISK_MAX_FILE_SIZE / 1024 / 1024}MB`
+  );
 }
 
 /**
@@ -122,11 +132,8 @@ export function registerDownloadDropboxSubmissionFile(
         }
 
         // Check the size Brightspace reported before downloading anything.
-        if (targetFile.Size > MAX_FILE_SIZE) {
-          return errorResponse(
-            `File too large (${Math.round(targetFile.Size / 1024 / 1024)}MB). ` +
-              `Maximum allowed: ${MAX_FILE_SIZE / 1024 / 1024}MB`
-          );
+        if (targetFile.Size > DISK_MAX_FILE_SIZE) {
+          return tooLargeResponse(targetFile.Size);
         }
 
         const downloadApiPath = apiClient.le(
@@ -149,35 +156,29 @@ export function registerDownloadDropboxSubmissionFile(
           throw error;
         }
 
-        // Check Content-Length before downloading the body (prevent memory exhaustion).
+        // Check Content-Length before reading the body.
         const contentLength = parseInt(response.headers.get("Content-Length") ?? "0", 10);
-        if (contentLength > MAX_FILE_SIZE) {
-          return errorResponse(
-            `File too large (${Math.round(contentLength / 1024 / 1024)}MB). ` +
-              `Maximum allowed: ${MAX_FILE_SIZE / 1024 / 1024}MB`
-          );
+        if (contentLength > DISK_MAX_FILE_SIZE) {
+          return tooLargeResponse(contentLength);
         }
 
-        const buffer = Buffer.from(await response.arrayBuffer());
-
-        // Double-check the actual size once downloaded.
-        if (buffer.length > MAX_FILE_SIZE) {
-          return errorResponse(
-            `File too large (${Math.round(buffer.length / 1024 / 1024)}MB). ` +
-              `Maximum allowed: ${MAX_FILE_SIZE / 1024 / 1024}MB`
-          );
+        if (!response.body) {
+          throw new DownloadError("undetectableType", "File is empty (0 bytes)");
         }
 
         const originalFilename = targetFile.FileName;
         const effectiveFilename = customFilename || originalFilename;
 
-        // secureDownload applies this project's path-containment and
-        // magic-byte file-type checks and resolves filename conflicts,
-        // rather than writing the fetched buffer straight to disk.
-        const result = await secureDownload({
+        // secureStreamDownload streams the body to a temporary file in the
+        // target directory, applies this project's path-containment and
+        // magic-byte file-type checks there, enforces the disk size cap on the
+        // bytes actually received, and resolves filename conflicts; a refused
+        // or failed download leaves nothing behind.
+        const result = await secureStreamDownload({
           targetDir: downloadPath,
           filename: effectiveFilename,
-          data: buffer,
+          body: response.body,
+          maxBytes: DISK_MAX_FILE_SIZE,
         });
 
         log(

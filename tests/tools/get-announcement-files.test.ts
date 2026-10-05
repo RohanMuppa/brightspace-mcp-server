@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { registerGetAnnouncementFiles } from "../../src/tools/get-announcement-files.js";
+import { oversizeBody, CHUNKS_AT_CAP } from "./oversize-body.js";
 
 /**
  * Instructors attach handouts to announcements, not only to content or
@@ -54,7 +55,13 @@ function minimalPdf(text: string): Buffer {
   return Buffer.from(pdf, "latin1");
 }
 
-function setup({ newsItems, file = Buffer.alloc(0) }: { newsItems: unknown; file?: Buffer }) {
+function setup({
+  newsItems,
+  file = Buffer.alloc(0),
+}: {
+  newsItems: unknown;
+  file?: Buffer | ReadableStream<Uint8Array>;
+}) {
   const rawRequested: string[] = [];
 
   const apiClient = {
@@ -62,13 +69,8 @@ function setup({ newsItems, file = Buffer.alloc(0) }: { newsItems: unknown; file
     get: vi.fn(async () => newsItems),
     getRaw: vi.fn(async (p: string) => {
       rawRequested.push(p);
-      return {
-        ok: true,
-        status: 200,
-        headers: new Headers(),
-        arrayBuffer: async () =>
-          file.buffer.slice(file.byteOffset, file.byteOffset + file.byteLength),
-      };
+      if (file instanceof ReadableStream) return new Response(file, { status: 200 });
+      return new Response(new Uint8Array(file), { status: 200 });
     }),
   };
 
@@ -167,6 +169,34 @@ describe("get_announcement_files reading one file", () => {
 
     expect(payload.file).toMatchObject({ fileId: 77, fileName: "map.png", kind: "image", text: null });
     expect(payload.file.note).toMatch(/download_file/);
+  });
+
+  it("stops reading an attachment whose body runs past the extraction limit", async () => {
+    // The listed Size understates the file and there is no Content-Length.
+    const { stream, state } = oversizeBody();
+    const { call } = setup({
+      newsItems: [news(1, "Field notes", [attachment(77, "prompts.pdf", 1)])],
+      file: stream,
+    });
+
+    const payload = parse(await call({ courseId: COURSE, newsId: 1, fileId: 77 }));
+
+    expect(payload.file).toMatchObject({ fileId: 77, text: null });
+    expect(payload.file.note).toMatch(/extraction limit.*downloadPath/);
+    expect(state.cancelled).toBe(true);
+    expect(state.pulled).toBeLessThanOrEqual(CHUNKS_AT_CAP + 2);
+    expect(state.pulled).toBeLessThan(state.totalChunks);
+  });
+
+  it("refuses an attachment listed over the extraction limit without fetching it", async () => {
+    const { call, rawRequested } = setup({
+      newsItems: [news(1, "Field notes", [attachment(77, "huge.pdf", 3 * 1024 * 1024 * 1024)])],
+    });
+
+    const payload = parse(await call({ courseId: COURSE, newsId: 1, fileId: 77 }));
+
+    expect(payload.file.note).toMatch(/extraction limit/);
+    expect(rawRequested).toEqual([]);
   });
 
   it("names the available files when the fileId is wrong", async () => {

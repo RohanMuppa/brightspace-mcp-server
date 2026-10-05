@@ -15,12 +15,13 @@ import {
   extractYouTubeVideoId,
   type VideoPlatform,
 } from "../utils/transcript/platform.js";
-import { isBrightspaceRelativeLink, readLtiLaunchPage } from "../utils/transcript/lti.js";
+import { readLtiLaunchPage, toBrightspacePath } from "../utils/transcript/lti.js";
 import { getKalturaTranscript } from "../utils/transcript/kaltura.js";
 import { getYouTubeTranscript } from "../utils/transcript/youtube.js";
 import { NoTranscriptError, TranscriptFetchError } from "../utils/transcript/errors.js";
 import type { FetchLike, TranscriptResult } from "../utils/transcript/types.js";
 import { log } from "../utils/logger.js";
+import { stripD2lSessionParams } from "../utils/session-params.js";
 
 interface ContentTopic {
   Id: number;
@@ -63,7 +64,7 @@ async function followLtiLaunch(apiClient: D2LApiClient, path: string): Promise<s
   for (let page = 0; page < MAX_LTI_PAGES; page++) {
     const html = await apiClient.getPage(next);
     if (html === null) return null;
-    const finding = readLtiLaunchPage(html);
+    const finding = readLtiLaunchPage(html, apiClient.origin);
     if (!finding) return null;
     if ("videoUrl" in finding) return finding.videoUrl;
     next = finding.nextPath;
@@ -81,7 +82,7 @@ async function fetchTranscript(
       const ids = extractKalturaIds(videoUrl);
       if (!ids) {
         return {
-          failed: `Could not find a Kaltura entry ID and partner ID in this URL: ${videoUrl}`,
+          failed: `Could not find a Kaltura entry ID and partner ID in this URL: ${stripD2lSessionParams(videoUrl)}`,
         };
       }
       try {
@@ -101,7 +102,7 @@ async function fetchTranscript(
     case "youtube": {
       const videoId = extractYouTubeVideoId(videoUrl);
       if (!videoId) {
-        return { failed: `Could not find a YouTube video ID in this URL: ${videoUrl}` };
+        return { failed: `Could not find a YouTube video ID in this URL: ${stripD2lSessionParams(videoUrl)}` };
       }
       try {
         return { result: await getYouTubeTranscript(videoId, fetchImpl) };
@@ -123,7 +124,7 @@ async function fetchTranscript(
     default:
       return {
         unsupported:
-          `Could not identify a supported video platform for this URL: ${videoUrl}. ` +
+          `Could not identify a supported video platform for this URL: ${stripD2lSessionParams(videoUrl)}. ` +
           "Open the video in Brightspace directly.",
       };
   }
@@ -171,17 +172,23 @@ export function registerGetVideoTranscript(
           );
         }
 
-        if (isBrightspaceRelativeLink(resolvedUrl)) {
-          const launchedUrl = await followLtiLaunch(apiClient, resolvedUrl);
+        // A relative /d2l/ link, or an absolute one on this Brightspace's own
+        // origin, is requested as the user; any other origin never sees the session.
+        const brightspacePath = toBrightspacePath(resolvedUrl, apiClient.origin);
+        if (brightspacePath !== null) {
+          const launchedUrl = await followLtiLaunch(apiClient, brightspacePath);
           if (!launchedUrl) {
+            // resolvedUrl (with any session params) was only for the
+            // authenticated getPage above; public output gets the clean form.
+            const publicUrl = stripD2lSessionParams(resolvedUrl);
             return toolResponse({
               courseId,
               topicId,
-              videoUrl: resolvedUrl,
+              videoUrl: publicUrl,
               platform: "unknown",
               hasTranscript: false,
               message:
-                `This is a Brightspace LTI link (${resolvedUrl}), and its launch did not reveal which video it opens. ` +
+                `This is a Brightspace LTI link (${publicUrl}), and its launch did not reveal which video it opens. ` +
                 "Some tools only hand over the video after a browser sign-in to the tool itself, which this server " +
                 "can't do. The video platform itself may still be supported. Open it in Brightspace directly.",
             });
@@ -191,12 +198,13 @@ export function registerGetVideoTranscript(
 
         const platform = detectVideoPlatform(resolvedUrl);
         const outcome = await fetchTranscript(platform, resolvedUrl, fetchImpl);
+        const publicUrl = stripD2lSessionParams(resolvedUrl);
 
         if ("unsupported" in outcome) {
           return toolResponse({
             courseId,
             topicId,
-            videoUrl: resolvedUrl,
+            videoUrl: publicUrl,
             platform,
             hasTranscript: false,
             message: outcome.unsupported,
@@ -206,7 +214,7 @@ export function registerGetVideoTranscript(
           return toolResponse({
             courseId,
             topicId,
-            videoUrl: resolvedUrl,
+            videoUrl: publicUrl,
             platform,
             hasTranscript: false,
             message: outcome.noTranscript,
@@ -222,13 +230,13 @@ export function registerGetVideoTranscript(
 
         log(
           "INFO",
-          `get_video_transcript: ${platform} transcript for ${resolvedUrl} (${result.cues.length} cues, ${totalChars} chars)`
+          `get_video_transcript: ${platform} transcript for ${publicUrl} (${result.cues.length} cues, ${totalChars} chars)`
         );
 
         return toolResponse({
           courseId,
           topicId,
-          videoUrl: resolvedUrl,
+          videoUrl: publicUrl,
           platform,
           hasTranscript: true,
           title: result.title,

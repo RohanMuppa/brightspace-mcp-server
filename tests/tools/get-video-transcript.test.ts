@@ -39,6 +39,7 @@ function kalturaFetch(overrides: Partial<{ captionAssets: unknown[]; captionText
 
 function setup(fetchImpl: FetchLike, topicUrl: string | null = KALTURA_URL) {
   const apiClient = {
+    origin: "https://purdue.brightspace.com",
     le: (orgUnitId: number, p: string) => `/d2l/api/le/1.0/${orgUnitId}${p}`,
     get: vi.fn(async () => ({ Id: 55, Title: "Lecture 7 recording", Url: topicUrl })),
   };
@@ -196,6 +197,26 @@ describe("get_video_transcript — Brightspace LTI quickLinks", () => {
     expect(body.message).toMatch(/LTI link/);
   });
 
+  it("strips D2L session params from the unresolved LTI link's videoUrl and message, but fetches the raw URL (#187)", async () => {
+    const sessionLink =
+      "/d2l/common/dialogs/quickLink/quickLink.d2l?ou=101&type=lti&rcode=fixture" +
+      "&d2lSessionVal=TEST_SESSION&d2lSecureSessionVal=TEST_SECURE";
+    const { call, apiClient } = setup(kalturaFetch(), sessionLink);
+    const getPage = vi.fn(async () => null);
+    Object.assign(apiClient, { getPage });
+
+    const result = await call({ courseId: COURSE_ID, topicId: 55 });
+    const body = JSON.parse(result.content[0].text);
+
+    // The authenticated request still uses the URL exactly as Brightspace gave it.
+    expect(getPage).toHaveBeenCalledWith(sessionLink);
+    expect(result.content[0].text).not.toContain("TEST_SESSION");
+    expect(result.content[0].text).not.toContain("TEST_SECURE");
+    expect(body.videoUrl).toBe("/d2l/common/dialogs/quickLink/quickLink.d2l?ou=101&type=lti&rcode=fixture");
+    expect(body.message).toContain("ou=101&type=lti&rcode=fixture");
+    expect(body.message).not.toMatch(/d2lSessionVal|d2lSecureSessionVal/i);
+  });
+
   it("says the LTI link could not be resolved, rather than calling it an unsupported platform", async () => {
     const { call } = setupLti({
       [QUICKLINK]: launchPage(
@@ -209,5 +230,98 @@ describe("get_video_transcript — Brightspace LTI quickLinks", () => {
     expect(body.hasTranscript).toBe(false);
     expect(body.message).toMatch(/LTI link/);
     expect(body.message).not.toMatch(/supported video platform/);
+  });
+});
+
+describe("get_video_transcript — absolute same-origin quickLinks (#190)", () => {
+  const PATH = "/d2l/common/dialogs/quickLink/quickLink.d2l?ou=101&type=lti&rcode=FIXTURE";
+  const ABSOLUTE = `https://purdue.brightspace.com${PATH}`;
+  const LAUNCH =
+    `<html><body><form id="LtiRequestForm" method="post" ` +
+    `action="https://cdnapisec.kaltura.com/html5/html5lib/v2.9/mwEmbedFrame.php?wid=_123456&amp;entry_id=1_abcdefg">` +
+    `<input type="hidden" name="lti_version" value="LTI-1p0" /></form></body></html>`;
+
+  function setupPages(topicUrl: string | null, pages: Record<string, string | null>) {
+    const { call, apiClient } = setup(kalturaFetch(), topicUrl);
+    const getPage = vi.fn(async (path: string) => {
+      if (!(path in pages)) throw new Error(`Unexpected getPage: ${path}`);
+      return pages[path];
+    });
+    Object.assign(apiClient, { getPage });
+    return { call, getPage };
+  }
+
+  it("resolves an absolute same-origin quickLink topic URL through the authenticated launch", async () => {
+    const { call, getPage } = setupPages(ABSOLUTE, { [PATH]: LAUNCH });
+    const body = JSON.parse((await call({ courseId: COURSE_ID, topicId: 55 })).content[0].text);
+
+    expect(getPage).toHaveBeenCalledWith(PATH);
+    expect(body.hasTranscript).toBe(true);
+    expect(body.platform).toBe("kaltura");
+  });
+
+  it("resolves an absolute same-origin quickLink passed directly as videoUrl", async () => {
+    const { call, getPage } = setupPages(null, { [PATH]: LAUNCH });
+    const body = JSON.parse((await call({ videoUrl: ABSOLUTE })).content[0].text);
+
+    expect(getPage).toHaveBeenCalledWith(PATH);
+    expect(body.hasTranscript).toBe(true);
+  });
+
+  it("resolves the relative equivalent the same way", async () => {
+    const { call, getPage } = setupPages(PATH, { [PATH]: LAUNCH });
+    const body = JSON.parse((await call({ courseId: COURSE_ID, topicId: 55 })).content[0].text);
+
+    expect(getPage).toHaveBeenCalledWith(PATH);
+    expect(body.hasTranscript).toBe(true);
+  });
+
+  it("strips session params from an unresolved absolute quickLink but requests the raw path", async () => {
+    const raw = `${ABSOLUTE}&d2lSessionVal=TEST_SESSION`;
+    const { call, getPage } = setupPages(raw, { [`${PATH}&d2lSessionVal=TEST_SESSION`]: null });
+    const result = await call({ courseId: COURSE_ID, topicId: 55 });
+    const body = JSON.parse(result.content[0].text);
+
+    expect(getPage).toHaveBeenCalledWith(`${PATH}&d2lSessionVal=TEST_SESSION`);
+    expect(body.hasTranscript).toBe(false);
+    expect(body.message).toMatch(/LTI link/);
+    expect(result.content[0].text).not.toContain("TEST_SESSION");
+    expect(body.videoUrl).toBe(ABSOLUTE);
+  });
+
+  it("follows an absolute same-origin tool launch framed by the quickLink page", async () => {
+    const { call } = setupPages(PATH, {
+      [PATH]: `<iframe src="https://purdue.brightspace.com/d2l/le/lti/101/toolLaunch/77?topicId=55"></iframe>`,
+      "/d2l/le/lti/101/toolLaunch/77?topicId=55": LAUNCH,
+    });
+    const body = JSON.parse((await call({ courseId: COURSE_ID, topicId: 55 })).content[0].text);
+
+    expect(body.hasTranscript).toBe(true);
+  });
+
+  it("does not follow a framed /d2l/ link on another origin", async () => {
+    const { call, getPage } = setupPages(PATH, {
+      [PATH]: `<iframe src="https://purdue.brightspace.com.evil.example/d2l/le/lti/101/toolLaunch/77"></iframe>`,
+    });
+    const body = JSON.parse((await call({ courseId: COURSE_ID, topicId: 55 })).content[0].text);
+
+    expect(getPage).toHaveBeenCalledTimes(1);
+    expect(body.hasTranscript).toBe(false);
+    expect(body.message).toMatch(/LTI link/);
+  });
+
+  it.each([
+    ["a lookalike host", `https://purdue.brightspace.com.evil.example${PATH}`],
+    ["an http: downgrade", `http://purdue.brightspace.com${PATH}`],
+    ["a userinfo trick", `https://purdue.brightspace.com@evil.example${PATH}`],
+    ["a different port", `https://purdue.brightspace.com:8443${PATH}`],
+    ["a different Brightspace", `https://other.brightspace.com${PATH}`],
+  ])("never sends an authenticated request for a quickLink on %s", async (_label, url) => {
+    const { call, getPage } = setupPages(url, {});
+    const body = JSON.parse((await call({ courseId: COURSE_ID, topicId: 55 })).content[0].text);
+
+    expect(getPage).not.toHaveBeenCalled();
+    expect(body.hasTranscript).toBe(false);
+    expect(body.platform).toBe("unknown");
   });
 });

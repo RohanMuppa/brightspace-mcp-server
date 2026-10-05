@@ -4,7 +4,14 @@ import os from "node:os";
 import path from "node:path";
 import { registerDownloadDropboxSubmissionFile } from "../../src/tools/download-dropbox-submission-file.js";
 import { ApiError } from "../../src/api/errors.js";
-import { MAX_FILE_SIZE } from "../../src/utils/file-validator.js";
+import { MAX_FILE_SIZE, DISK_MAX_FILE_SIZE } from "../../src/utils/file-validator.js";
+import { secureStreamDownload } from "../../src/utils/download-helpers.js";
+
+// Wrap the real helper so tests can see which cap the tool hands it.
+vi.mock("../../src/utils/download-helpers.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../src/utils/download-helpers.js")>();
+  return { ...actual, secureStreamDownload: vi.fn(actual.secureStreamDownload) };
+});
 
 const COURSE_ID = 101;
 const FOLDER_ID = 55;
@@ -20,6 +27,19 @@ function toArrayBuffer(buf: Buffer): ArrayBuffer {
   return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) as ArrayBuffer;
 }
 
+/** A PDF body of `megabytes` MB produced a chunk at a time, never whole in memory. */
+function largePdfStream(megabytes: number): ReadableStream<Uint8Array> {
+  const chunk = new Uint8Array(1024 * 1024);
+  let sent = 0;
+  return new ReadableStream({
+    pull(controller) {
+      if (sent === megabytes) return controller.close();
+      controller.enqueue(sent === 0 ? Buffer.concat([Buffer.from("%PDF-1.4\n"), chunk.subarray(9)]) : chunk);
+      sent += 1;
+    },
+  });
+}
+
 const submissionsList = (fileSize = 512) => [
   {
     Id: SUBMISSION_ID,
@@ -30,10 +50,11 @@ const submissionsList = (fileSize = 512) => [
 interface Setup {
   submissionsResult?: unknown | (() => never);
   rawResult?: unknown | (() => never);
-  body?: Buffer;
+  body?: Buffer | ReadableStream<Uint8Array>;
+  contentLength?: number;
 }
 
-function setup({ submissionsResult = submissionsList(), rawResult, body = pdfBuffer() }: Setup) {
+function setup({ submissionsResult = submissionsList(), rawResult, body = pdfBuffer(), contentLength }: Setup) {
   const apiClient = {
     le: (orgUnitId: number, p: string) => `/d2l/api/le/1.0/${orgUnitId}${p}`,
     get: vi.fn(async (_p: string) => {
@@ -42,12 +63,11 @@ function setup({ submissionsResult = submissionsList(), rawResult, body = pdfBuf
     }),
     getRaw: vi.fn(async (_p: string) => {
       if (typeof rawResult === "function") return (rawResult as () => never)();
-      return {
-        ok: true,
+      const length = contentLength ?? (body instanceof Buffer ? body.byteLength : undefined);
+      return new Response(body instanceof Buffer ? toArrayBuffer(body) : body, {
         status: 200,
-        headers: new Headers({ "Content-Length": String(body.byteLength) }),
-        arrayBuffer: async () => toArrayBuffer(body),
-      };
+        headers: length !== undefined ? { "Content-Length": String(length) } : {},
+      });
     }),
   };
 
@@ -59,7 +79,7 @@ function setup({ submissionsResult = submissionsList(), rawResult, body = pdfBuf
   };
 
   registerDownloadDropboxSubmissionFile(server as any, apiClient as any);
-  return { call: (args: unknown) => handler!(args) };
+  return { call: (args: unknown) => handler!(args), apiClient };
 }
 
 const parse = (result: any) => JSON.parse(result.content[0].text);
@@ -75,11 +95,12 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.mocked(secureStreamDownload).mockClear();
   await fs.rm(root, { recursive: true, force: true });
 });
 
 describe("download_dropbox_submission_file", () => {
-  it("downloads the file through secureDownload (path containment, magic-byte typing)", async () => {
+  it("streams the file to disk through secureStreamDownload with the disk size cap", async () => {
     const { call } = setup({});
     const result = await call({
       courseId: COURSE_ID,
@@ -94,10 +115,59 @@ describe("download_dropbox_submission_file", () => {
     expect(parsed.success).toBe(true);
     expect(parsed.mimeType).toBe("application/pdf");
     expect(await fs.readFile(parsed.filePath)).toHaveLength(pdfBuffer().byteLength);
+    expect(vi.mocked(secureStreamDownload)).toHaveBeenCalledWith(
+      expect.objectContaining({ targetDir, filename: "hw1.pdf", maxBytes: DISK_MAX_FILE_SIZE })
+    );
   });
 
-  it("refuses a file whose reported size exceeds MAX_FILE_SIZE before downloading anything", async () => {
-    const { call } = setup({ submissionsResult: submissionsList(MAX_FILE_SIZE + 1) });
+  // #185: the staff download tool still buffered submissions under a 50 MB cap
+  // after download_file's disk mode moved to streaming.
+  it("downloads a submission whose listed size is 150 MB, streaming it to disk", async () => {
+    const { call, apiClient } = setup({
+      submissionsResult: submissionsList(150 * 1024 * 1024),
+      body: largePdfStream(60),
+      contentLength: 60 * 1024 * 1024,
+    });
+    const result = await call({
+      courseId: COURSE_ID,
+      folderId: FOLDER_ID,
+      submissionId: SUBMISSION_ID,
+      fileId: FILE_ID,
+      downloadPath: targetDir,
+      customFilename: "Group 4 deck.pdf",
+    });
+
+    expect(result.isError).toBeUndefined();
+    const parsed = parse(result);
+    expect(parsed).toMatchObject({
+      success: true,
+      filePath: path.join(targetDir, "Group 4 deck.pdf"),
+      fileSize: 60 * 1024 * 1024,
+      mimeType: "application/pdf",
+      originalFilename: "hw1.pdf",
+    });
+    expect((await fs.stat(parsed.filePath)).size).toBe(60 * 1024 * 1024);
+    expect(apiClient.getRaw).toHaveBeenCalledTimes(1);
+    // Only the published file is left; the temporary .part file is gone.
+    expect(await fs.readdir(targetDir)).toEqual(["Group 4 deck.pdf"]);
+  });
+
+  it("saves a body over 50 MB even when the listed size and Content-Length are small", async () => {
+    const { call } = setup({ body: largePdfStream(MAX_FILE_SIZE / 1024 / 1024 + 1), contentLength: 0 });
+    const result = await call({
+      courseId: COURSE_ID,
+      folderId: FOLDER_ID,
+      submissionId: SUBMISSION_ID,
+      fileId: FILE_ID,
+      downloadPath: targetDir,
+    });
+
+    expect(result.isError).toBeUndefined();
+    expect(parse(result).fileSize).toBe(MAX_FILE_SIZE + 1024 * 1024);
+  });
+
+  it("refuses a file whose listed size exceeds the 2 GB disk cap before downloading anything", async () => {
+    const { call, apiClient } = setup({ submissionsResult: submissionsList(DISK_MAX_FILE_SIZE + 1) });
     const result = await call({
       courseId: COURSE_ID,
       folderId: FOLDER_ID,
@@ -108,12 +178,13 @@ describe("download_dropbox_submission_file", () => {
 
     expect(result.isError).toBe(true);
     expect(textOf(result)).toContain("too large");
+    expect(textOf(result)).toContain(`Maximum allowed: ${DISK_MAX_FILE_SIZE / 1024 / 1024}MB`);
+    expect(apiClient.getRaw).not.toHaveBeenCalled();
     expect(await fs.readdir(targetDir)).toEqual([]);
   });
 
-  it("refuses a file whose actual downloaded size exceeds MAX_FILE_SIZE even when reported size lied", async () => {
-    const oversized = Buffer.concat([Buffer.from("%PDF-1.4\n"), Buffer.alloc(MAX_FILE_SIZE)]);
-    const { call } = setup({ body: oversized });
+  it("refuses a download whose Content-Length exceeds the disk cap without writing anything", async () => {
+    const { call } = setup({ contentLength: 3 * 1024 * 1024 * 1024 });
     const result = await call({
       courseId: COURSE_ID,
       folderId: FOLDER_ID,
@@ -124,9 +195,28 @@ describe("download_dropbox_submission_file", () => {
 
     expect(result.isError).toBe(true);
     expect(textOf(result)).toContain("too large");
+    expect(vi.mocked(secureStreamDownload)).not.toHaveBeenCalled();
+    expect(await fs.readdir(targetDir)).toEqual([]);
   });
 
-  it("refuses a file type that is not on the allowlist, via secureDownload's magic-byte check", async () => {
+  it("returns the instructor/TA note when Brightspace refuses the download itself with 403", async () => {
+    const { call } = setup({
+      rawResult: () => { throw new ApiError(403, "/download", "Forbidden"); },
+    });
+    const result = await call({
+      courseId: COURSE_ID,
+      folderId: FOLDER_ID,
+      submissionId: SUBMISSION_ID,
+      fileId: FILE_ID,
+      downloadPath: targetDir,
+    });
+
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain("Instructor or TA access required for this course");
+    expect(await fs.readdir(targetDir)).toEqual([]);
+  });
+
+  it("refuses a file type that is not on the allowlist, leaving nothing behind", async () => {
     // No recognizable magic-byte signature, and a NUL byte rules out the
     // plain-text fallback too, so validateFileType has nothing to allow.
     const unknownBinary = Buffer.concat([Buffer.from([0x00, 0x01, 0x02, 0x03]), Buffer.alloc(64, 0xff)]);
