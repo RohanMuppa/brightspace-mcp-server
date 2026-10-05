@@ -336,6 +336,26 @@ export class D2LApiClient {
     return this.withAuthentication(resolved, token => this.makeRawRequest(resolved, token));
   }
 
+  /**
+   * Fetch a Brightspace web page (not an API route) as the signed-in user.
+   * Pages check the session cookie and ignore a Bearer token, so this sends
+   * the stored cookie. Returns null when no cookie is stored or the page
+   * answers with the login redirect: it never starts a login, since a page
+   * read by a read-only tool is not worth an MFA prompt.
+   */
+  async getPage(path: string): Promise<string | null> {
+    const token = await this.tokenManager.getToken();
+    if (!token?.cookieHeader) return null;
+    const cookieToken: TokenData = { ...token, accessToken: `cookie:${token.cookieHeader}` };
+    try {
+      const response = await this.retrying(() => this.throttled(() => this.makeRawRequest(path, cookieToken)));
+      return await response.text();
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 401) return null;
+      throw error;
+    }
+  }
+
   /** One HTTP refresh and at most one browser login per caller. */
   private async withAuthentication<T>(path: string, request: (token: TokenData) => Promise<T>): Promise<T> {
     let token = await this.tokenManager.getToken();
