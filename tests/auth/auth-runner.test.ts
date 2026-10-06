@@ -9,17 +9,25 @@ vi.mock("node:child_process", () => ({ spawn: vi.fn(), execFileSync: vi.fn() }))
 vi.mock("../../src/utils/logger.js", () => ({ log: vi.fn() }));
 vi.mock("../../src/utils/dev-activity.js", () => ({ devActivity: vi.fn() }));
 
+// Every child a test creates, so afterEach can close the ones a test leaves
+// running. A child that never closes keeps its process "exit" listener.
+const children: EventEmitter[] = [];
+
 function mockChild() {
-  return Object.assign(new EventEmitter(), {
+  const child = Object.assign(new EventEmitter(), {
     pid: 12345, stderr: new PassThrough(), stdout: new PassThrough(), kill: vi.fn(),
   });
+  children.push(child);
+  return child;
 }
 
 describe("AuthRunner", () => {
   let child: ReturnType<typeof mockChild>;
   let kill: ReturnType<typeof vi.spyOn>;
+  let exitListeners: number;
 
   beforeEach(() => {
+    exitListeners = process.listenerCount("exit");
     vi.useFakeTimers();
     child = mockChild();
     vi.mocked(spawn).mockReturnValue(child as never);
@@ -28,6 +36,9 @@ describe("AuthRunner", () => {
   });
 
   afterEach(() => {
+    // Closing an already-finished child is a no-op in AuthRunner.
+    for (const leftover of children.splice(0)) leftover.emit("close", 0);
+    expect(process.listenerCount("exit")).toBe(exitListeners);
     vi.useRealTimers();
     vi.restoreAllMocks();
     vi.clearAllMocks();
