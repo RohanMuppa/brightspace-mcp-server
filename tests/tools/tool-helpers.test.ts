@@ -100,6 +100,15 @@ describe("sanitizeError", () => {
     expect(textOf(result)).toContain("45 seconds");
   });
 
+  // Issue #199: a client that runs calls in a parallel batch can hold the
+  // answer carrying the number until the whole batch finishes, so the user
+  // never sees it in time.
+  it.each([undefined, "47"])("tells the caller not to batch Brightspace calls while MFA is pending (number: %s)", (numberMatch) => {
+    const result = sanitizeError(new AuthProcessError("mfaPending", "internal detail", numberMatch));
+
+    expect(textOf(result)).toContain("Don't run other Brightspace calls in parallel");
+  });
+
   it("never repeats the raw failure text back to the caller", () => {
     const result = sanitizeError(
       new AuthProcessError("failed", "chromium crashed at /home/elliot/.cache/ms-playwright")

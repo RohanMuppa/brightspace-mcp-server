@@ -1,5 +1,8 @@
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { spawn, execFileSync } from "node:child_process";
 import { AuthRunner } from "../../src/auth/auth-runner.js";
@@ -198,18 +201,21 @@ describe("AuthRunner", () => {
     expect(spawn).toHaveBeenCalledTimes(1);
   });
 
-  it("still kills a background child on the 8-minute timeout after an early MFA answer", async () => {
-    const runner = new AuthRunner();
+  it("still kills a background child on its timeout after an early MFA answer", async () => {
+    // The timeout is set below the 45-second abandonment window so this pins
+    // the timeout alone; a caller nobody returns to is stopped sooner (see
+    // "a background sign-in nobody is waiting on").
+    const runner = new AuthRunner({ timeoutMs: 30000 });
     const firstResult = runner.run();
     const firstFailure = expect(firstResult).rejects.toMatchObject({ kind: "mfaPending", numberMatch: "47" });
     child.stdout.write("MFA_NUMBER:47\n");
     await firstFailure;
 
-    // Advance past the 8-minute parent timeout firing (SIGTERM already sent)
-    // but before its 5s kill-grace elapses, then join: the child's real
-    // timeout settles sooner than this joiner's own 5s grace window, so it
-    // should observe "timeout" directly rather than a re-answered mfaPending.
-    await vi.advanceTimersByTimeAsync(8 * 60000 + 3000);
+    // Advance past the parent timeout firing (SIGTERM already sent) but
+    // before its 5s kill-grace elapses, then join: the child's real timeout
+    // settles sooner than this joiner's own poll window, so it should observe
+    // "timeout" directly rather than a re-answered mfaPending.
+    await vi.advanceTimersByTimeAsync(30000 + 3000);
     if (process.platform !== "win32") expect(kill).toHaveBeenCalledWith(-child.pid, "SIGTERM");
     const joined = runner.run();
     const joinedFailure = expect(joined).rejects.toMatchObject({ kind: "timeout" });
@@ -445,6 +451,123 @@ describe("AuthRunner", () => {
     expect(process.listenerCount("exit")).toBe(exits);
     expect(vi.getTimerCount()).toBe(0);
   });
+  // Issue #199: a caller answered with the number can be cancelled, or held
+  // in a parallel batch the user never sees. Nobody then approves, and the
+  // child used to keep its browser and the cross-process lock for the whole
+  // 5-minute MFA window, blocking every other server sharing the session.
+  describe("a background sign-in nobody is waiting on", () => {
+    async function answerEarly(runner: AuthRunner) {
+      const failure = expect(runner.run()).rejects.toMatchObject({ kind: "mfaPending", numberMatch: "47" });
+      child.stdout.write("MFA_NUMBER:47\n");
+      await failure;
+    }
+
+    function childTreeStopped(): boolean {
+      return process.platform === "win32"
+        ? vi.mocked(execFileSync).mock.calls.some(([command]) => command === "taskkill")
+        : kill.mock.calls.some(([pid, signal]) => pid === -child.pid && signal === "SIGKILL");
+    }
+
+    it("is stopped 45 seconds after its number was given when no caller came back", async () => {
+      const runner = new AuthRunner();
+      await answerEarly(runner);
+
+      await vi.advanceTimersByTimeAsync(45000);
+
+      expect(childTreeStopped()).toBe(true);
+    });
+
+    it("keeps running just before 45 seconds without a caller", async () => {
+      const runner = new AuthRunner();
+      await answerEarly(runner);
+
+      await vi.advanceTimersByTimeAsync(44000);
+
+      expect(childTreeStopped()).toBe(false);
+    });
+
+    it("keeps running while a caller that came back is polling it", async () => {
+      const runner = new AuthRunner();
+      await answerEarly(runner);
+      await vi.advanceTimersByTimeAsync(30000);
+
+      void runner.run().catch(() => {});
+      await vi.advanceTimersByTimeAsync(44000);
+
+      expect(childTreeStopped()).toBe(false);
+    });
+
+    it("counts its 45 seconds from when the last polling caller was answered", async () => {
+      const runner = new AuthRunner();
+      await answerEarly(runner);
+      await vi.advanceTimersByTimeAsync(30000);
+      const poll = expect(runner.run()).rejects.toMatchObject({ kind: "mfaPending" });
+      await vi.advanceTimersByTimeAsync(45000);
+      await poll;
+
+      await vi.advanceTimersByTimeAsync(45000);
+
+      expect(childTreeStopped()).toBe(true);
+    });
+
+    it("lets the next call start a fresh sign-in once it was stopped", async () => {
+      const runner = new AuthRunner();
+      await answerEarly(runner);
+      await vi.advanceTimersByTimeAsync(45000);
+
+      child = mockChild();
+      vi.mocked(spawn).mockReturnValue(child as never);
+      const retry = runner.run();
+      child.emit("close", 0);
+
+      expect(await retry).toBe(true);
+      expect(spawn).toHaveBeenCalledTimes(2);
+    });
+
+    describe("when another server process relays its number", () => {
+      let sessionDir: string;
+      let challengeFile: string;
+
+      beforeEach(() => {
+        sessionDir = fs.mkdtempSync(path.join(os.tmpdir(), "brightspace-runner-test-"));
+        fs.mkdirSync(path.join(sessionDir, ".auth.lock"));
+        challengeFile = path.join(sessionDir, ".auth.lock", "challenge.json");
+        fs.writeFileSync(challengeFile, JSON.stringify({ numberMatch: "47" }));
+      });
+
+      afterEach(() => {
+        fs.rmSync(sessionDir, { recursive: true, force: true });
+      });
+
+      it("keeps running for 45 seconds after that relay", async () => {
+        const runner = new AuthRunner({ sessionDir });
+        await answerEarly(runner);
+        await vi.advanceTimersByTimeAsync(30000);
+
+        const relayedAt = new Date(Date.now());
+        fs.utimesSync(challengeFile, relayedAt, relayedAt);
+        await vi.advanceTimersByTimeAsync(44000);
+
+        expect(childTreeStopped()).toBe(false);
+      });
+    });
+  });
+
+  // Issue #199: several servers can share one session store. A sign-in
+  // started by another process holds the lock, and this process's child
+  // relays the number that sign-in is showing before exiting "busy".
+  it("answers a caller told another process's number with that number, not busy", async () => {
+    const onChallenge = vi.fn();
+    const result = new AuthRunner().run(onChallenge);
+    const failure = expect(result).rejects.toMatchObject({ kind: "mfaPending", numberMatch: "90" });
+    child.stdout.write("MFA_NUMBER:90\n");
+    await vi.advanceTimersByTimeAsync(0);
+
+    child.emit("close", 2);
+
+    await failure;
+  });
+
   describe("a caller that can be told the challenge mid-call", () => {
     it("tells the caller the number to enter as soon as the challenge appears", async () => {
       const onChallenge = vi.fn();

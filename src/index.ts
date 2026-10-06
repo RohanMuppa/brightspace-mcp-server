@@ -126,6 +126,7 @@ if (subcommand === 'setup') {
       const authRunner = envAuthActive
         ? undefined
         : new AuthRunner({
+            sessionDir: config.sessionDir,
             onProgress: (message) => {
               void server.sendLoggingMessage({ level: "info", logger: "brightspace-auth", data: message }).catch(() => {});
             },

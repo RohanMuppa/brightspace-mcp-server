@@ -5,7 +5,6 @@
  */
 
 import type { Browser, BrowserContext, Locator, Page, Request } from "playwright";
-import * as path from "node:path";
 import { readFileSync, accessSync } from "node:fs";
 import type { AppConfig, TokenData } from "../types/index.js";
 import { BrowserAuthError } from "../utils/errors.js";
@@ -16,7 +15,8 @@ import type { RequestMfaCode, OnMfaChallenge } from "./sso-flow.js";
 import { isDuoPrompt } from "./duo-mfa.js";
 import { BrowserStateStore, type BrowserState } from "./browser-state-store.js";
 import { hasNewerEntraState, recordMicrosoftSession } from "./microsoft-session.js";
-import { acquireProcessLock } from "./auth-lock.js";
+import { acquireProcessLock, AuthenticationInProgressError } from "./auth-lock.js";
+import { authLockPath, publishChallenge, relayChallenge } from "./mfa-challenge.js";
 import type { AuthPhase } from "./auth-phases.js";
 import { AuthCooldown } from "./auth-cooldown.js";
 import { mintAccessToken } from "./token-mint.js";
@@ -83,13 +83,20 @@ export class BrowserAuth {
   private readonly onPhase?: (phase: AuthPhase, elapsedMs: number) => void;
   /** When the current login first reported an MFA challenge; splits credentials from approvalWait. */
   private challengeSeenAt: number | undefined;
+  private readonly lockPath: string;
+  /** The latest challenge write, awaited before the lock is released so none lands after it. */
+  private publishing: Promise<void> = Promise.resolve();
 
   constructor(config: AppConfig, options: BrowserAuthOptions = {}) {
     this.config = config;
     this.onPhase = options.onPhase;
     const { onMfaChallenge } = options;
+    this.lockPath = authLockPath(config.sessionDir);
     this.ssoFlow = createSSOFlow(config, options.requestMfaCode, onMfaChallenge && ((number) => {
       this.challengeSeenAt ??= Date.now();
+      // Other server processes sharing this session cannot see our caller's
+      // tool response; the lock directory is where they look instead.
+      this.publishing = this.publishing.then(() => publishChallenge(this.lockPath, number)).catch(() => {});
       onMfaChallenge(number);
     }));
     this.stateStore = new BrowserStateStore(config.sessionDir);
@@ -128,9 +135,14 @@ export class BrowserAuth {
 
   async authenticate(options: AuthenticateOptions = {}): Promise<TokenData> {
     const release = await acquireProcessLock(
-      path.join(this.config.sessionDir, ".auth.lock"),
+      this.lockPath,
       { mode: options.automatic ? "automatic" : "explicit" },
-    );
+    ).catch(async (error: unknown) => {
+      // Hand back the number the owner is showing, so this caller's user can
+      // approve that sign-in instead of being told only to wait for it.
+      if (error instanceof AuthenticationInProgressError) error.challenge = await relayChallenge(this.lockPath);
+      throw error;
+    });
     try {
       // Even a cookie-only SAML redirect can issue an MFA push. Suppress all
       // automatic browser attempts during cooldown; HTTP token refresh runs
@@ -141,6 +153,7 @@ export class BrowserAuth {
       await this.cooldown.clear();
       return token;
     } finally {
+      await this.publishing;
       await release();
     }
   }
