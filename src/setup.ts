@@ -23,9 +23,13 @@ import { writeFileAtomicSync } from "./utils/atomic-write.js";
 import type { ConfigStoreData } from "./utils/config-store.js";
 import { AUTH_COMMAND, DOCTOR_COMMAND } from "./utils/commands.js";
 import {
+  classifyRegistration,
   cliMcpClients,
-  configureCliMcpClient,
+  inspectCliMcpClient,
   isCliAvailable,
+  registerCliMcpClient,
+  serverCommand,
+  type Registration,
 } from "./utils/mcp-client-cli.js";
 
 // ANSI helpers
@@ -256,7 +260,7 @@ function isValidUrl(url: string): boolean {
   }
 }
 
-// ── Claude Desktop / Cursor config ────────────────────────────────
+// ── Claude Desktop / Cursor / Antigravity config ────────────────────────────────
 
 interface McpConfig {
   mcpServers?: Record<string, unknown>;
@@ -303,6 +307,10 @@ function getCursorConfigPath(): string {
   return path.join(os.homedir(), ".cursor", "mcp.json");
 }
 
+function getAntigravityConfigPath(): string {
+  return path.join(os.homedir(), ".gemini", "antigravity", "mcp_config.json");
+}
+
 /**
  * A JSON value we can safely merge a server entry into. An array passes
  * `typeof x === "object"` but drops every added key when it is stringified
@@ -310,6 +318,19 @@ function getCursorConfigPath(): string {
  */
 function isJsonObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** How the client's existing "brightspace" entry compares with ours. */
+export function inspectMcpClient(configPath: string): Registration {
+  let config: unknown;
+  try {
+    config = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+  } catch {
+    // No file, or one configureMcpClient would replace anyway.
+    return { state: "missing" };
+  }
+  const servers = isJsonObject(config) ? config.mcpServers : undefined;
+  return classifyRegistration(isJsonObject(servers) ? servers.brightspace : undefined);
 }
 
 export function configureMcpClient(configPath: string): boolean {
@@ -341,17 +362,8 @@ export function configureMcpClient(configPath: string): boolean {
   config.mcpServers = servers;
 
   // Add/update brightspace entry
-  // On Windows, npx is a .cmd shim that must be invoked through cmd.exe
-  const isWindows = process.platform === "win32";
-  servers["brightspace"] = isWindows
-    ? {
-        command: "cmd",
-        args: ["/c", "npx", "-y", "brightspace-mcp-server@latest"],
-      }
-    : {
-        command: "npx",
-        args: ["-y", "brightspace-mcp-server@latest"],
-      };
+  const [command, ...args] = serverCommand();
+  servers["brightspace"] = { command, args };
 
   // Ensure parent directory exists
   const dir = path.dirname(configPath);
@@ -445,6 +457,47 @@ export function buildConfigToSave(
 }
 
 // ── Auth spawn ─────────────────────────────────────────────────────
+
+/**
+ * Registers Brightspace in one client, never silently replacing an entry
+ * that points somewhere else: a matching entry is left alone, and a different
+ * one is printed (so it can be restored) and replaced only on a yes.
+ * Resolves true when the client ends up running the expected entry.
+ */
+async function registerWithClient(
+  rl: readline.Interface,
+  displayName: string,
+  existing: Registration,
+  write: (replace: boolean) => boolean,
+): Promise<boolean> {
+  if (existing.state === "current") {
+    console.log(green(`  ${displayName} already has Brightspace configured.`));
+    return true;
+  }
+
+  if (existing.state === "different") {
+    console.log(yellow(`  ${displayName} has "brightspace" pointing at:`));
+    console.log(`    ${existing.current}`);
+    const replace = await ask(rl, `  Replace it with ${serverCommand().join(" ")}? (yes/no): `);
+    if (!/^y(es)?$/i.test(replace)) {
+      console.log(dim(`  Left ${displayName} unchanged.`));
+      return false;
+    }
+  }
+
+  try {
+    if (write(existing.state === "different")) {
+      console.log(green(`  ${displayName} configured!`));
+      return true;
+    }
+    console.log(yellow(`  Could not configure ${displayName}. See README.md for the manual command.`));
+  } catch (err) {
+    console.log(
+      yellow(`  Could not configure ${displayName}: ${err instanceof Error ? err.message : String(err)}`),
+    );
+  }
+  return false;
+}
 
 function runAuth(): Promise<boolean> {
   const scriptPath = path.resolve(thisDir, "auth-cli.js");
@@ -663,16 +716,12 @@ async function main(): Promise<void> {
       rl2,
       "Would you like to automatically configure Claude Desktop? (yes/no): ",
     );
-    if (/^y(es)?$/i.test(configClaude)) {
-      try {
-        configureMcpClient(claudePath);
-        configuredClients.push("Claude Desktop");
-        console.log(green("  Claude Desktop configured! Restart Claude Desktop to connect."));
-      } catch (err) {
-        console.log(
-          yellow(`  Could not configure Claude Desktop: ${err instanceof Error ? err.message : String(err)}`),
-        );
-      }
+    if (
+      /^y(es)?$/i.test(configClaude) &&
+      await registerWithClient(rl2, "Claude Desktop", inspectMcpClient(claudePath), () =>
+        configureMcpClient(claudePath))
+    ) {
+      configuredClients.push("Claude Desktop");
     }
     console.log("");
   }
@@ -685,16 +734,29 @@ async function main(): Promise<void> {
       rl2,
       "Cursor detected. Would you like to configure it too? (yes/no): ",
     );
-    if (/^y(es)?$/i.test(configCursor)) {
-      try {
-        configureMcpClient(cursorPath);
-        configuredClients.push("Cursor");
-        console.log(green("  Cursor configured! Restart Cursor to connect."));
-      } catch (err) {
-        console.log(
-          yellow(`  Could not configure Cursor: ${err instanceof Error ? err.message : String(err)}`),
-        );
-      }
+    if (
+      /^y(es)?$/i.test(configCursor) &&
+      await registerWithClient(rl2, "Cursor", inspectMcpClient(cursorPath), () =>
+        configureMcpClient(cursorPath))
+    ) {
+      configuredClients.push("Cursor");
+    }
+    console.log("");
+  }
+
+  // ── Antigravity auto-config ──────────────────────────────────────
+  const antigravityPath = getAntigravityConfigPath();
+  if (fs.existsSync(path.dirname(antigravityPath))) {
+    const configAntigravity = await ask(
+      rl2,
+      "Antigravity detected. Would you like to configure it too? (yes/no): ",
+    );
+    if (
+      /^y(es)?$/i.test(configAntigravity) &&
+      await registerWithClient(rl2, "Antigravity", inspectMcpClient(antigravityPath), () =>
+        configureMcpClient(antigravityPath))
+    ) {
+      configuredClients.push("Antigravity");
     }
     console.log("");
   }
@@ -707,17 +769,12 @@ async function main(): Promise<void> {
       rl2,
       `${client.displayName} detected. Configure it automatically? (yes/no): `,
     );
-    if (/^y(es)?$/i.test(configureClient)) {
-      const result = configureCliMcpClient(client);
-      if (result === "failed") {
-        console.log(yellow(`  Could not configure ${client.displayName}. See README.md for the manual command.`));
-      } else {
-        configuredClients.push(client.displayName);
-        const message = result === "already-configured"
-          ? `  ${client.displayName} already has Brightspace configured.`
-          : `  ${client.displayName} configured!`;
-        console.log(green(message));
-      }
+    if (
+      /^y(es)?$/i.test(configureClient) &&
+      await registerWithClient(rl2, client.displayName, inspectCliMcpClient(client), (replace) =>
+        registerCliMcpClient(client, { replace }))
+    ) {
+      configuredClients.push(client.displayName);
     }
     console.log("");
   }
