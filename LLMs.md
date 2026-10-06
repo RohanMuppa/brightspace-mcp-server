@@ -73,7 +73,7 @@ The wizard:
 - asks whether MFA uses device approval, terminal code entry, or a visible browser, then authenticates accordingly
 - saves the password in the native credential store and public settings in `~/.brightspace-mcp/config.json` (0600)
 - writes the encrypted session below `~/.d2l-session/accounts/<account-hash>/` (AES-256-GCM)
-- auto-configures Claude Desktop and Cursor, and uses their own CLIs to configure Codex and Claude Code when detected
+- auto-configures Claude Desktop, Cursor, and Antigravity, and uses their own CLIs to configure Codex and Claude Code when detected; an existing `brightspace` entry that runs anything other than `npx -y brightspace-mcp-server@latest` is printed and replaced only if the user says yes
 
 Wait for the user to finish login and MFA before continuing.
 
@@ -87,7 +87,7 @@ npx -y brightspace-mcp-server@latest
 
 On **Windows**, wrap with cmd: `cmd /c npx -y brightspace-mcp-server@latest`.
 
-Claude Desktop and Cursor are auto-configured by the setup wizard. When their CLIs are installed, Codex Desktop and CLI are configured together through `codex mcp add`, and Claude Code is configured at user scope through `claude mcp add --scope user`. For any other client (Windsurf, Copilot, Zed, Continue, etc.), look up the client's current MCP config format and file path, then add an entry with the command above. Config formats and paths differ per client and change over time, so verify against current client docs rather than guessing.
+Claude Desktop, Cursor, and Antigravity (`~/.gemini/antigravity/mcp_config.json`) are auto-configured by the setup wizard. When their CLIs are installed, Codex Desktop and CLI are configured together through `codex mcp add`, and Claude Code is configured at user scope through `claude mcp add --scope user`. Before writing, setup compares the existing entry's command with the expected one — Codex via `codex mcp get brightspace --json`, Claude Code by reading the user-scope `mcpServers` in `.claude.json` (so a project `.mcp.json` can't stand in for a missing user registration) — and asks before replacing one that differs. For any other client (Windsurf, Copilot, Zed, Continue, etc.), look up the client's current MCP config format and file path, then add an entry with the command above. Config formats and paths differ per client and change over time, so verify against current client docs rather than guessing.
 
 ### 4. Restart the AI client
 

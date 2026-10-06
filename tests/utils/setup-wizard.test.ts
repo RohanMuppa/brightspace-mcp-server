@@ -20,8 +20,9 @@ vi.mock("node:fs", async (importOriginal) => {
 });
 
 const fs = await vi.importActual<typeof import("node:fs")>("node:fs");
-const { SCHOOL_PRESETS, buildConfigToSave, configureMcpClient, presetForArgv, readPasswordInput } =
-  await import("../../src/setup.js");
+const {
+  SCHOOL_PRESETS, buildConfigToSave, configureMcpClient, inspectMcpClient, presetForArgv, readPasswordInput,
+} = await import("../../src/setup.js");
 const { createSSOFlow } = await import("../../src/auth/sso-flow.js");
 const { SunySSOFlow } = await import("../../src/auth/suny-sso.js");
 const { TUDelftSSOFlow } = await import("../../src/auth/tudelft-sso.js");
@@ -259,6 +260,32 @@ describe("client configuration", () => {
     configureMcpClient(configPath);
 
     expect(fs.statSync(configPath).mode & 0o777).toBe(0o600);
+  });
+});
+
+describe("existing client registration", () => {
+  it("reports no entry when the client has no config", () => {
+    expect(inspectMcpClient(configPath)).toEqual({ state: "missing" });
+  });
+
+  it("recognizes the entry setup writes", () => {
+    configureMcpClient(configPath);
+    expect(inspectMcpClient(configPath)).toEqual({ state: "current" });
+  });
+
+  it("reports what a different entry points at", () => {
+    fs.writeFileSync(configPath, JSON.stringify({
+      mcpServers: { brightspace: { command: "node", args: ["/home/me/bsp/build/index.js"] } },
+    }));
+    expect(inspectMcpClient(configPath)).toEqual({
+      state: "different",
+      current: "node /home/me/bsp/build/index.js",
+    });
+  });
+
+  it("reports no entry when the config cannot be parsed", () => {
+    fs.writeFileSync(configPath, "{ not json");
+    expect(inspectMcpClient(configPath)).toEqual({ state: "missing" });
   });
 });
 
