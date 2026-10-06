@@ -12,6 +12,8 @@ import { MfaApprovalError } from "./auth/sso-flow.js";
 import { NativeCredentialStoreError } from "./auth/credential-store.js";
 import { retireLegacyProfile } from "./auth/legacy-profile.js";
 import { formatPhaseMarker, type AuthPhase } from "./auth/auth-phases.js";
+import { AuthenticationInProgressError } from "./auth/auth-lock.js";
+import { challengeMarker } from "./auth/mfa-challenge.js";
 import { AUTH_COMMAND, SETUP_COMMAND } from "./utils/commands.js";
 import { initUpdateChecker, peekUpdateNotice } from "./utils/update-checker.js";
 import { reexecLatestIfStale } from "./utils/self-update.js";
@@ -68,7 +70,7 @@ async function main(): Promise<void> {
     // seconds instead of waiting out the whole approval window. Stdout only
     // — the parent parses stdout for structured markers, never stderr.
     const onMfaChallenge = automatic
-      ? (number: string | null) => console.log(number ? `MFA_NUMBER:${number}` : "MFA_PENDING")
+      ? (number: string | null) => console.log(challengeMarker(number))
       : undefined;
     // Stage timings for the server's dev activity log, same stdout channel.
     const onPhase = automatic
@@ -93,7 +95,12 @@ async function main(): Promise<void> {
     // where they were scraped — can cross the process boundary as data
     // rather than free-form text.
     if (error instanceof MfaApprovalError && error.numberMatch) {
-      console.log(`MFA_NUMBER:${error.numberMatch}`);
+      console.log(challengeMarker(error.numberMatch));
+    }
+    // Another process's sign-in holds the lock and is showing a challenge:
+    // pass it on, so this caller can tell its user what to approve.
+    if (automatic && error instanceof AuthenticationInProgressError && error.challenge) {
+      console.log(challengeMarker(error.challenge.numberMatch));
     }
     process.exitCode = error instanceof NativeCredentialStoreError ? 5
       : code === "AUTH_IN_PROGRESS" ? 2

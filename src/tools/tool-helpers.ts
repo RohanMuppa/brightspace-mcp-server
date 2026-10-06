@@ -93,6 +93,15 @@ export function errorResponse(message: string): CallToolResult {
  * nothing is derived from the caught message, so a child process cannot put
  * words in the response. The full error still goes to the log.
  */
+/**
+ * Issue #199: a client running calls in a parallel batch can hold the answer
+ * carrying the number until the whole batch finishes, and the user never sees
+ * it in time. Ask the model to relay it on its own and call one tool at a time.
+ */
+const MFA_SOLO_CALL =
+  "Don't run other Brightspace calls in parallel until the sign-in completes: a batched " +
+  "answer can reach the user too late to approve. Make one call at a time.";
+
 const AUTH_FAILURE_GUIDANCE: Record<AuthFailureKind, string> = {
   busy: "A sign-in is already running in another process. Let it finish, then try again, " +
     `or run \`${AUTH_COMMAND}\` in a terminal to take over that background attempt.`,
@@ -119,7 +128,8 @@ const AUTH_FAILURE_GUIDANCE: Record<AuthFailureKind, string> = {
     "Approve the sign-in request on your phone (Microsoft Authenticator or Duo). " +
     "Tell the user that, then call this tool again right away without waiting for them to " +
     "confirm: each call waits up to 45 seconds for the approval and returns the result as soon " +
-    "as the sign-in completes. Keep calling until it succeeds or reports a different error.",
+    "as the sign-in completes. Keep calling until it succeeds or reports a different error. " +
+    MFA_SOLO_CALL,
   inProgress:
     "Brightspace sign-in is still starting in the background (opening the browser and the " +
     "school's login pages). Call this tool again right away: the next call joins the same " +
@@ -139,7 +149,8 @@ function authFailureMessage(error: AuthProcessError): string {
     return `Open Microsoft Authenticator and enter ${error.numberMatch} within 5 minutes. ` +
       "Tell the user that number, then call this tool again right away without waiting for them " +
       "to confirm: each call waits up to 45 seconds for the approval and returns the result as " +
-      "soon as the sign-in completes. Keep calling until it succeeds or reports a different error.";
+      "soon as the sign-in completes. Keep calling until it succeeds or reports a different error. " +
+      MFA_SOLO_CALL;
   }
   return AUTH_FAILURE_GUIDANCE[error.kind];
 }

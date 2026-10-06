@@ -38,8 +38,16 @@ async function renameThroughContention(from: string, to: string): Promise<boolea
   return false;
 }
 
+/**
+ * The MFA challenge the lock owner's sign-in is showing, published inside the
+ * lock directory so it lives and dies with the lock (see mfa-challenge.ts).
+ */
+export const CHALLENGE_FILE = "challenge.json";
+
 export class AuthenticationInProgressError extends Error {
   readonly code = "AUTH_IN_PROGRESS";
+  /** The owner's MFA challenge, when the caller looked it up (see BrowserAuth.authenticate). */
+  challenge?: { numberMatch?: string };
   constructor() {
     super("Authentication already in progress. Retry after the current authentication finishes.");
     this.name = "AuthenticationInProgressError";
@@ -101,6 +109,7 @@ export const lockOps = {
 /** Remove only our fixed metadata names, after the directory was retired. */
 async function cleanRetired(lockPath: string): Promise<void> {
   await fs.unlink(path.join(lockPath, "owner.json")).catch(() => {});
+  await fs.unlink(path.join(lockPath, CHALLENGE_FILE)).catch(() => {});
   await cleanChild(path.join(lockPath, "reclaim.lock"));
   await fs.rmdir(lockPath).catch(() => {});
 }
