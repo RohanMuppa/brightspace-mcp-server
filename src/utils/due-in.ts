@@ -29,16 +29,20 @@ export function dueIn(dueDate: string | null | undefined, now: number = Date.now
   if (!Number.isFinite(due)) return null;
 
   const diffMs = due - now;
-  const absMs = Math.abs(diffMs);
 
-  if (absMs < HOUR_MS) {
-    return relativeTimeFormat.format(Math.round(diffMs / MINUTE_MS), "minute");
+  // Pick the unit from the rounded count, not the raw distance: 23.6 hours
+  // rounds to 24, which reads as "tomorrow", not "in 24 hours".
+  const minutes = Math.round(diffMs / MINUTE_MS);
+  if (Math.abs(minutes) < 60) {
+    return relativeTimeFormat.format(minutes, "minute");
   }
-  if (absMs < DAY_MS) {
-    return relativeTimeFormat.format(Math.round(diffMs / HOUR_MS), "hour");
+  const hours = Math.round(diffMs / HOUR_MS);
+  if (Math.abs(hours) < 24) {
+    return relativeTimeFormat.format(hours, "hour");
   }
-  if (absMs < WEEK_MS) {
-    return relativeTimeFormat.format(Math.round(diffMs / DAY_MS), "day");
+  const days = Math.round(diffMs / DAY_MS);
+  if (Math.abs(days) < 7) {
+    return relativeTimeFormat.format(days, "day");
   }
   return relativeTimeFormat.format(Math.round(diffMs / WEEK_MS), "week");
 }

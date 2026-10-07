@@ -49,6 +49,23 @@ describe("dueIn", () => {
     expect(dueIn(new Date(NOW.getTime() + 14 * 24 * 60 * 60 * 1000).toISOString())).toBe("in 2 weeks");
   });
 
+  it("moves up a unit when rounding reaches the next unit's size", () => {
+    const at = (ms: number) => new Date(NOW.getTime() + ms).toISOString();
+    expect(dueIn(at(59.6 * 60 * 1000))).toBe("in 1 hour");
+    expect(dueIn(at(23.6 * 60 * 60 * 1000))).toBe("tomorrow");
+    expect(dueIn(at(6.6 * 24 * 60 * 60 * 1000))).toBe("next week");
+    expect(dueIn(at(-59.6 * 60 * 1000))).toBe("1 hour ago");
+    expect(dueIn(at(-23.6 * 60 * 60 * 1000))).toBe("yesterday");
+    expect(dueIn(at(-6.6 * 24 * 60 * 60 * 1000))).toBe("last week");
+  });
+
+  it("keeps the smaller unit just below a boundary", () => {
+    const at = (ms: number) => new Date(NOW.getTime() + ms).toISOString();
+    expect(dueIn(at(59.4 * 60 * 1000))).toBe("in 59 minutes");
+    expect(dueIn(at(23.4 * 60 * 60 * 1000))).toBe("in 23 hours");
+    expect(dueIn(at(6.4 * 24 * 60 * 60 * 1000))).toBe("in 6 days");
+  });
+
   it("renders a due date at the current instant as this minute", () => {
     expect(dueIn(NOW.toISOString())).toBe("this minute");
   });
