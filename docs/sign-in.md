@@ -14,6 +14,12 @@ The number to approve shows up right in the tool's response, and sign-in finishe
 
 **Microsoft "Don't ask again":** answering yes to `setup`'s "Remember this device" question (saved as `rememberMfa` in `config.json`; `D2L_REMEMBER_MFA` overrides it) makes the server tick that box when your school offers it, so later sign-ins can skip the second factor; how long that lasts is the school's setting, not the server's. It is off by default — leave it off on a shared machine — and `get_server_info` shows whether the box was ticked, offered, or left alone. How often you're asked for MFA at all is your school's sign-in frequency setting, the same approval you'd see in a regular browser.
 
+## Passwordless sign-in
+
+Answering yes to `setup`'s "Sign in without a saved password" question (saved as `passwordless` in `config.json`; `D2L_PASSWORDLESS` overrides it) skips the password prompt and saves no password: setup also removes one saved earlier for the same account. Sign-in then submits only your username, and Microsoft's passwordless phone approval — the number you type into Authenticator — is the whole sign-in. It is off by default, and Microsoft Entra only; the other school-specific sign-in flows still need a password.
+
+The tradeoff: **every sign-in needs your phone**, because there is no password for the server to supply. That's fine when you're at your desk using an assistant, and bad for anything unattended (a scheduled job, a headless agent) — automatic re-sign-in after a session expires waits until someone approves. Passwordless phone sign-in must already be turned on for your account in Microsoft Authenticator. If Microsoft asks for a password anyway, sign-in stops with an error naming `D2L_PASSWORDLESS` instead of waiting out the timeout; turn passwordless off and rerun `setup` to save a password.
+
 ## If it gets stuck
 
 A missed MFA approval pauses automatic sign-in for 5 minutes. This retries immediately, takes over a stuck sign-in, or asks for a code:

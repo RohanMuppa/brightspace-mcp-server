@@ -277,6 +277,39 @@ describe("PurdueSSOFlow credential choreography ported from Brightspace Bar", ()
   });
 });
 
+describe("PurdueSSOFlow passwordless sign-in", () => {
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
+
+  it("counts a username alone as enough to sign in", () => {
+    expect(new PurdueSSOFlow({ username: USERNAME, passwordless: true }).hasCredentials()).toBe(true);
+  });
+
+  it("still needs a username", () => {
+    expect(new PurdueSSOFlow({ passwordless: true }).hasCredentials()).toBe(false);
+  });
+
+  it("submits the username and stops instead of waiting for a password", async () => {
+    const form = makePage();
+    await enterCredentials(new PurdueSSOFlow({ username: USERNAME, passwordless: true }), form.page);
+    expect(form.actions).toEqual(["email", "next"]);
+  });
+
+  it("names the passwordless setting when Microsoft asks for a password anyway", async () => {
+    const form = makePage({ startOn: "password" });
+    await expect(enterCredentials(new PurdueSSOFlow({ username: USERNAME, passwordless: true }), form.page))
+      .rejects.toThrow("D2L_PASSWORDLESS");
+    expect(form.actions).toEqual([]);
+  });
+
+  it("names the passwordless setting on a single-page form that needs a password", async () => {
+    const form = makePage({ passwordDuringEmail: true });
+    await expect(enterCredentials(new PurdueSSOFlow({ username: USERNAME, passwordless: true }), form.page))
+      .rejects.toThrow("D2L_PASSWORDLESS");
+    expect(form.actions).toEqual(["email"]);
+  });
+});
+
 describe("Purdue campus routing ported from Brightspace Bar", () => {
   it("clicks Purdue's live campus control instead of assuming its destination", async () => {
     const click = vi.fn(async () => {});

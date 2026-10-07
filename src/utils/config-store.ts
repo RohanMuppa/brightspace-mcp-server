@@ -24,6 +24,11 @@ export interface ConfigStoreData {
    * second factor. Asked by setup, off by default; D2L_REMEMBER_MFA overrides.
    */
   rememberMfa?: boolean;
+  /**
+   * Sign in with Microsoft Entra's passwordless phone approval, so no
+   * password is saved. Asked by setup, off by default; D2L_PASSWORDLESS overrides.
+   */
+  passwordless?: boolean;
   includeCourses?: number[];
   excludeCourses?: number[];
   activeOnly?: boolean;

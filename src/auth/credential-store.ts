@@ -173,6 +173,17 @@ export async function setStoredPassword(baseUrl: string, username: string, passw
   }
 }
 
+/** Remove an account's saved password, so passwordless sign-in leaves none behind. */
+export async function deleteStoredPassword(baseUrl: string, username: string, backend: CredentialBackend = nativeCredentialBackend): Promise<void> {
+  const account = passwordAccount(baseUrl, username);
+  // Some native stores raise on deleting an entry that does not exist.
+  if (await backend.getPassword(SERVICE, account) === null) return;
+  await backend.deletePassword(SERVICE, account);
+  if (await backend.getPassword(SERVICE, account) !== null) {
+    throw new NativeCredentialStoreError("The saved password could not be removed from the native credential store. Existing configuration was preserved.");
+  }
+}
+
 function decodeKey(value: string): Buffer {
   if (!/^[a-f0-9]{64}$/i.test(value)) {
     throw new NativeCredentialStoreError("The saved session encryption key is invalid. Restore its native credential store entry before retrying.");
