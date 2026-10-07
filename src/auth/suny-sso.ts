@@ -29,6 +29,7 @@ interface SunySSOConfig {
   campus?: string;
   headless?: boolean;
   rememberMfa?: boolean;
+  passwordless?: boolean;
   requestMfaCode?: RequestMfaCode;
   onMfaChallenge?: OnMfaChallenge;
 }
@@ -80,6 +81,7 @@ export class SunySSOFlow {
       baseUrl: `https://${SUNY_BRIGHTSPACE_HOST}`,
       headless: config.headless,
       rememberMfa: config.rememberMfa,
+      passwordless: config.passwordless,
       requestMfaCode: config.requestMfaCode,
       onMfaChallenge: config.onMfaChallenge,
     });

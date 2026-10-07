@@ -25,6 +25,7 @@ const KMSI_SUBMIT = "#idSIButton9";
 const PASSWORD_FIELD = 'input[type="password"]';
 const PASSWORD_SWITCH = "#idA_PWD_SwitchToPassword";
 const PASSWORD_SWITCH_TEXT = "text:Use your password instead";
+const APPROVAL_SIGN = "#idRemoteNGC_DisplaySign";
 
 function makeConfig(overrides: Partial<AppConfig> = {}): AppConfig {
   return {
@@ -491,6 +492,23 @@ describe("BrowserAuth.navigateAndLogin", () => {
 
       await expect(navigate(page)).rejects.toThrow("Automatic sign-in requires saved credentials");
       expect(clicks).toEqual([]);
+    });
+
+    it("stays on the approval view and hands it to the school flow when passwordless sign-in is on", async () => {
+      withConfig({ password: undefined, passwordless: true });
+      const { page, clicks } = passwordlessPage([PASSWORD_SWITCH, PASSWORD_SWITCH_TEXT]);
+
+      await expect(navigate(page)).resolves.toBe(false);
+      expect(ssoFlow.login).toHaveBeenCalledOnce();
+      expect(clicks).toEqual([]);
+    });
+
+    it("recognizes the approval view by its number when the password link is absent", async () => {
+      withConfig({ password: undefined, passwordless: true });
+      const { page } = makePage({ url: PASSWORDLESS_URL, visible: [APPROVAL_SIGN] });
+
+      await expect(navigate(page)).resolves.toBe(false);
+      expect(ssoFlow.login).toHaveBeenCalledOnce();
     });
 
     it("stops clicking a password sign-in option that never leaves the approval view", async () => {

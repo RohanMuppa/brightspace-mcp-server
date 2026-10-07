@@ -115,6 +115,29 @@ describe("resolved authentication configuration", () => {
     expect((await loadConfig()).rememberMfa).toBe(false);
   });
 
+  it("keeps passwordless sign-in off unless it is opted into", async () => {
+    expect((await loadConfig()).passwordless).toBe(false);
+  });
+
+  it("honours passwordless saved by setup in config.json", async () => {
+    fake.store = { passwordless: true };
+    expect((await loadConfig()).passwordless).toBe(true);
+  });
+
+  it("lets D2L_PASSWORDLESS=false override passwordless in config.json", async () => {
+    vi.stubEnv("D2L_PASSWORDLESS", "false");
+    fake.store = { passwordless: true };
+    expect((await loadConfig()).passwordless).toBe(false);
+  });
+
+  it("reads no saved password when passwordless sign-in is on", async () => {
+    vi.stubEnv("D2L_PASSWORDLESS", "true");
+    vi.stubEnv("D2L_USERNAME", "alice");
+    const config = await loadConfig();
+    expect(config.password).toBeUndefined();
+    expect(fake.password).not.toHaveBeenCalled();
+  });
+
   it("leaves remember-MFA off when config.json has no rememberMfa", async () => {
     fake.store = { baseUrl: "https://school.example", headless: true };
     expect((await loadConfig()).rememberMfa).toBe(false);

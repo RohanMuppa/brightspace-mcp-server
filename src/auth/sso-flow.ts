@@ -78,6 +78,7 @@ export function createSSOFlow(config: AppConfig, requestMfaCode?: RequestMfaCode
     baseUrl: config.baseUrl,
     headless: config.headless,
     rememberMfa: config.rememberMfa,
+    passwordless: config.passwordless,
     requestMfaCode,
     onMfaChallenge,
   };

@@ -64,6 +64,13 @@ export async function loadConfig(): Promise<AppConfig> {
     ?? store?.rememberMfa
     ?? false;
 
+  // Opt-in: sign in with Microsoft's passwordless phone approval, so no
+  // password is read or saved. Every sign-in then needs the phone, which is
+  // why it is off unless the user chose it in setup or set D2L_PASSWORDLESS.
+  const passwordless = envBoolean(process.env.D2L_PASSWORDLESS, "D2L_PASSWORDLESS")
+    ?? store?.passwordless
+    ?? false;
+
   // Resolve tokenTtl: env > store > default (3600)
   const tokenTtl = positiveSeconds(process.env.D2L_TOKEN_TTL, "D2L_TOKEN_TTL")
     ?? positiveSeconds(store?.tokenTtl, "tokenTtl in config.json")
@@ -104,7 +111,7 @@ export async function loadConfig(): Promise<AppConfig> {
   }
   const baseUrl = configuredUrl.origin;
   const username = process.env.D2L_USERNAME || store?.username;
-  const password = await resolveStoredPassword(baseUrl, username, store);
+  const password = passwordless ? undefined : await resolveStoredPassword(baseUrl, username, store);
   // A new account must never inherit another account's cookies, even at the same school.
   const sessionDir = accountSessionDirectory(sessionRoot, baseUrl, username);
   const legacyMigration = sessionDir !== sessionRoot ? await migrateLegacyState(sessionRoot) : undefined;
@@ -117,6 +124,7 @@ export async function loadConfig(): Promise<AppConfig> {
     tokenTtl,
     headless,
     rememberMfa,
+    passwordless,
     username,
     password,
     campus: process.env.D2L_CAMPUS || store?.campus,

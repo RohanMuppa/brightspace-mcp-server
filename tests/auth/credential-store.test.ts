@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as os from "node:os";
-import { assertNativeCredentialStoreAvailable, getSessionEncryptionKey, getStoredPassword, hasSessionEncryptionKey, setStoredPassword, NativeCredentialStoreError, nativeCredentialBackend } from "../../src/auth/credential-store.js";
+import { assertNativeCredentialStoreAvailable, deleteStoredPassword, getSessionEncryptionKey, getStoredPassword, hasSessionEncryptionKey, setStoredPassword, NativeCredentialStoreError, nativeCredentialBackend } from "../../src/auth/credential-store.js";
 import { MemoryCredentialBackend } from "./secure-store-fixtures.js";
 
 describe("Credential store", () => {
@@ -30,6 +30,28 @@ describe("Credential store", () => {
     expect(await getStoredPassword("https://school.example/d2l/home", "alice", backend)).toBe("dummy-password");
     expect(await getStoredPassword("https://other.example/", "alice", backend)).toBeNull();
     expect(await getStoredPassword("https://school.example/", "bob", backend)).toBeNull();
+  });
+
+  it("deletes only the named account's saved password", async () => {
+    const backend = new MemoryCredentialBackend();
+    await setStoredPassword("https://school.example", "alice", "dummy-password", backend);
+    await setStoredPassword("https://school.example", "bob", "other-password", backend);
+    await deleteStoredPassword("https://school.example/", "alice", backend);
+    expect(await getStoredPassword("https://school.example", "alice", backend)).toBeNull();
+    expect(await getStoredPassword("https://school.example", "bob", backend)).toBe("other-password");
+  });
+
+  it("treats deleting a password that was never saved as done", async () => {
+    const backend = new MemoryCredentialBackend();
+    backend.deletePassword = async () => { throw new Error("no such entry"); };
+    await expect(deleteStoredPassword("https://school.example", "alice", backend)).resolves.toBeUndefined();
+  });
+
+  it("fails when the native store keeps a password it was asked to delete", async () => {
+    const backend = new MemoryCredentialBackend();
+    await setStoredPassword("https://school.example", "alice", "dummy-password", backend);
+    backend.deletePassword = async () => {};
+    await expect(deleteStoredPassword("https://school.example", "alice", backend)).rejects.toBeInstanceOf(NativeCredentialStoreError);
   });
 
   it("fails verification when the native store does not retain a password", async () => {

@@ -1,13 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const fake = vi.hoisted(() => ({
-  get: vi.fn(), set: vi.fn(), save: vi.fn(), load: vi.fn(), exists: vi.fn(),
+  get: vi.fn(), set: vi.fn(), del: vi.fn(), save: vi.fn(), load: vi.fn(), exists: vi.fn(),
   acquire: vi.fn(), release: vi.fn(), locked: false,
   current: null as Record<string, unknown> | null,
 }));
 vi.mock("../../src/auth/credential-store.js", () => ({
   getStoredPassword: fake.get,
   setStoredPassword: fake.set,
+  deleteStoredPassword: fake.del,
 }));
 vi.mock("../../src/utils/config-store.js", () => ({
   saveConfigStore: fake.save, loadConfigStore: fake.load, configStoreExists: fake.exists,
@@ -40,6 +41,13 @@ describe("secure configuration", () => {
     expect(fake.set).toHaveBeenCalledWith("https://school.example", "alice", "secret");
     expect(fake.save).toHaveBeenCalledWith({ baseUrl: "https://school.example", username: "alice", campus: "Poly" });
     expect(fake.set.mock.invocationCallOrder[0]).toBeLessThan(fake.save.mock.invocationCallOrder[0]);
+  });
+
+  it("removes any saved password when passwordless sign-in is chosen", async () => {
+    await saveSecureConfig({ baseUrl: "https://school.example", username: "alice", passwordless: true });
+    expect(fake.set).not.toHaveBeenCalled();
+    expect(fake.del).toHaveBeenCalledWith("https://school.example", "alice");
+    expect(fake.save).toHaveBeenCalledWith({ baseUrl: "https://school.example", username: "alice", passwordless: true });
   });
 
   it("preserves the old config if native storage fails", async () => {

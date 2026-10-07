@@ -45,6 +45,9 @@ const SILENT_SSO = {
   // text fallback covers a tenant that renames the id.
   passwordSwitch: "#idA_PWD_SwitchToPassword",
   passwordSwitchText: "Use your password instead",
+  // The approval view's own markers (purdue-sso.ts PASSWORDLESS_APPROVAL_SELECTORS),
+  // for a tenant that shows it without the password link.
+  passwordlessApproval: ["#idRemoteNGC_DisplaySign", "#idDiv_RemoteNGC_PollingDescription"],
 } as const;
 
 export class BrowserAuthTransportError extends Error {
@@ -567,9 +570,15 @@ export class BrowserAuth {
     return await byText.isVisible().catch(() => false) ? byText : null;
   }
 
-  /** One definition of the MFA pages the shared authentication loop supports. */
+  /**
+   * One definition of the MFA pages the shared authentication loop supports.
+   * With passwordless sign-in on, Microsoft's approval view is the challenge
+   * itself, so the silent poll stays on it instead of taking the password link.
+   */
   private async hasMfaChallenge(page: Page): Promise<boolean> {
-    return isDuoPrompt(page) || await this.isAnyOnScreen(page, SILENT_SSO.mfaChallenges);
+    if (isDuoPrompt(page) || await this.isAnyOnScreen(page, SILENT_SSO.mfaChallenges)) return true;
+    if (!this.config.passwordless) return false;
+    return await this.isAnyOnScreen(page, SILENT_SSO.passwordlessApproval) || await this.passwordSignInOption(page) !== null;
   }
 
   /**
