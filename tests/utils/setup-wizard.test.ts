@@ -177,6 +177,20 @@ describe("saved settings on a repeat run", () => {
     expect(saved.rememberMfa).toBeUndefined();
   });
 
+  it("passes a freshly typed authenticator enrollment through for the credential store", () => {
+    const uri = "otpauth://totp/alice?secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
+    const config = buildConfigToSave(null, { baseUrl: "https://school.example", username: "alice", password: "p", totpUri: uri, headless: true });
+    expect(config.totpUri).toBe(uri);
+  });
+
+  it("leaves a saved enrollment alone when setup is rerun without one", () => {
+    // The enrollment lives in the credential store, never in config.json, so
+    // there is nothing to carry and nothing to clear.
+    const config = buildConfigToSave({ baseUrl: "https://school.example", username: "alice" },
+      { baseUrl: "https://school.example", username: "alice", password: "p", headless: true });
+    expect("totpUri" in config).toBe(false);
+  });
+
   it("saves a passwordless answer without any password", () => {
     const saved = buildConfigToSave(
       { baseUrl: answers.baseUrl, password: "v1-plaintext" },

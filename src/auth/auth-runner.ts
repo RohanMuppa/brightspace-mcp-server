@@ -13,7 +13,7 @@ import { AuthError } from "../utils/errors.js";
 import { AUTH_COMMAND } from "../utils/commands.js";
 import { devActivity } from "../utils/dev-activity.js";
 import { parsePhaseMarker } from "./auth-phases.js";
-import { authLockPath, challengeRelayedAt } from "./mfa-challenge.js";
+import { AUTOMATIC_PENDING_MARKER, authLockPath, challengeRelayedAt } from "./mfa-challenge.js";
 
 /**
  * Timeout for the auth process. It has to outlast the child's own MFA wait,
@@ -92,7 +92,18 @@ function mfaPendingFailure(numberMatch: string | undefined): [AuthFailureKind, s
     : ["mfaPending", "An MFA approval was not completed in time. Try again."];
 }
 
-export type AuthFailureKind = "busy" | "cooldown" | "unsupported" | "secureStorage" | "transport" | "timeout" | "failed" | "mfaPending" | "inProgress";
+/**
+ * The child is answering its own verification code from the saved
+ * authenticator enrollment. Deliberately NOT an mfaPending: there is nothing
+ * on anyone's phone to approve, so a caller told "approve the request" would
+ * send the user looking for a prompt that will never arrive.
+ */
+const automaticPendingFailure = (): AuthProcessError => new AuthProcessError(
+  "automaticPending",
+  "Sign-in is entering its own verification code in the background. Try again.",
+);
+
+export type AuthFailureKind = "busy" | "cooldown" | "unsupported" | "secureStorage" | "transport" | "timeout" | "failed" | "mfaPending" | "automaticPending" | "inProgress";
 
 export class AuthProcessError extends AuthError {
   constructor(
@@ -226,7 +237,7 @@ export class AuthRunner {
    * childDone. Lets a later joiner re-answer immediately instead of
    * discovering the challenge is stale only after blocking on childDone.
    */
-  private pendingChallenge: { numberMatch?: string } | null = null;
+  private pendingChallenge: { kind: "mfaPending" | "automaticPending"; numberMatch?: string } | null = null;
   /** Resolves on the next marker from the current child; null between children. */
   private challengeSignal: Promise<void> | null = null;
   /** Callers inside run() right now. */
@@ -279,10 +290,17 @@ export class AuthRunner {
       return await withinCallBudget(this.runOnce(startedAt), startedAt);
     } catch (error) {
       const childDone = this.childDone;
-      if (!onChallenge || !childDone || !(error instanceof AuthProcessError) || error.kind !== "mfaPending") throw error;
+      if (!childDone || !(error instanceof AuthProcessError)) throw error;
+      // An mfaPending is only worth waiting on when the caller can relay the
+      // number mid-call. An automaticPending needs no relay at all — nobody is
+      // being asked for anything — so keep waiting on it either way.
+      const joinable = error.kind === "automaticPending" || (Boolean(onChallenge) && error.kind === "mfaPending");
+      if (!joinable) throw error;
       const windowMs = pollWindowMs(Date.now() - startedAt);
       if (windowMs <= 0) throw error;
-      try { onChallenge(error.numberMatch); } catch { /* Announcing must not interrupt authentication. */ }
+      if (error.kind === "mfaPending") {
+        try { onChallenge?.(error.numberMatch); } catch { /* Announcing must not interrupt authentication. */ }
+      }
       return this.awaitBackgroundChild(childDone, windowMs);
     }
   }
@@ -348,6 +366,11 @@ export class AuthRunner {
       const graceTimer = setTimeout(() => {
         if (settled) return;
         settled = true;
+        const pending = this.pendingChallenge ?? challenge;
+        if (pending?.kind === "automaticPending") {
+          reject(automaticPendingFailure());
+          return;
+        }
         const numberMatch = this.pendingChallenge?.numberMatch ?? challenge?.numberMatch;
         reject(new AuthProcessError(...mfaPendingFailure(numberMatch), numberMatch));
       }, graceMs);
@@ -406,6 +429,10 @@ export class AuthRunner {
       let childFinished = false;
       let numberMatch: string | undefined;
       let challengeSeen = false;
+      /** The child reported it is answering its own code (see the marker below). */
+      let automaticSeen = false;
+      /** watchAttention is armed once per child; a second timer could kill a live sign-in. */
+      let attentionWatched = false;
       let abandonTimer: ReturnType<typeof setTimeout> | undefined;
       let killTimer: ReturnType<typeof setTimeout> | undefined;
       const kill = (signal: NodeJS.Signals) => {
@@ -485,18 +512,42 @@ export class AuthRunner {
         finishChild(new AuthProcessError("timeout", `The sign-in was stopped because nobody approved its MFA prompt. Try again, or run ${AUTH_COMMAND}.`));
       };
 
+      const startWatching = () => {
+        if (attentionWatched) return;
+        attentionWatched = true;
+        watchAttention();
+      };
+
       const publishChallenge = (matched: string | undefined) => {
         challengeSeen = true;
-        const firstChallenge = this.pendingChallenge === null;
-        if (firstChallenge) watchAttention();
+        // An automatic sign-in that later shows a real approval challenge (it
+        // fell back, or Entra changed its mind) must be upgraded, so a joiner
+        // is told the number instead of "still working".
+        const firstChallenge = this.pendingChallenge === null || this.pendingChallenge.kind === "automaticPending";
+        startWatching();
         if (firstChallenge) devActivity("mfa_observed", { elapsedMs: Date.now() - started });
         if (firstChallenge || matched) {
-          this.pendingChallenge = { numberMatch: matched ?? this.pendingChallenge?.numberMatch };
+          this.pendingChallenge = { kind: "mfaPending", numberMatch: matched ?? this.pendingChallenge?.numberMatch };
         }
         if (firstChallenge) resolveChallengeSignal();
         if (!callerSettled) {
           settleCaller(new AuthProcessError(...mfaPendingFailure(this.pendingChallenge?.numberMatch), this.pendingChallenge?.numberMatch));
         }
+      };
+
+      /**
+       * The child is typing its own verification code. Watched for abandonment
+       * exactly like an approval challenge: a sign-in nobody is waiting on
+       * still holds the cross-process lock, and every caller is told to retry
+       * right away, which keeps it alive (see ABANDON_MS).
+       */
+      const publishAutomaticProgress = () => {
+        automaticSeen = true;
+        if (this.pendingChallenge) return;
+        this.pendingChallenge = { kind: "automaticPending" };
+        startWatching();
+        resolveChallengeSignal();
+        settleCaller(automaticPendingFailure());
       };
 
       // Runs once the child is actually done. Settles the caller too, if an
@@ -546,6 +597,8 @@ export class AuthRunner {
           publishChallenge(numberMatch);
         } else if (MFA_PENDING_MARKER.test(line)) {
           publishChallenge(undefined);
+        } else if (line === AUTOMATIC_PENDING_MARKER) {
+          publishAutomaticProgress();
         } else {
           log("DEBUG", line);
         }
@@ -578,6 +631,9 @@ export class AuthRunner {
           // Busy, but the owning sign-in's challenge came through: the caller
           // was told what to approve, so answer with that, not "busy".
           if (code === 2 && challengeSeen) failures[2] = mfaPendingFailure(numberMatch);
+          // Busy because another process is signing in automatically: there is
+          // nothing to approve, so say that rather than "busy".
+          else if (code === 2 && automaticSeen) failures[2] = ["automaticPending", automaticPendingFailure().message];
           const [kind, message] = failures[code ?? -1] ?? ["failed", `Authentication failed. Run ${AUTH_COMMAND} to try again.`];
           kill("SIGKILL");
           finishChild(new AuthProcessError(kind, message, kind === "mfaPending" ? numberMatch : undefined));

@@ -7,10 +7,12 @@
 import type { Locator, Page } from "playwright";
 import { BrowserAuthError } from "../utils/errors.js";
 import { log } from "../utils/logger.js";
-import { MfaApprovalError, UnsupportedAuthenticationError } from "./sso-flow.js";
+import { devActivity } from "../utils/dev-activity.js";
+import { AutomaticCodeAuthenticationError, MfaApprovalError, UnsupportedAuthenticationError } from "./sso-flow.js";
 import type { RequestMfaCode } from "./sso-flow.js";
 import { DuoMfaHandler } from "./duo-mfa.js";
 import { AUTH_COMMAND } from "../utils/commands.js";
+import { generateTotp, secondsUntilFreshCode } from "./totp.js";
 import type { RememberMfaOutcome, RememberMfaResult } from "./microsoft-session.js";
 
 // Entra names its username field type=email/loginfmt; Shibboleth portals (USC's
@@ -122,9 +124,56 @@ const RESEND_NOT_FOUND_WARN_MS = 30_000;
  */
 const RESEND_CLICK_GUARD_MS = NUMBER_MATCH_POLL_MS * 2;
 
+/**
+ * Entra's own labels for reaching the verification-code form. Clicked only
+ * when an authenticator enrollment is saved, and each at most once per login,
+ * so this can never loop between method pages. The exact-match code label is
+ * tried first; the vaguer "another way" links only open the method list.
+ * Ported from ElliotDrel/brightspace-mcp-server (branch codex/purdue-totp).
+ */
+const CODE_METHOD_STEPS = [
+  ["code", /^use a verification code$/i],
+  ["other", /^(?:I can.t use my .+ right now|sign in another way|use a different verification option)$/i],
+] as const;
+
+/** Let Entra re-render the method page before the loop looks at it again. */
+const METHOD_SWITCH_SETTLE_MS = 500;
+
+/**
+ * Never submit a code with less life than this left: Entra validates a moment
+ * after the click, and a code that rolls over in between is rejected — which
+ * would spend one of the three attempts for nothing.
+ */
+const MIN_CODE_LIFETIME_S = 5;
+
+/**
+ * How long an automatic code sign-in runs before it tells the caller it is
+ * working. Long enough that a quick sign-in never reports anything, short
+ * enough to answer inside a client's request timeout.
+ */
+const AUTOMATIC_PENDING_NOTICE_MS = 15_000;
+
+/**
+ * How long Entra gets to offer a way to switch to a verification code before
+ * this flow gives up on typing one and waits for a phone approval like any
+ * other login. A tenant can show a challenge with no code method at all; the
+ * alternative to this fallback is polling a page nothing will ever click for
+ * the full five minutes.
+ */
+const AUTOMATIC_FALLBACK_MS = 30_000;
+
+/** Where Entra prints the account it believes is signing in. */
+const ACCOUNT_LABEL_SELECTORS = ["#displayName", "#signInName", "#userDisplayName"];
+
 interface PurdueSSOConfig {
   username?: string;
   password?: string;
+  /**
+   * The account's saved authenticator enrollment. Present only when the user
+   * saved one; absent means this flow behaves exactly as it did before, down
+   * to the page queries it makes.
+   */
+  totpUri?: string;
   baseUrl?: string;
   headless?: boolean;
   requestMfaCode?: RequestMfaCode;
@@ -144,6 +193,13 @@ interface PurdueSSOConfig {
    * user has since gone stale.
    */
   onMfaChallenge?: (number: string | null) => void;
+  /**
+   * Fired once per login when an automatic code sign-in has been running long
+   * enough to be worth reporting. Distinct from onMfaChallenge because no
+   * approval was requested: the caller must say "still signing in", never
+   * "check your phone".
+   */
+  onAutomaticPending?: () => void;
 }
 
 /** Microsoft expects Purdue's full sign-in name, while setup also accepts a career account. */
@@ -155,6 +211,8 @@ function signInName(username: string, baseUrl?: string): string {
 export class PurdueSSOFlow {
   private config: PurdueSSOConfig;
   private accountHintSubmitted = false;
+  /** Method-switch controls already clicked this login; each is clicked at most once. */
+  private readonly methodClicked = new Set<string>();
   /** Authenticator codes asked for during this login. See submitMfaCode. */
   private mfaCodeAttempts = 0;
   /**
@@ -402,8 +460,27 @@ export class PurdueSSOFlow {
     if (!this.config.baseUrl) {
       throw new UnsupportedAuthenticationError("A school URL is required to verify authentication.");
     }
-    const deadline = Date.now() + MFA_TIMEOUT_MS;
+    const startedAt = Date.now();
+    const deadline = startedAt + MFA_TIMEOUT_MS;
     let challenged = false;
+    /**
+     * True once this login has told the user to go approve something. Only
+     * then is a timeout really a missed approval; an automatic code sign-in
+     * that stalls must not be reported as one.
+     */
+    let manualChallenged = false;
+    /** True once automatic code entry applied to a poll of this login. */
+    let automaticEngaged = false;
+    /** True once onAutomaticPending has reported this login. */
+    let automaticAnnounced = false;
+    /**
+     * True once Entra has had AUTOMATIC_FALLBACK_MS to offer a way to switch
+     * to a verification code and offered none. One-way: from then on this
+     * login announces and waits exactly as it would with no enrollment saved.
+     */
+    let methodSwitchExhausted = false;
+    /** True once Duo answered a challenge: Duo's codes are not Entra's. */
+    let duoChallengeObserved = false;
     let announced: string | null = null;
     /** True once onMfaChallenge has been told about this login, number or not. */
     let announcedToCaller = false;
@@ -429,27 +506,51 @@ export class PurdueSSOFlow {
           log("INFO", "Login successful - verified Brightspace home");
           return;
         }
-        if (await this.duoMfa.handle(page)) challenged = true;
-        if (await this.submitMfaCode(page)) challenged = true;
+        if (await this.duoMfa.handle(page)) {
+          challenged = true;
+          manualChallenged = true;
+          duoChallengeObserved = true;
+        }
+        // Whether this poll may answer the challenge itself. Recomputed every
+        // poll, because the page — and so the identity provider and method on
+        // screen — can change under us.
+        const automatic = await this.automaticCodeApplicable(page, duoChallengeObserved, methodSwitchExhausted);
+        if (automatic) automaticEngaged = true;
+        if (await this.submitMfaCode(page, automatic)) challenged = true;
+        const switched = automatic ? await this.selectCodeMethod(page) : "skipped";
+        if (switched === "clicked") {
+          await page.waitForTimeout(METHOD_SWITCH_SETTLE_MS);
+          continue;
+        }
+        /** False while this poll is answering the challenge on the user's behalf. */
+        const manualRequired = !automatic;
         const number = await this.readNumberMatch(page);
         if (number) sawNumber = true;
         const challengeVisible = number !== null ||
           await page.locator("#idDiv_SAOTCAS_Title").first().isVisible().catch(() => false) ||
           await page.locator("#idDiv_SAOTCC_Title").first().isVisible().catch(() => false) ||
           await this.anyVisible(page, PASSWORDLESS_APPROVAL_SELECTORS);
+        // Entra showed a challenge but never a way to type a code. Stop
+        // waiting for one and fall back to the announce-and-approve path this
+        // flow has always used, rather than polling a dead page for 5 minutes.
+        if (switched === "noSwitch" && challengeVisible && Date.now() - startedAt >= AUTOMATIC_FALLBACK_MS) {
+          methodSwitchExhausted = true;
+          log("WARN", "Microsoft offered no way to enter a verification code; waiting for approval on your device instead.");
+        }
         // With no password saved, a password page can only end in a timeout.
         if (this.config.passwordless && !this.config.password && !challengeVisible && await this.isPasswordOnlyPage(page)) this.savedPassword();
         // The checkbox can render after the heading or number. Recheck during
         // the existing poll without delaying the first challenge announcement.
         if (challengeVisible) await this.rememberMfaDevice(page);
-        if (challengeVisible && !challenged) {
+        if (challengeVisible && !challenged && manualRequired) {
           challenged = true;
+          manualChallenged = true;
           log("WARN", "Waiting up to 5 minutes for Microsoft MFA approval on your device.");
           this.config.onMfaChallenge?.(number);
           announcedToCaller = true;
           lastAnnouncedNumber = number;
         }
-        if (number && number !== announced) {
+        if (number && number !== announced && manualRequired) {
           announced = number;
           log("WARN", `Number match: ${number}. Enter it in Microsoft Authenticator.`);
           if (!announcedToCaller || number !== lastAnnouncedNumber) {
@@ -468,7 +569,7 @@ export class PurdueSSOFlow {
         // request until MFA_TIMEOUT_MS; readNumberMatch on the next poll
         // picks up the fresh number, and the re-announce logic above tells
         // the caller about it.
-        if (sawNumber && number === null && new URL(page.url()).hostname === "login.microsoftonline.com") {
+        if (manualRequired && sawNumber && number === null && new URL(page.url()).hostname === "login.microsoftonline.com") {
           if (numberVanishedAt === null) numberVanishedAt = Date.now();
           resendNotFoundWarned = await this.tryResendNumberMatch(page, {
             resendCount,
@@ -481,6 +582,10 @@ export class PurdueSSOFlow {
             },
           });
         }
+        if (automatic && !automaticAnnounced && Date.now() - startedAt >= AUTOMATIC_PENDING_NOTICE_MS) {
+          automaticAnnounced = true;
+          this.config.onAutomaticPending?.();
+        }
         await this.clickProvenKmsi(page);
         // The federated-domain trust prompt arrives after the IdP succeeds, so
         // it has to be caught by this loop rather than by enterCredentials.
@@ -489,8 +594,17 @@ export class PurdueSSOFlow {
       }
     } catch (error) {
       if (error instanceof BrowserAuthError) throw error;
+      // An automatic sign-in that never asked the user for anything is not a
+      // missed approval, so it must not be reported as one — unless this
+      // login fell back and really did ask (manualChallenged).
+      if (automaticEngaged && !manualChallenged) {
+        throw new AutomaticCodeAuthenticationError("Automatic code sign-in stopped before Brightspace was verified.", error as Error);
+      }
       if (challenged) throw new MfaApprovalError(error as Error, announced ?? undefined);
       throw new UnsupportedAuthenticationError("Automatic sign-in stopped before a supported MFA challenge completed.", error as Error);
+    }
+    if (automaticEngaged && !manualChallenged) {
+      throw new AutomaticCodeAuthenticationError("Automatic code sign-in did not reach a verified Brightspace session within 5 minutes.");
     }
     if (challenged) throw new MfaApprovalError(undefined, announced ?? undefined);
     throw new UnsupportedAuthenticationError("Sign-in did not reach a supported MFA challenge or Brightspace within 5 minutes.");
@@ -550,10 +664,18 @@ export class PurdueSSOFlow {
     return null;
   }
 
-  private async submitMfaCode(page: Page): Promise<boolean> {
+  /**
+   * Submit a verification code, from the saved enrollment when `automatic` is
+   * set and otherwise from the user at the terminal. `automatic` is decided
+   * per poll by automaticCodeApplicable; with no enrollment saved it is always
+   * false and every line below behaves as it did before.
+   */
+  private async submitMfaCode(page: Page, automatic = false): Promise<boolean> {
     const input = await this.firstVisible(page, MFA_CODE_SELECTORS);
     if (!input) return false;
-    if (this.config.headless === false) return false;
+    // A visible browser leaves code entry to the user — unless the code can be
+    // generated here, in which case there is nothing for them to type.
+    if (this.config.headless === false && !automatic) return false;
     // Ask again only after Entra's rejection message. This runs on every
     // two-second poll, and Microsoft commonly leaves the field on screen while
     // it validates, so a lingering field alone would give a correct code a
@@ -576,9 +698,11 @@ export class PurdueSSOFlow {
       if (this.mfaCodeAttempts >= MAX_MFA_CODE_ATTEMPTS) {
         throw new BrowserAuthError(`Microsoft rejected ${this.mfaCodeAttempts} authenticator codes. Run \`${AUTH_COMMAND}\` to try again.`, "mfa_code");
       }
-      log("WARN", "Microsoft rejected that code. Enter the current one from your authenticator app.");
+      log("WARN", automatic
+        ? "Microsoft rejected the code; waiting for a fresh one before retrying."
+        : "Microsoft rejected that code. Enter the current one from your authenticator app.");
     }
-    if (!this.config.requestMfaCode) {
+    if (!automatic && !this.config.requestMfaCode) {
       throw new UnsupportedAuthenticationError(
         `This MFA method requires a code. Run \`${AUTH_COMMAND}\` in a terminal to enter it.`,
       );
@@ -586,14 +710,96 @@ export class PurdueSSOFlow {
     await this.rememberMfaDevice(page);
     this.mfaCodeAttempts += 1;
     this.awaitingMfaCodeSettle = isRetry;
-    const code = await this.config.requestMfaCode();
+    let code: string;
+    if (automatic) {
+      // Refuse to type a code to a page that is not showing this account.
+      await this.assertExpectedMicrosoftAccount(page);
+      // Resubmitting the rejected code would be rejected again, and a code in
+      // its last seconds expires while Entra validates it, so wait out the
+      // rest of the period in both cases. Entra's own form stays on screen
+      // meanwhile, and the 5-minute budget is checked between polls.
+      const remaining = secondsUntilFreshCode(this.config.totpUri!);
+      if (isRetry || remaining < MIN_CODE_LIFETIME_S) await page.waitForTimeout(Math.ceil(remaining * 1000) + 100);
+      code = generateTotp(this.config.totpUri!);
+    } else {
+      code = await this.config.requestMfaCode!();
+    }
     if (!/^\d{6,8}$/.test(code)) throw new UnsupportedAuthenticationError("The MFA code must contain 6-8 digits.");
     await input.fill(code);
     const submit = await this.firstVisible(page, MFA_CODE_SUBMIT_SELECTORS);
     if (submit) await submit.click();
     else await input.press("Enter");
     log("INFO", "Authenticator code submitted");
+    // The code itself is never logged, here or anywhere else.
+    if (automatic) devActivity("mfa_code_submitted");
     return true;
+  }
+
+  /**
+   * Whether this poll may answer the challenge from the saved enrollment.
+   *
+   * Gated on the identity provider and the challenge on screen, never on a
+   * school's URL: only Microsoft Entra's verification-code form is driven
+   * here, so the test is whether Entra is the page in front of us.
+   *
+   * - no saved enrollment: always false, and not one extra page query is made
+   * - Duo answered a challenge: Duo codes come from a different enrollment
+   * - Entra's passwordless approval view: the phone IS the first factor there,
+   *   and a code cannot stand in for it (see the passwordless option, #206)
+   * - Entra never offered a code method: fall back to announce-and-approve
+   */
+  private async automaticCodeApplicable(page: Page, duoObserved: boolean, exhausted: boolean): Promise<boolean> {
+    if (!this.config.totpUri || duoObserved || exhausted) return false;
+    if (new URL(page.url()).hostname !== "login.microsoftonline.com") return false;
+    return !await this.anyVisible(page, PASSWORDLESS_APPROVAL_SELECTORS);
+  }
+
+  /**
+   * Move Entra from whatever method it defaulted to onto its verification-code
+   * form, one control per login at most.
+   *
+   * - `codeForm`: the form is already up; submitMfaCode owns it
+   * - `spent`: a code has already been submitted, so nothing more to switch to
+   * - `clicked`: a method control was clicked; re-poll the new page
+   * - `noSwitch`: Entra is offering no way to reach a code
+   */
+  private async selectCodeMethod(page: Page): Promise<"codeForm" | "spent" | "clicked" | "noSwitch"> {
+    if (await this.firstVisible(page, MFA_CODE_SELECTORS)) return "codeForm";
+    if (this.mfaCodeAttempts > 0) return "spent";
+    await this.assertExpectedMicrosoftAccount(page);
+    for (const [step, label] of CODE_METHOD_STEPS) {
+      if (this.methodClicked.has(step)) continue;
+      const control = page.getByText(label).first();
+      if (!await control.isVisible().catch(() => false)) continue;
+      this.methodClicked.add(step);
+      await control.click();
+      devActivity("mfa_method_selected");
+      return "clicked";
+    }
+    return "noSwitch";
+  }
+
+  /**
+   * Refuse to drive Entra's method pages, or type a code into them, unless
+   * this really is Microsoft showing the account we are signing in as. A code
+   * typed into someone else's session is a second factor handed to them.
+   */
+  private async assertExpectedMicrosoftAccount(page: Page): Promise<void> {
+    if (new URL(page.url()).hostname !== "login.microsoftonline.com" || !this.config.username) {
+      throw new UnsupportedAuthenticationError("Automatic code entry requires Microsoft's own sign-in page and a configured account.");
+    }
+    const expected = signInName(this.config.username, this.config.baseUrl).toLowerCase();
+    for (const selector of ACCOUNT_LABEL_SELECTORS) {
+      const account = page.locator(selector).first();
+      // These are alternative layouts, not required controls, and textContent()
+      // auto-waits a missing element out for 30 seconds on every MFA poll.
+      if (await account.count() === 0) continue;
+      const value = await account.textContent({ timeout: 1000 }).catch(() => null);
+      const shown = value?.match(/[\w.+-]+@[\w.-]+\.[a-z]{2,}/i)?.[0]?.toLowerCase();
+      if (shown && shown !== expected) {
+        throw new UnsupportedAuthenticationError("Microsoft is showing another account. Automatic code entry stopped.");
+      }
+    }
   }
 
   /**

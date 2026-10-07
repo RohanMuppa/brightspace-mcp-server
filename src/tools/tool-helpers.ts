@@ -124,6 +124,11 @@ const AUTH_FAILURE_GUIDANCE: Record<AuthFailureKind, string> = {
   failed:
     `The sign-in did not complete. Run \`${AUTH_COMMAND}\` in a terminal (from your home folder) to see why, ` +
     "or `brightspace-setup` if your saved school or username is wrong.",
+  automaticPending:
+    "Brightspace sign-in is answering its own verification code from the saved authenticator " +
+    "enrollment. No phone approval is being requested, so don't ask the user to approve anything. " +
+    "Call this tool again right away: the next call joins the same sign-in and returns the result " +
+    "as soon as it completes.",
   mfaPending:
     "Approve the sign-in request on your phone (Microsoft Authenticator or Duo). " +
     "Tell the user that, then call this tool again right away without waiting for them to " +

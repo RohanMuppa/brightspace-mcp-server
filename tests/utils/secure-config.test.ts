@@ -1,13 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const fake = vi.hoisted(() => ({
-  get: vi.fn(), set: vi.fn(), del: vi.fn(), save: vi.fn(), load: vi.fn(), exists: vi.fn(),
+  get: vi.fn(), set: vi.fn(), getTotp: vi.fn(), setTotp: vi.fn(), del: vi.fn(), save: vi.fn(), load: vi.fn(), exists: vi.fn(),
   acquire: vi.fn(), release: vi.fn(), locked: false,
   current: null as Record<string, unknown> | null,
 }));
 vi.mock("../../src/auth/credential-store.js", () => ({
   getStoredPassword: fake.get,
   setStoredPassword: fake.set,
+  getStoredTotpUri: fake.getTotp,
+  setStoredTotpUri: fake.setTotp,
   deleteStoredPassword: fake.del,
 }));
 vi.mock("../../src/utils/config-store.js", () => ({
@@ -48,6 +50,32 @@ describe("secure configuration", () => {
     expect(fake.set).not.toHaveBeenCalled();
     expect(fake.del).toHaveBeenCalledWith("https://school.example", "alice");
     expect(fake.save).toHaveBeenCalledWith({ baseUrl: "https://school.example", username: "alice", passwordless: true });
+  });
+
+  it("saves an authenticator enrollment only in the native store, never in config.json", async () => {
+    const uri = "otpauth://totp/Test?secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
+    fake.getTotp.mockResolvedValue(uri);
+    await saveSecureConfig({ baseUrl: "https://school.example", username: "alice", totpUri: uri });
+    expect(fake.setTotp).toHaveBeenCalledWith("https://school.example", "alice", uri);
+    expect(fake.save).toHaveBeenCalledWith({ baseUrl: "https://school.example", username: "alice" });
+  });
+
+  it("normalizes a bare setup key before storing it", async () => {
+    const uri = "otpauth://totp/alice?secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
+    fake.getTotp.mockResolvedValue(uri);
+    await saveSecureConfig({ baseUrl: "https://school.example", username: "alice", totpUri: "gezd gnbv gy3t qojq gezd gnbv gy3t qojq" });
+    expect(fake.setTotp).toHaveBeenCalledWith("https://school.example", "alice", uri);
+  });
+
+  it("validates the enrollment before writing either secret", async () => {
+    // A mistyped key must not replace the saved password and then fail.
+    await expect(saveSecureConfig({ baseUrl: "https://school.example", username: "alice", password: "new", totpUri: "123456" }))
+      .rejects.toThrow("Invalid authenticator enrollment URI");
+    await expect(saveSecureConfig({ baseUrl: "https://school.example", totpUri: "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ" }))
+      .rejects.toThrow("requires a school URL and username");
+    expect(fake.set).not.toHaveBeenCalled();
+    expect(fake.setTotp).not.toHaveBeenCalled();
+    expect(fake.save).not.toHaveBeenCalled();
   });
 
   it("preserves the old config if native storage fails", async () => {

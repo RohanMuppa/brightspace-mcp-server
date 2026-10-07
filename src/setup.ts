@@ -19,6 +19,7 @@ import {
   loadConfigStore,
 } from "./utils/config-store.js";
 import { saveSecureConfig } from "./utils/secure-config.js";
+import { normalizeTotpEnrollment } from "./auth/totp.js";
 import { writeFileAtomicSync } from "./utils/atomic-write.js";
 import type { ConfigStoreData } from "./utils/config-store.js";
 import { AUTH_COMMAND, DOCTOR_COMMAND } from "./utils/commands.js";
@@ -398,6 +399,8 @@ export interface WizardAnswers {
   username: string;
   /** Absent when passwordless sign-in was chosen: nothing is saved. */
   password?: string;
+  /** An authenticator enrollment to save; absent leaves any saved one alone. */
+  totpUri?: string;
   headless: boolean;
   /** Left undefined, the saved choice for the same school is kept. */
   rememberMfa?: boolean;
@@ -451,6 +454,10 @@ export function buildConfigToSave(
     // Always the freshly typed one: a carried v1 plaintext password would
     // otherwise be the value written to the native store.
     password: answers.passwordless ? undefined : answers.password,
+    // Only ever the freshly typed one. Never read back out of `carried`: the
+    // enrollment lives in the credential store, never in config.json, so a
+    // value here could only have come from this run.
+    ...(answers.totpUri ? { totpUri: answers.totpUri } : {}),
     headless: answers.headless,
   };
   if (answers.rememberMfa !== undefined) config.rememberMfa = answers.rememberMfa;
@@ -645,6 +652,28 @@ async function main(): Promise<void> {
     console.log("");
   }
 
+  // ── Step 3b: Authenticator enrollment (hidden, optional) ─────────
+  // Opt-in and off by default. Asked without naming a school: whether a code
+  // can be typed depends on the identity provider and the challenge it shows,
+  // which is only known at sign-in time.
+  console.log(dim("  Optional. If your school asks for a 6-digit code from an authenticator app, this computer can generate it"));
+  console.log(dim("  for you, so automatic sign-ins need nothing from your phone. Paste the SETUP KEY (or otpauth:// link) you"));
+  console.log(dim("  got when enrolling the app — a code showing on screen right now will not work."));
+  console.log(dim("  The tradeoff: the key is stored beside your password, so on THIS computer the two factors become one."));
+  console.log(dim("  It still stops anyone who only has your password. Press Enter to skip, or to keep a key you saved before."));
+  let totpUri: string | undefined;
+  while (true) {
+    const input = await askPassword("  Authenticator setup key or otpauth:// link (optional): ");
+    if (!input) break;
+    try {
+      totpUri = normalizeTotpEnrollment(input, username);
+      break;
+    } catch {
+      console.log(yellow("  That is not a setup key or otpauth:// link. Paste the enrollment key, or press Enter to skip."));
+    }
+  }
+  console.log("");
+
   // Re-open readline for remaining prompts
   let rl2 = readline.createInterface({
     input: process.stdin,
@@ -709,6 +738,7 @@ async function main(): Promise<void> {
     baseUrl,
     username,
     password,
+    totpUri,
     headless,
     rememberMfa,
     passwordless,
@@ -719,6 +749,7 @@ async function main(): Promise<void> {
   console.log(green(passwordless
     ? "  No password saved: each sign-in will wait for your phone approval."
     : "  Password saved in your operating system credential store."));
+  if (totpUri) console.log(green("  Authenticator enrollment saved in your operating system credential store."));
   console.log(green("  Config saved to: " + getConfigStorePath()));
   console.log("");
 

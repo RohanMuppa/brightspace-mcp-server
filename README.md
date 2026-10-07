@@ -97,6 +97,7 @@ All optional, set in your AI app's MCP `env` config or your shell. The full list
 |---------|--------------|
 | `D2L_REMEMBER_MFA=true` | Tick Microsoft's "Don't ask again" box so later sign-ins skip the second factor (off by default; not for shared computers). `setup` asks this and saves it as `rememberMfa` in `config.json`; the env var overrides it |
 | `D2L_PASSWORDLESS=true` | Sign in with Microsoft Entra's passwordless phone approval, so no password is saved on the computer (off by default; Entra schools only). Every sign-in, including automatic ones, then waits for you to approve on your phone, so it suits interactive use, not unattended or scheduled jobs. `setup` asks this and saves it as `passwordless` in `config.json`; the env var overrides it ([details](docs/sign-in.md#passwordless-sign-in)) |
+| `D2L_TOTP_SECRET` | An authenticator setup key, so a Microsoft Entra "enter a code" challenge is answered on this computer instead of on your phone (off by default). Prefer `setup`, which keeps the key in your OS keychain; this variable is for CI and containers with no keychain and is weaker, because anything that can read the process environment gets your second factor ([details](docs/sign-in.md#answering-code-challenges-without-your-phone)) |
 | `D2L_HEADLESS=false` | Show the browser window during sign-in, for MFA methods that need a click |
 | `D2L_DUO_PASSCODE=1` | On Duo, type a passcode instead of waiting for a push |
 | `D2L_SESSION_COOKIE` / `D2L_ACCESS_TOKEN` | Skip the browser entirely with a pasted cookie or token ([how](docs/sign-in.md#no-browser-paste-a-session-cookie-or-token)) |
@@ -114,6 +115,14 @@ npx -y brightspace-mcp-server@latest auth
 ```
 
 **On a Mac,** sign-in first reads your saved password from Keychain. If you picked a one-time **Allow** at the Keychain prompt, a later sign-in from your AI app or another terminal can fail or hang waiting for an approval nobody sees; pick **Always Allow** instead. That permission only lets the local Brightspace server read its own saved sign-in password, nothing else in your Keychain.
+
+**If your school asks for a 6-digit code** rather than a phone approval, `setup` can save the
+authenticator **setup key** (not a code) you got when you enrolled the app. From then on automatic
+sign-ins generate the code on this computer and finish without you, which is what unattended and
+scheduled use needs. It is optional and off unless you paste a key. The tradeoff is real: the key
+sits beside your password, so on **this** computer your two factors become one. It still stops
+anyone who only has your password, and it changes nothing for your other devices. Full enrollment
+steps: [docs/sign-in.md](docs/sign-in.md#answering-code-challenges-without-your-phone).
 
 How often you're asked is up to your school, not this tool. Everything else about sign-in — Duo, authenticator codes, visible-browser mode, and running without a browser at all (Docker, WSL, hardware keys) — is in [docs/sign-in.md](docs/sign-in.md).
 
