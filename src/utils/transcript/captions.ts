@@ -87,25 +87,62 @@ function dropRollingRepeats(cues: TranscriptCue[]): TranscriptCue[] {
 }
 
 /**
- * YouTube's timedtext XML, which its signed caption URLs serve when they
- * ignore `fmt`. Two shapes: srv3 `<p t= d=>` and srv1 `<text start= dur=>`.
+ * A TTML/DFXP time expression: a clock value ("00:00:01.500", optionally with
+ * frames) or an offset ("1.5s", "150ms", "90f" treated as seconds-less).
+ */
+function parseTimeExpression(raw: string): number {
+  const value = raw.trim();
+  const offset = /^(\d+(?:\.\d+)?)(h|min|m|s|ms)?$/.exec(value);
+  if (offset) {
+    const n = Number(offset[1]);
+    const unit = offset[2] ?? "s";
+    const scale = unit === "h" ? 3600_000 : unit === "min" || unit === "m" ? 60_000 : unit === "ms" ? 1 : 1000;
+    return Math.round(n * scale);
+  }
+  const clock = /^(?:(\d+):)?(\d{1,2}):(\d{2})(?:[.,](\d{1,3}))?$/.exec(value);
+  if (!clock) return NaN;
+  const [, h, m, sec, frac] = clock;
+  const millis = frac ? Number(frac.padEnd(3, "0")) : 0;
+  return (Number(h ?? 0) * 3600 + Number(m) * 60 + Number(sec)) * 1000 + millis;
+}
+
+/**
+ * Timed-text XML. Three shapes reach us: YouTube srv3 (`<p t= d=>`), YouTube
+ * srv1 (`<text start= dur=>`), and TTML/DFXP (`<p begin= end=>`), which is
+ * what Kaltura serves for many caption assets. TTML used to parse as zero
+ * cues and be reported as a track with nothing readable in it.
  */
 function parseTimedText(xml: string): TranscriptCue[] {
   const cues: TranscriptCue[] = [];
   const element = /<(p|text)\b([^>]*)>([\s\S]*?)<\/\1>/g;
   for (const match of xml.matchAll(element)) {
     const attrs = match[2];
-    const startRaw = /\b(?:t|start)="([\d.]+)"/.exec(attrs)?.[1];
-    const durRaw = /\b(?:d|dur)="([\d.]+)"/.exec(attrs)?.[1];
-    if (startRaw === undefined) continue;
-    // srv3 counts milliseconds, srv1 counts fractional seconds.
-    const seconds = match[1] === "text";
-    const startMs = Math.round(Number(startRaw) * (seconds ? 1000 : 1));
-    const durMs = durRaw === undefined ? 0 : Math.round(Number(durRaw) * (seconds ? 1000 : 1));
-    if (!Number.isFinite(startMs)) continue;
+    const numericStart = /\b(?:t|start)="([\d.]+)"/.exec(attrs)?.[1];
+    const numericDur = /\b(?:d|dur)="([\d.]+)"/.exec(attrs)?.[1];
+    const beginRaw = /\bbegin="([^"]+)"/.exec(attrs)?.[1];
+    const endRaw = /\bend="([^"]+)"/.exec(attrs)?.[1];
+    const ttmlDur = /\bdur="([^"]+)"/.exec(attrs)?.[1];
+
+    let startMs: number;
+    let durMs: number;
+    if (beginRaw !== undefined) {
+      startMs = parseTimeExpression(beginRaw);
+      const endMs = endRaw !== undefined ? parseTimeExpression(endRaw) : NaN;
+      durMs = Number.isFinite(endMs)
+        ? endMs - startMs
+        : ttmlDur !== undefined ? parseTimeExpression(ttmlDur) : 0;
+    } else if (numericStart !== undefined) {
+      // srv3 counts milliseconds, srv1 counts fractional seconds.
+      const seconds = match[1] === "text";
+      startMs = Math.round(Number(numericStart) * (seconds ? 1000 : 1));
+      durMs = numericDur === undefined ? 0 : Math.round(Number(numericDur) * (seconds ? 1000 : 1));
+    } else {
+      continue;
+    }
+    if (!Number.isFinite(startMs) || !Number.isFinite(durMs)) continue;
     // <s> word segments inside a <p> carry the words for ASR tracks.
     const text = decodeEntities(match[3].replace(/<[^>]*>/g, " ")).replace(/\s+/g, " ").trim();
-    if (text) cues.push({ startMs, endMs: startMs + durMs, text });
+    if (text) cues.push({ startMs, endMs: startMs + Math.max(0, durMs), text });
   }
   return cues;
 }

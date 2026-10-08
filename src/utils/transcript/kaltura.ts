@@ -26,8 +26,25 @@ import type { FetchLike, TranscriptResult } from "./types.js";
 
 const KALTURA_API_BASE = "https://cdnapisec.kaltura.com/api_v3/service";
 
+/*
+ * Two different error envelopes. `format=1` (JSON) returns a *top-level*
+ * `KalturaAPIException` object -- not a nested `error` -- so checking only
+ * `data.error` never fired: a rejected session or an access-controlled entry
+ * left `objects` undefined, which read as an empty list and was reported as
+ * "this video has no captions". Both shapes are now recognised.
+ */
 interface KalturaApiError {
   error?: { message?: string; code?: string };
+  objectType?: string;
+  code?: string;
+  message?: string;
+}
+
+/** The API's own refusal, in either envelope, or undefined when it did not refuse. */
+function apiException(data: KalturaApiError): string | undefined {
+  if (data.error) return data.error.message ?? data.error.code ?? "unknown error";
+  if (data.objectType === "KalturaAPIException") return data.message ?? data.code ?? "unknown error";
+  return undefined;
 }
 
 interface KalturaCaptionAsset {
@@ -69,12 +86,16 @@ async function listCaptionAssets(
     throw new TranscriptFetchError(`Kaltura caption list request failed (HTTP ${res.status}).`);
   }
   const data = (await res.json()) as KalturaApiError & { objects?: KalturaCaptionAsset[] };
-  if (data.error) {
-    throw new TranscriptFetchError(
-      `Kaltura rejected the caption list request: ${data.error.message ?? "unknown error"}.`
-    );
+  const refusal = apiException(data);
+  if (refusal) {
+    throw new TranscriptFetchError(`Kaltura rejected the caption list request: ${refusal}.`);
   }
-  return data.objects ?? [];
+  // A missing `objects` is a malformed answer, not an empty list. Only a real
+  // empty array means the entry genuinely has no caption assets.
+  if (!Array.isArray(data.objects)) {
+    throw new TranscriptFetchError("Kaltura returned an unreadable caption list for this video.");
+  }
+  return data.objects;
 }
 
 async function serveCaption(ks: string, captionAssetId: string, fetchImpl: FetchLike): Promise<string> {
@@ -85,7 +106,17 @@ async function serveCaption(ks: string, captionAssetId: string, fetchImpl: Fetch
   if (!res.ok) {
     throw new TranscriptFetchError(`Kaltura caption download failed (HTTP ${res.status}).`);
   }
-  return res.text();
+  const body = await res.text();
+  // The asset was listed a moment ago, so nothing coming back is a refusal,
+  // not an absence. An error page arrives as JSON here rather than as cues.
+  if (!body.trim()) {
+    throw new TranscriptFetchError("Kaltura listed a caption asset for this video but served an empty response for it.");
+  }
+  const refusal = body.trimStart().startsWith("{") ? apiException(JSON.parse(body) as KalturaApiError) : undefined;
+  if (refusal) {
+    throw new TranscriptFetchError(`Kaltura refused to serve the caption asset: ${refusal}.`);
+  }
+  return body;
 }
 
 /** Best-effort title/duration — a caption-only entry still has a usable transcript without this. */
@@ -119,13 +150,31 @@ export async function getKalturaTranscript(
     throw new NoTranscriptError("This Kaltura video has no captions available.");
   }
 
-  const asset = assets.find((a) => a.isDefault) ?? assets[0];
-  const raw = await serveCaption(ks, asset.id, fetchImpl);
-  const { format, cues } = parseCaptions(raw);
-
-  if (cues.length === 0) {
-    throw new NoTranscriptError("This Kaltura video has a caption track, but it contained no readable cues.");
+  // Try the default asset first, then the rest: an entry can carry a stale or
+  // empty asset alongside a good one, and giving up on the first was enough to
+  // report a captioned lecture as having no transcript.
+  const ordered = [...assets].sort((a, b) => Number(Boolean(b.isDefault)) - Number(Boolean(a.isDefault)));
+  let asset = ordered[0];
+  let parsed: ReturnType<typeof parseCaptions> | undefined;
+  let lastError: Error | undefined;
+  for (const candidate of ordered) {
+    try {
+      const attempt = parseCaptions(await serveCaption(ks, candidate.id, fetchImpl));
+      if (attempt.cues.length > 0) {
+        asset = candidate;
+        parsed = attempt;
+        break;
+      }
+    } catch (error) {
+      lastError = error instanceof Error ? error : undefined;
+    }
   }
+  if (!parsed) {
+    throw lastError ?? new TranscriptFetchError(
+      "Kaltura served this video's caption assets in a format that could not be read.",
+    );
+  }
+  const { format, cues } = parsed;
 
   const media = await fetchMediaInfo(ks, entryId, fetchImpl);
 
