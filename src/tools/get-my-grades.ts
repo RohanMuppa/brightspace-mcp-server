@@ -6,7 +6,7 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { D2LApiClient, DEFAULT_CACHE_TTLS } from "../api/index.js";
-import { fetchAllItems } from "../api/paginate.js";
+import { fetchAllItems, fetchAllObjects } from "../api/paginate.js";
 import {
   GetMyGradesSchema,
 } from "./schemas.js";
@@ -60,11 +60,10 @@ const QUIZ_FEEDBACK_NOTE =
  */
 async function fetchQuizzes(apiClient: D2LApiClient, courseId: number): Promise<QuizListItem[]> {
   try {
-    const raw = await apiClient.get<{ Objects: QuizListItem[] } | QuizListItem[]>(
-      apiClient.le(courseId, "/quizzes/"),
-      { ttl: DEFAULT_CACHE_TTLS.assignments }
-    );
-    return Array.isArray(raw) ? raw : raw?.Objects ?? [];
+    // Quizzes are paged; a course with many of them spills past page one.
+    return await fetchAllObjects<QuizListItem>(apiClient, apiClient.le(courseId, "/quizzes/"), {
+      ttl: DEFAULT_CACHE_TTLS.assignments,
+    });
   } catch (error) {
     log("DEBUG", `get_my_grades: quiz list unavailable for course ${courseId}`, error);
     return [];

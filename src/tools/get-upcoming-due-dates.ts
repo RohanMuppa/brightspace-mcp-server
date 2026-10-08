@@ -6,6 +6,7 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { D2LApiClient, DEFAULT_CACHE_TTLS } from "../api/index.js";
+import { fetchAllObjects } from "../api/paginate.js";
 import {
   GetUpcomingDueDatesSchema,
 } from "./schemas.js";
@@ -156,10 +157,10 @@ async function fetchCourseDueItems(
       apiClient.le(course.id, "/dropbox/folders/"),
       { ttl: DEFAULT_CACHE_TTLS.assignments }
     ),
-    apiClient.get<{ Objects: QuizReadData[] } | QuizReadData[]>(
-      apiClient.le(course.id, "/quizzes/"),
-      { ttl: DEFAULT_CACHE_TTLS.assignments }
-    ),
+    // Quizzes are paged; a course with many of them spills past page one.
+    fetchAllObjects<QuizReadData>(apiClient, apiClient.le(course.id, "/quizzes/"), {
+      ttl: DEFAULT_CACHE_TTLS.assignments,
+    }),
     fetchDiscussionDueTopics(apiClient, course.id),
     fetchCourseCalendarEvents(apiClient, baseUrl, course, from, to),
   ]);
@@ -199,7 +200,7 @@ async function fetchCourseDueItems(
   }
 
   if (quizResult.status === "fulfilled") {
-    for (const quiz of unwrapList<QuizReadData>(quizResult.value)) {
+    for (const quiz of quizResult.value) {
       if (quiz.IsActive === false) continue;
 
       // Many instructors set only an End Date, which is the effective deadline.
