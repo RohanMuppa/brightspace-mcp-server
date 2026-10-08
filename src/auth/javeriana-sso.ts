@@ -8,7 +8,7 @@ import { MfaApprovalError, UnsupportedAuthenticationError } from "./sso-flow.js"
 import type { OnMfaChallenge, RequestMfaCode } from "./sso-flow.js";
 
 /**
- * Ported from Joshua Mendez (@JoshuaMontclair)'s fork, branch
+ * Ported from Joshua Montclair (@JoshuaMontclair)'s fork, branch
  * feat/javeriana-cali-sso (MIT). The fork's stored-TOTP-secret path and its
  * separate sso-factory.ts are not carried over: here, as with every other
  * code-based MFA in this project, the authenticator code is typed by a
