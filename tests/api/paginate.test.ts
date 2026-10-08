@@ -101,6 +101,15 @@ describe("fetchAllObjects", () => {
     expect(requested).toEqual(["/classlist/paged/"]);
   });
 
+  it("takes a bare array response as the whole list", async () => {
+    const { apiClient, requested } = makeApiClient([[{ name: "ada" }, { name: "grace" }]]);
+
+    const users = await fetchAllObjects<{ name: string }>(apiClient as any, "/quizzes/");
+
+    expect(users.map((u) => u.name)).toEqual(["ada", "grace"]);
+    expect(requested).toEqual(["/quizzes/"]);
+  });
+
   it("follows Next given as a bare bookmark", async () => {
     const { apiClient, requested } = makeApiClient([
       objectPage(["ada"], "b1"),

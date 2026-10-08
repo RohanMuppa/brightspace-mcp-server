@@ -6,7 +6,7 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { D2LApiClient, DEFAULT_CACHE_TTLS } from "../api/index.js";
-import { fetchAllItems } from "../api/paginate.js";
+import { fetchAllItems, fetchAllObjects } from "../api/paginate.js";
 import { GetAssignmentsSchema } from "./schemas.js";
 import { toolResponse, sanitizeError, isAuthUnavailable, authPendingNotice } from "./tool-helpers.js";
 import { convertHtmlToMarkdown } from "../utils/html-converter.js";
@@ -286,10 +286,10 @@ export async function fetchCourseAssignments(
       apiClient.le(courseId, "/dropbox/folders/"),
       { ttl: DEFAULT_CACHE_TTLS.assignments }
     ),
-    apiClient.get<{ Objects: QuizReadData[] } | QuizReadData[]>(
-      apiClient.le(courseId, "/quizzes/"),
-      { ttl: DEFAULT_CACHE_TTLS.assignments }
-    ),
+    // Quizzes are paged; a course with many of them spills past page one.
+    fetchAllObjects<QuizReadData>(apiClient, apiClient.le(courseId, "/quizzes/"), {
+      ttl: DEFAULT_CACHE_TTLS.assignments,
+    }),
     apiClient.get<GradeObject[]>(apiClient.le(courseId, "/grades/"), {
       ttl: DEFAULT_CACHE_TTLS.assignments,
     }),
@@ -452,11 +452,7 @@ export async function fetchCourseAssignments(
   // forbidden or unavailable, so a failed list starts from an empty set.
   let quizzes: QuizReadData[] = [];
   if (quizResult.status === "fulfilled") {
-    const quizResponse = quizResult.value;
-    // D2L quizzes API returns paged result { Objects: [...] } or a plain array
-    quizzes = Array.isArray(quizResponse)
-      ? quizResponse
-      : (quizResponse as any)?.Objects ?? [];
+    quizzes = quizResult.value;
   } else {
     log("DEBUG", `Failed to fetch quizzes for course ${courseId}`, quizResult.reason);
   }

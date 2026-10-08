@@ -23,7 +23,7 @@ interface PagedItems<T> {
   PagingInfo?: { HasMoreItems?: boolean; Bookmark?: string | null } | null;
 }
 
-/** The { Objects, Next } envelope, used by the paged classlist. */
+/** The { Objects, Next } envelope, used by the paged classlist, calendar and quizzes. */
 interface PagedObjects<T> {
   Objects?: T[] | null;
   Next?: string | null;
@@ -80,6 +80,7 @@ export async function fetchAllItems<T>(
 
 /**
  * Every object across every page of a { Objects, Next } endpoint, in order.
+ * A bare array response is taken as the complete list.
  *
  * Next arrives either as a full next-page URL or as a bare bookmark, so the
  * absolute form is reduced to its path and query and anything else is treated
@@ -101,8 +102,13 @@ export async function fetchAllObjects<T>(
       break;
     }
 
-    const response: PagedObjects<T> = await apiClient.get<PagedObjects<T>>(path, options);
+    const response: PagedObjects<T> | T[] = await apiClient.get<PagedObjects<T> | T[]>(path, options);
     pages += 1;
+    // Some tenants answer a paged route with a bare array: that is the whole list.
+    if (Array.isArray(response)) {
+      objects.push(...response);
+      break;
+    }
     objects.push(...(response?.Objects ?? []));
 
     const next = response?.Next;
