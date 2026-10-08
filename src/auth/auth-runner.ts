@@ -61,6 +61,15 @@ const CALL_BUDGET_MS = 55000;
 const ABANDON_MS = MFA_POLL_MS;
 
 /**
+ * Calls arriving within this long of a batch's first call count as that batch
+ * (issue #212). A client running tool calls in parallel sends them within
+ * milliseconds; a model retrying after reading an answer takes a whole round
+ * trip, and each call is held up to CALL_BUDGET_MS anyway, so a retry always
+ * lands in a fresh batch and gets the number again.
+ */
+const WAVE_MS = 5000;
+
+/**
  * Milliseconds until a background sign-in counts as abandoned; zero or less
  * means it already is. A caller still waiting keeps it alive outright;
  * otherwise the clock runs from the latest moment anyone attended to it.
@@ -105,6 +114,12 @@ export class AuthProcessError extends AuthError {
      * it was scraped from the page, so it is safe to surface verbatim.
      */
     public readonly numberMatch?: string,
+    /**
+     * Another call in the same parallel batch already carried this exact
+     * challenge to the user (issue #212), so this one should answer briefly
+     * instead of repeating the number and the instructions.
+     */
+    public readonly duplicate: boolean = false,
   ) {
     super(message);
     this.name = "AuthProcessError";
@@ -201,6 +216,38 @@ function forwardLines(
  * running in the background; a later run() call joins that background child
  * instead of spawning a second one.
  */
+/**
+ * The first call in a batch to report a challenge carries it in full; every
+ * later call reporting the SAME challenge answers briefly (issue #212).
+ *
+ * Only calls that joined BEFORE the first report are siblings; joinWave opens
+ * a fresh batch for anything after it (see the comment in the body).
+ *
+ * First-reporter-wins, decided synchronously, rather than "wait for the
+ * owner": a caller holding a progress token keeps polling up to 45 s after
+ * the challenge, and making the others wait on it would hold them that long.
+ * A refreshed number is a different challenge and is reported in full again,
+ * so the digits always reach at least one response. Only the report is
+ * deduplicated: the challenge relay between processes (mfa-challenge.ts) and
+ * its abandonment signal are untouched.
+ */
+interface Wave { openedAt: number; delivered: Set<string>; closed: boolean }
+
+function dedupeChallenge(error: unknown, wave: Wave): unknown {
+  if (!(error instanceof AuthProcessError) || error.kind !== "mfaPending" || error.duplicate) return error;
+  const key = error.numberMatch ?? "";
+  if (!wave.delivered.has(key)) {
+    wave.delivered.add(key);
+    // Once a challenge has gone back to the user, the batch is over: every
+    // call already in it is a sibling, but a call arriving from now on is a
+    // RETRY -- quite possibly because the client hid this very answer -- and
+    // must get the digits in full. This is what keeps #201's guarantee.
+    wave.closed = true;
+    return error;
+  }
+  return new AuthProcessError(error.kind, error.message, error.numberMatch, true);
+}
+
 export class AuthRunner {
   /**
    * The login this process already started, if one is still running.
@@ -233,6 +280,12 @@ export class AuthRunner {
   private waiting = 0;
   /** When the last caller left run(). */
   private lastAttendedAt = 0;
+  /**
+   * The current parallel batch and the challenges already handed to one of
+   * its calls (issue #212). The sign-in itself is shared through inFlight and
+   * childDone; this only stops every call in the batch repeating the number.
+   */
+  private wave: Wave | null = null;
   private readonly scriptPath: string;
   private readonly timeoutMs: number;
   private readonly onProgress?: (line: string) => void;
@@ -264,13 +317,25 @@ export class AuthRunner {
    * the next call to join.
    */
   async run(onChallenge?: (numberMatch: string | undefined) => void): Promise<boolean> {
+    // Synchronous, before any await: calls in one tick cannot split a batch.
+    const wave = this.joinWave();
     this.waiting += 1;
     try {
       return await this.attend(onChallenge);
+    } catch (error) {
+      throw dedupeChallenge(error, wave);
     } finally {
       this.waiting -= 1;
       this.lastAttendedAt = Date.now();
     }
+  }
+
+  private joinWave(): Wave {
+    const now = Date.now();
+    if (!this.wave || this.wave.closed || now - this.wave.openedAt > WAVE_MS) {
+      this.wave = { openedAt: now, delivered: new Set(), closed: false };
+    }
+    return this.wave;
   }
 
   private async attend(onChallenge?: (numberMatch: string | undefined) => void): Promise<boolean> {
@@ -454,6 +519,7 @@ export class AuthRunner {
           this.childDone = null;
           this.pendingChallenge = null;
           this.challengeSignal = null;
+          this.wave = null;
         }
       });
       trackedCompletion.catch(() => { /* see comment above */ });
