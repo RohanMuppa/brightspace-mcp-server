@@ -36,10 +36,13 @@ const NUMBER_MATCH_SELECTOR = "#idRichContext_DisplaySign";
  * which the tenant shows instead of a password page once the account has
  * registered passwordless sign-in in Authenticator. The "Use your password
  * instead" link is the marker browser-auth.ts already relies on; the
- * RemoteNGC ids are EXPECTED, not verified against a live tenant from here.
+ * RemoteNGC ids were verified live on Purdue's tenant on 2026-10-09 (#idRemoteNGC_DisplaySign,
+ * #idDiv_RemoteNGC_PollingDescription, #idA_PWD_SwitchToPassword).
  * The number shown there is typed into Authenticator like number match.
  */
 const PASSWORDLESS_NUMBER_SELECTOR = "#idRemoteNGC_DisplaySign";
+/** The approval view's "Use your password instead" link (live-verified on Purdue, 2026-10-09). */
+const PASSWORDLESS_SWITCH_SELECTOR = "#idA_PWD_SwitchToPassword";
 const PASSWORDLESS_APPROVAL_SELECTORS = [
   PASSWORDLESS_NUMBER_SELECTOR,
   "#idDiv_RemoteNGC_PollingDescription",
@@ -479,6 +482,8 @@ export class PurdueSSOFlow {
      * login announces and waits exactly as it would with no enrollment saved.
      */
     let methodSwitchExhausted = false;
+    /** "Use your password instead" clicks this login; capped so a page that keeps offering it cannot loop. */
+    let passwordSwitches = 0;
     /** True once Duo answered a challenge: Duo's codes are not Entra's. */
     let duoChallengeObserved = false;
     let announced: string | null = null;
@@ -510,6 +515,28 @@ export class PurdueSSOFlow {
           challenged = true;
           manualChallenged = true;
           duoChallengeObserved = true;
+        }
+        // Passwordless phone sign-in in place of the password page. Once an
+        // account turns on phone sign-in in Authenticator, Entra answers the
+        // username with its approval view, where automaticCodeApplicable rightly
+        // refuses to type a code: the phone is the FIRST factor there. Only
+        // after the password does Entra ask for a second factor a code can
+        // answer. So with an enrollment AND a password saved, and the
+        // passwordless option off, take "Use your password instead". Without an
+        // enrollment the approval view is left to the phone exactly as before.
+        // Seen live on Purdue's tenant on 2026-10-09 (iclicker-automation#6).
+        if (
+          this.config.totpUri && this.config.password && !this.config.passwordless &&
+          passwordSwitches < 2 && await this.anyVisible(page, [PASSWORDLESS_SWITCH_SELECTOR])
+        ) {
+          passwordSwitches += 1;
+          log("INFO", "Microsoft offered passwordless phone sign-in; using the saved password so the authenticator code can answer MFA.");
+          await this.clickWhenReady(page, [PASSWORDLESS_SWITCH_SELECTOR]);
+          if (await this.fillWhenReady(page, PASSWORD_SELECTORS, this.config.password)) {
+            await this.clickWhenReady(page, SUBMIT_SELECTORS);
+          }
+          await page.waitForTimeout(METHOD_SWITCH_SETTLE_MS);
+          continue;
         }
         // Whether this poll may answer the challenge itself. Recomputed every
         // poll, because the page — and so the identity provider and method on

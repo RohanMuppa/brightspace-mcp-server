@@ -38,6 +38,8 @@ interface PollState {
   kmsi?: boolean;
   /** Microsoft's passwordless phone-approval view and its number. */
   approval?: string;
+  /** A visible password field (and the submit button beneath it). */
+  password?: boolean;
   url?: string;
   cookie?: boolean;
   d2l?: boolean;
@@ -77,7 +79,9 @@ function makeMfaPage(states: PollState[]) {
       if (selector === "#idDiv_SAOTCAS_Title" || selector === "#idDiv_SAOTCC_Title") {
         return Boolean(current().challenge || current().code);
       }
-      if (selector === "#KmsiCheckboxField" || selector === "#idSIButton9") return Boolean(current().kmsi);
+      if (selector === "input[type=password]" || selector === "input[name=passwd]") return Boolean(current().password);
+      if (selector === "#idSIButton9") return Boolean(current().kmsi || current().password);
+      if (selector === "#KmsiCheckboxField") return Boolean(current().kmsi);
       if (selector === APPROVAL_SIGN_SELECTOR || selector === PASSWORD_SWITCH) return current().approval !== undefined;
       return false;
     },
@@ -300,6 +304,34 @@ describe("automatic code sign-in giving way to the approval path", () => {
     expect(methodClick).not.toHaveBeenCalled();
     expect(fills).toHaveLength(0);
     expect(onAutomaticPending).not.toHaveBeenCalled();
+  });
+
+  it("takes 'Use your password instead' on the approval view when a password is saved, then answers the code", async () => {
+    // Live on Purdue (2026-10-09): with phone sign-in on, Entra answers the
+    // username with the approval view. A code cannot stand in for the phone
+    // there, but after the password Entra asks for a second factor it can.
+    const onMfaChallenge = vi.fn();
+    const { page, fills } = makeMfaPage([
+      { approval: "65", password: true },
+      { otherMethod: true, number: "65" },
+      { codeMethod: true },
+      { code: true },
+      { url: `${BASE_URL}/d2l/home`, cookie: true, d2l: true },
+    ]);
+    await handleMFA(flowFor({ totpUri: URI, password: "pw", onMfaChallenge } as FlowOptions), page);
+    expect(fills[0].value).toBe("pw");
+    expect(fills).toHaveLength(2);
+    expect(fills[1].value).toBe(generateTotp(URI, fills[1].at));
+    expect(onMfaChallenge).not.toHaveBeenCalled();
+  });
+
+  it("leaves the approval view to the phone when no enrollment is saved, password or not", async () => {
+    const onMfaChallenge = vi.fn();
+    const { page, fills } = makeMfaPage([{ approval: "71", password: true }]);
+    await expect(handleMFA(flowFor({ password: "pw", onMfaChallenge } as FlowOptions), page))
+      .rejects.toBeInstanceOf(MfaApprovalError);
+    expect(fills).toHaveLength(0);
+    expect(onMfaChallenge).toHaveBeenCalledWith("71");
   });
 
   it("leaves a Duo challenge alone: its codes come from a different enrollment", async () => {

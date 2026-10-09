@@ -54,6 +54,9 @@ If your tenant offers no way to type a code, sign-in gives up on the code after 
 goes back to announcing the approval for you to tap, exactly as it does with no key saved. A Duo
 challenge is left alone (Duo codes come from a different enrollment), and so is Microsoft's
 passwordless approval view, where the phone *is* the first factor and no code can stand in for it.
+If Microsoft shows that approval view only because phone sign-in is turned on in your Authenticator
+app, and you have a password saved with the `passwordless` option off, sign-in takes "Use your
+password instead" so the code can answer the second factor that follows.
 
 ## If it gets stuck
 
