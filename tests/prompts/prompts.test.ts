@@ -226,17 +226,25 @@ describe("study_planner prompt", () => {
     ).rejects.toThrow();
   });
 
-  it("rejects (via the SDK's own argument validation, not a callback crash) a " +
-    "request that omits the arguments field entirely", async () => {
+  it("never crashes on a request that omits the arguments field entirely", async () => {
     // study_planner (unlike weekly_briefing) still declares `daysAhead` via
     // argsSchema so it shows up, correctly marked optional, in prompts/list.
-    // That keeps the SDK's own `arguments` validation in play for every call,
-    // so a GetPrompt request omitting `arguments` entirely is rejected by the
-    // SDK before our callback runs — the same as any prompt with a declared
-    // argument. What the callback's `args ?? {}` guard buys us is that it can
-    // never crash with a raw TypeError on `args.daysAhead` if `args` itself
-    // ever arrives undefined, rather than closing this SDK-level gap.
-    await expect(client.getPrompt({ name: "study_planner" })).rejects.toThrow();
+    // What a GetPrompt request with no `arguments` field gets depends on the
+    // SDK, and the dependency range admits both: through 1.31 the SDK's own
+    // argument validation rejects it before our callback runs; from 1.32 it
+    // validates as empty and the callback serves the 7-day default. Either is
+    // fine. What the callback's `args ?? {}` guard rules out is the third
+    // outcome, a raw TypeError on `args.daysAhead` when `args` is undefined.
+    const outcome = await client.getPrompt({ name: "study_planner" }).then(
+      (result) => ({ resolved: true as const, result }),
+      (error: unknown) => ({ resolved: false as const, error }),
+    );
+    if (outcome.resolved) {
+      const text = (outcome.result.messages[0].content as { text: string }).text;
+      expect(text).toContain("7 days");
+    } else {
+      expect(String(outcome.error)).not.toMatch(/TypeError|Cannot read propert/);
+    }
   });
 });
 
