@@ -13,8 +13,9 @@ import { NativeCredentialStoreError } from "./auth/credential-store.js";
 import { retireLegacyProfile } from "./auth/legacy-profile.js";
 import { formatPhaseMarker, type AuthPhase } from "./auth/auth-phases.js";
 import { AuthenticationInProgressError } from "./auth/auth-lock.js";
-import { challengeMarker } from "./auth/mfa-challenge.js";
+import { AUTOMATIC_PENDING_MARKER, challengeMarker } from "./auth/mfa-challenge.js";
 import { runLogout } from "./auth/logout.js";
+import { configureDevActivity } from "./utils/dev-activity.js";
 import { AUTH_COMMAND, SETUP_COMMAND } from "./utils/commands.js";
 import { initUpdateChecker, peekUpdateNotice } from "./utils/update-checker.js";
 import { reexecLatestIfStale } from "./utils/self-update.js";
@@ -62,6 +63,9 @@ async function main(): Promise<void> {
 
   try {
     const config = await loadConfig();
+    // The sign-in itself runs here, not in the server, so the dev activity log
+    // only sees its MFA events if this process is configured for them too.
+    configureDevActivity(config.sessionDir);
     console.error(`\n=== Brightspace Authentication v${pkg.version} ===\n`);
     console.error(config.headless
       ? "Authentication runs headlessly. MFA numbers and code prompts appear here."
@@ -84,7 +88,13 @@ async function main(): Promise<void> {
     const onPhase = automatic
       ? (phase: AuthPhase, elapsedMs: number) => console.log(formatPhaseMarker(phase, elapsedMs))
       : undefined;
-    await new BrowserAuth(config, { requestMfaCode: codePrompt, onMfaChallenge, onPhase }).authenticate({
+    // No digits and nothing to approve: just "this sign-in is answering its
+    // own verification code", so the parent can say so instead of sending the
+    // user to their phone.
+    const onAutomaticPending = automatic
+      ? () => console.log(AUTOMATIC_PENDING_MARKER)
+      : undefined;
+    await new BrowserAuth(config, { requestMfaCode: codePrompt, onMfaChallenge, onPhase, onAutomaticPending }).authenticate({
       automatic,
       onAuthenticated: async (token) => {
         await tokenManager.setToken(token);
@@ -108,7 +118,9 @@ async function main(): Promise<void> {
     // Another process's sign-in holds the lock and is showing a challenge:
     // pass it on, so this caller can tell its user what to approve.
     if (automatic && error instanceof AuthenticationInProgressError && error.challenge) {
-      console.log(challengeMarker(error.challenge.numberMatch));
+      console.log(error.challenge.kind === "automatic"
+        ? AUTOMATIC_PENDING_MARKER
+        : challengeMarker(error.challenge.numberMatch));
     }
     process.exitCode = error instanceof NativeCredentialStoreError ? 5
       : code === "AUTH_IN_PROGRESS" ? 2

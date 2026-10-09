@@ -12,6 +12,8 @@ import type { AppConfig } from "../types/index.js";
 import { configStoreExists, getConfigStorePath, loadConfigStore } from "./config-store.js";
 import type { ConfigStoreData } from "./config-store.js";
 import { resolveStoredPassword } from "./secure-config.js";
+import { getStoredTotpUri } from "../auth/credential-store.js";
+import { normalizeTotpEnrollment } from "../auth/totp.js";
 import { migrateLegacyState } from "../auth/legacy-state.js";
 
 /**
@@ -145,6 +147,20 @@ export async function loadConfig(): Promise<AppConfig> {
 
   const { baseUrl, username, sessionRoot, sessionDir } = resolveAccountLocation(store);
   const password = passwordless ? undefined : await resolveStoredPassword(baseUrl, username, store);
+  // Opt-in: only an enrollment the user deliberately saved makes the Entra
+  // sign-in answer a verification-code challenge itself. With none, every MFA
+  // challenge is handled exactly as before. The keyring entry is per account;
+  // D2L_TOTP_SECRET exists for CI and containers, where there is no keyring,
+  // and is deliberately weaker (see .env.example) so it is never the default.
+  const envTotpSecret = readEnvSecret(process.env.D2L_TOTP_SECRET, "D2L_TOTP_SECRET");
+  const totpUri = envTotpSecret
+    ? normalizeTotpEnrollment(envTotpSecret, username ?? "")
+    // A credential store that cannot be read means "no enrollment saved",
+    // which is the default anyway. It must never be a startup failure: this is
+    // an optional extra, and resolveStoredPassword above is already the place
+    // that reports a locked or missing store, loudly, for the credential the
+    // server genuinely cannot work without.
+    : username ? (await getStoredTotpUri(baseUrl, username).catch(() => null)) ?? undefined : undefined;
   const legacyMigration = sessionDir !== sessionRoot ? await migrateLegacyState(sessionRoot) : undefined;
 
   return {
@@ -158,6 +174,7 @@ export async function loadConfig(): Promise<AppConfig> {
     passwordless,
     username,
     password,
+    totpUri,
     campus: process.env.D2L_CAMPUS || store?.campus,
     envAccessToken,
     envSessionCookie,

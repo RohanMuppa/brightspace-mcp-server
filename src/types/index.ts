@@ -65,6 +65,12 @@ export interface AppConfig {
   passwordless?: boolean;
   username?: string;
   password?: string;
+  /**
+   * The account's saved authenticator enrollment (an `otpauth://` URI), read
+   * from the native credential store. Present only when the user saved one;
+   * absent means every MFA challenge is answered the way it always was.
+   */
+  totpUri?: string;
   /** Campus within a shared multi-campus Brightspace instance. */
   campus?: string;
   /**

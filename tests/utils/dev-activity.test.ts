@@ -108,6 +108,17 @@ describe("dev activity", () => {
     devActivity("private-event" as any);
     expect(records()).toHaveLength(1);
   });
+  it("records automatic code sign-in steps without the code or the enrollment", () => {
+    devActivity("mfa_method_selected");
+    devActivity("mfa_code_submitted", { code: "123456", totpUri: "otpauth://totp/x?secret=AAAA" } as any);
+    expect(records().map(record => record.event)).toEqual(["mfa_method_selected", "mfa_code_submitted"]);
+    expect(JSON.stringify(records())).not.toContain("123456");
+    expect(JSON.stringify(records())).not.toContain("otpauth");
+  });
+  it("records an automaticPending recovery reason", () => {
+    devActivity("recovery_finished", { outcome: "error", reason: "automaticPending" });
+    expect(records()[0]).toMatchObject({ event: "recovery_finished", reason: "automaticPending" });
+  });
   it("records a sign-in phase and its duration", () => {
     devActivity("auth_phase", { phase: "silentSso", elapsedMs: 30000 });
     expect(records()[0]).toMatchObject({ event: "auth_phase", phase: "silentSso", elapsedMs: 30000 });

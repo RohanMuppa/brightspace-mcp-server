@@ -19,6 +19,13 @@ import * as path from "node:path";
 import { CHALLENGE_FILE } from "./auth-lock.js";
 
 export interface PendingChallenge {
+  /**
+   * "automatic" when the owner is answering a verification-code challenge
+   * from a saved enrollment: nobody has to approve anything, so a contender
+   * must not tell its user to go find their phone. Absent means the ordinary
+   * approval challenge this file was written for.
+   */
+  kind?: "automatic";
   /** Entra number-match digits, when the challenge shows them. */
   numberMatch?: string;
 }
@@ -33,6 +40,18 @@ export function authLockPath(sessionDir: string): string {
 /** Record the challenge this process's sign-in is showing. Call only while holding the lock. */
 export async function publishChallenge(lockPath: string, numberMatch: string | null): Promise<void> {
   const challenge: PendingChallenge = numberMatch && NUMBER_MATCH.test(numberMatch) ? { numberMatch } : {};
+  await fs.writeFile(path.join(lockPath, CHALLENGE_FILE), JSON.stringify(challenge), { mode: 0o600 });
+}
+
+/**
+ * Record that this process's sign-in is answering its own verification code,
+ * so a contender sharing the session can say so instead of announcing an
+ * approval that was never requested. Written through the same file as a
+ * number-match challenge, so it disappears with the lock and a contender
+ * reading it keeps the sign-in from being abandoned.
+ */
+export async function publishAutomaticProgress(lockPath: string): Promise<void> {
+  const challenge: PendingChallenge = { kind: "automatic" };
   await fs.writeFile(path.join(lockPath, CHALLENGE_FILE), JSON.stringify(challenge), { mode: 0o600 });
 }
 
@@ -52,7 +71,10 @@ export async function relayChallenge(lockPath: string): Promise<PendingChallenge
   const now = new Date();
   await fs.utimes(file, now, now).catch(() => {});
   const numberMatch = (challenge as { numberMatch?: unknown }).numberMatch;
-  return typeof numberMatch === "string" && NUMBER_MATCH.test(numberMatch) ? { numberMatch } : {};
+  const relayed: PendingChallenge = {};
+  if ((challenge as { kind?: unknown }).kind === "automatic") relayed.kind = "automatic";
+  if (typeof numberMatch === "string" && NUMBER_MATCH.test(numberMatch)) relayed.numberMatch = numberMatch;
+  return relayed;
 }
 
 /** When the lock's challenge was last published or relayed, or undefined when there is none. */
@@ -63,6 +85,13 @@ export function challengeRelayedAt(lockPath: string): number | undefined {
     return undefined;
   }
 }
+
+/**
+ * The stdout marker for a sign-in that is answering its own verification
+ * code: no digits to carry, and nothing for the user to do but wait. Kept
+ * beside challengeMarker so the child and AuthRunner cannot drift apart.
+ */
+export const AUTOMATIC_PENDING_MARKER = "AUTH_AUTOMATIC_PENDING";
 
 /** The stdout marker AuthRunner parses for a challenge. */
 export function challengeMarker(numberMatch: string | null | undefined): string {
