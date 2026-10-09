@@ -153,11 +153,17 @@ const MFA_ALREADY_REPORTED =
   "Brightspace sign-in is already in progress; another call in this batch has the number to " +
   "approve. Retry this call once the sign-in completes.";
 
+const AUTOMATIC_ALREADY_REPORTED =
+  "Brightspace sign-in is already in progress, answering its own verification code; another call " +
+  "in this batch has the details. Retry this call once the sign-in completes. Don't ask the user " +
+  "to approve anything.";
+
 function authFailureMessage(error: AuthProcessError): string {
   // Another call in this parallel batch already carries the number and the
   // instructions (issue #212). Repeating them in every response made a batch
   // unreadable; one short line is enough for this call.
   if (error.kind === "mfaPending" && error.duplicate) return MFA_ALREADY_REPORTED;
+  if (error.kind === "automaticPending" && error.duplicate) return AUTOMATIC_ALREADY_REPORTED;
   if (error.kind === "mfaPending" && error.numberMatch) {
     return `Open Microsoft Authenticator and enter ${error.numberMatch} within 5 minutes. ` +
       "Tell the user that number, then call this tool again right away without waiting for them " +

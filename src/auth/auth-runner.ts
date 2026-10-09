@@ -245,8 +245,11 @@ function forwardLines(
 interface Wave { openedAt: number; delivered: Set<string>; closed: boolean }
 
 function dedupeChallenge(error: unknown, wave: Wave): unknown {
-  if (!(error instanceof AuthProcessError) || error.kind !== "mfaPending" || error.duplicate) return error;
-  const key = error.numberMatch ?? "";
+  // automaticPending repeats across a batch exactly as mfaPending did (#212),
+  // just without digits: one sign-in, N copies of the same paragraph.
+  if (!(error instanceof AuthProcessError) || error.duplicate) return error;
+  if (error.kind !== "mfaPending" && error.kind !== "automaticPending") return error;
+  const key = `${error.kind}:${error.numberMatch ?? ""}`;
   if (!wave.delivered.has(key)) {
     wave.delivered.add(key);
     // Once a challenge has gone back to the user, the batch is over: every
