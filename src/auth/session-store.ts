@@ -16,6 +16,9 @@ import { decrypt, readEncryptedRecord, saveEncryptedRecord, trashFile, type Encr
 
 const DEFAULT_SESSION_DIR = path.join(os.homedir(), ".d2l-session");
 
+/** The saved access token, relative to its session directory. */
+export const SESSION_FILE = "session.json";
+
 function validTenantOrigin(origin: unknown): boolean {
   if (origin === undefined) return true;
   if (typeof origin !== "string") return false;
@@ -50,7 +53,7 @@ export class SessionStore {
 
   constructor(sessionDir = DEFAULT_SESSION_DIR, private readonly options: SecureStoreOptions = {}) {
     this.sessionDir = sessionDir;
-    this.sessionFilePath = path.join(sessionDir, "session.json");
+    this.sessionFilePath = path.join(sessionDir, SESSION_FILE);
   }
 
   private async withWriteLock<T>(operation: () => Promise<T>): Promise<T> {
@@ -197,6 +200,29 @@ export class SessionStore {
       });
     } catch (error) {
       this.storeError("clear", error);
+    }
+  }
+
+  /**
+   * Delete the saved session without decrypting it, so a damaged file or a
+   * locked credential store cannot keep someone signed in. Permanent rather
+   * than moved to Trash: a session that was signed out on purpose should not
+   * stay recoverable. The encryption key stays in the credential store for the
+   * next sign-in. Resolves true when a file was removed.
+   */
+  async remove(): Promise<boolean> {
+    try {
+      return await this.withWriteLock(async () => {
+        try {
+          await fs.unlink(this.sessionFilePath);
+          return true;
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+          throw error;
+        }
+      });
+    } catch (error) {
+      this.storeError("remove", error);
     }
   }
 

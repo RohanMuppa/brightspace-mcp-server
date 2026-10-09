@@ -39,7 +39,8 @@ interface SummaryFile {
   rememberMfa: RememberMfaResult | null;
 }
 
-const SUMMARY_FILE = "microsoft-session.json";
+/** The plain summary, relative to its session directory. */
+export const MICROSOFT_SESSION_FILE = "microsoft-session.json";
 const ENTRA_HOST = "login.microsoftonline.com";
 const ENTRA_COOKIES = new Set(["ESTSAUTH", "ESTSAUTHPERSISTENT", "ESTSAUTHLIGHT"]);
 const OUTCOMES: readonly RememberMfaOutcome[] = ["ticked", "already", "absent", "unknown", "off"];
@@ -76,7 +77,7 @@ function validSummary(value: unknown): value is SummaryFile {
 
 async function readSummary(sessionDir: string): Promise<SummaryFile | undefined> {
   try {
-    const summary = JSON.parse(await fs.readFile(path.join(sessionDir, SUMMARY_FILE), "utf8"));
+    const summary = JSON.parse(await fs.readFile(path.join(sessionDir, MICROSOFT_SESSION_FILE), "utf8"));
     return validSummary(summary) ? summary : undefined;
   } catch {
     return undefined;
@@ -94,7 +95,7 @@ export async function recordMicrosoftSession(sessionDir: string, state: BrowserS
     rememberMfa: rememberMfa ?? (await readSummary(sessionDir))?.rememberMfa ?? null,
   };
   await fs.mkdir(sessionDir, { recursive: true, mode: 0o700 });
-  await writeFileAtomic(path.join(sessionDir, SUMMARY_FILE), JSON.stringify(summary), { mode: 0o600 });
+  await writeFileAtomic(path.join(sessionDir, MICROSOFT_SESSION_FILE), JSON.stringify(summary), { mode: 0o600 });
 }
 
 /** The summary for saved browser state, or undefined when there is none. */

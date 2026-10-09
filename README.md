@@ -115,6 +115,8 @@ npx -y brightspace-mcp-server@latest auth
 
 **On a Mac,** sign-in first reads your saved password from Keychain. If you picked a one-time **Allow** at the Keychain prompt, a later sign-in from your AI app or another terminal can fail or hang waiting for an approval nobody sees; pick **Always Allow** instead. That permission only lets the local Brightspace server read its own saved sign-in password, nothing else in your Keychain.
 
+**To sign out early** (on a shared computer, say), run `npx -y brightspace-mcp-server@latest auth --logout`. It deletes this computer's saved Brightspace session, so the next question does a full sign-in. Your saved password and settings are kept. An AI app that is already running can keep answering until its current access token expires; restart the app to drop it right away. It only clears this computer; it does not sign you out of Microsoft or Brightspace anywhere else. If a sign-in is in progress, it refuses and deletes nothing.
+
 How often you're asked is up to your school, not this tool. Everything else about sign-in — Duo, authenticator codes, visible-browser mode, and running without a browser at all (Docker, WSL, hardware keys) — is in [docs/sign-in.md](docs/sign-in.md).
 
 ## Something not working?

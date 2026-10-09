@@ -20,6 +20,9 @@ export const PACKAGE_NAME = "brightspace-mcp-server";
 /** Re-authenticate. Always runs the current published release. */
 export const AUTH_COMMAND = `npx -y ${PACKAGE_NAME}@latest auth`;
 
+/** End the saved Brightspace session on this computer. Always runs the current published release. */
+export const LOGOUT_COMMAND = `npx -y ${PACKAGE_NAME}@latest auth --logout`;
+
 /** Re-run the setup wizard. Always runs the current published release. */
 export const SETUP_COMMAND = `npx -y ${PACKAGE_NAME}@latest setup`;
 

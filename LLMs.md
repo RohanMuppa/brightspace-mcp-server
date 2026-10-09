@@ -119,6 +119,20 @@ Visible mode applies to the manual `auth` command, whose window remains open for
 npx -y brightspace-mcp-server@latest auth
 ```
 
+## Sign out early (`auth --logout`)
+
+When the user wants to end the saved session before it lapses (a shared computer, handing the machine on, forcing a fresh sign-in), have them run:
+
+```bash
+npx -y brightspace-mcp-server@latest auth --logout
+```
+
+It resolves the account's session directory exactly as sign-in does (`D2L_SESSION_DIR` override, else the configured or default `~/.d2l-session`, plus `accounts/<account-hash>/` only when a username is configured) and deletes `session.json`, `storage-state.encrypted.json`, and `microsoft-session.json` there, plus a plaintext `storage-state.json` if an old install left one. It prints the names it removed. The next tool call, or `auth`, does a full sign-in.
+
+It never touches the saved password, `config.json`, any authenticator or credential-store entry (the session encryption key stays and is reused), other accounts' directories, or the MFA cooldown record. This is a local sign-out only: it does not log out of Microsoft or D2L on their servers. A running MCP server may keep an access token in memory until it expires, so tell the user to restart their AI client to drop it immediately.
+
+It holds the sign-in lock while deleting and never takes over a running sign-in. If a sign-in is in progress it deletes nothing, says so, and exits 2 (the code `auth` uses for the same case); with nothing to clear it says so and exits 0; any other failure exits 1.
+
 ## Browser-free sign-in (`D2L_SESSION_COOKIE` / `D2L_ACCESS_TOKEN`)
 
 Two opt-in environment variables bypass the Playwright browser entirely, for Docker, headless Linux, WSL without a display, or a tenant whose MFA requires a hardware key. Neither changes anything for a user who doesn't set them.
@@ -225,7 +239,7 @@ While a sign-in is still being worked on in the background, `get_assignments`, `
 src/
   index.ts                  MCP server entrypoint, registers tools
   setup.ts                  Setup wizard (CLI subcommand `setup`)
-  auth-cli.ts               Manual reauth (CLI subcommand `auth`)
+  auth-cli.ts               Manual reauth (CLI subcommand `auth`; `auth --logout` ends the saved session)
   doctor.ts                 Beginner diagnostic (CLI subcommand `doctor`)
   update.ts                 Self-update checker
   tools/
@@ -265,6 +279,7 @@ src/
     browser-state-store.ts  Encrypted cookie and browser storage persistence
     credential-store.ts     Native password and encryption-key storage
     auth-lock.ts            Process-shared authentication and write locks
+    logout.ts               `auth --logout`: deletes the saved session files under the sign-in lock
     mfa-challenge.ts        Pending MFA challenge shared with other processes through the lock directory
     auth-cooldown.ts        Failed-MFA automatic retry policy
     token-manager.ts        Token refresh and validation
@@ -294,6 +309,7 @@ src/
 | `npx -y brightspace-mcp-server@latest setup --ngeeann` | Setup with Ngee Ann Polytechnic preset |
 | `npx -y brightspace-mcp-server@latest setup --javeriana` | Setup with Javeriana Cali preset |
 | `npx -y brightspace-mcp-server@latest auth` | Manual reauth |
+| `npx -y brightspace-mcp-server@latest auth --logout` | Delete this computer's saved session so the next call does a full sign-in. Keeps the password, `config.json`, and credential-store entries. Local only |
 | `npx -y brightspace-mcp-server@latest doctor` | Diagnose a broken setup — Node version, saved config, credential store, Brightspace reachability, saved sign-in, a real course-list call, and installed version, each as a ✓/✗ line with one plain-English next step |
 | `npx -y brightspace-mcp-server@latest` | Run the MCP server (registered in AI client config) |
 | `npm run build` | Compile TypeScript to `build/` |
