@@ -241,6 +241,7 @@ async function getForumDetail(
       }
     }
 
+    const formatted = formatPosts(posts);
     topicsWithPosts.push({
       topicId: topic.TopicId,
       name: topic.Name,
@@ -251,8 +252,8 @@ async function getForumDetail(
       isLocked: topic.IsLocked,
       mustPostToParticipate: topic.MustPostToParticipate,
       scoreOutOf: topic.ScoreOutOf,
-      postCount: posts.length,
-      posts: formatPosts(posts),
+      postCount: formatted.length,
+      posts: formatted,
     });
   }
 
@@ -302,9 +303,12 @@ async function getTopicPosts(
     ttl: DEFAULT_CACHE_TTLS.announcements,
   });
 
+  // Count what is returned: formatPosts drops deleted posts.
+  const formatted = formatPosts(posts);
+
   log(
     "INFO",
-    `get_discussions: Retrieved ${posts.length} posts for topic ${topicId} in forum ${forumId}`
+    `get_discussions: Retrieved ${formatted.length} posts for topic ${topicId} in forum ${forumId}`
   );
 
   return toolResponse({
@@ -321,8 +325,8 @@ async function getTopicPosts(
       mustPostToParticipate: topic.MustPostToParticipate,
       scoreOutOf: topic.ScoreOutOf,
     },
-    postCount: posts.length,
-    posts: formatPosts(posts),
+    postCount: formatted.length,
+    posts: formatted,
   });
 }
 
