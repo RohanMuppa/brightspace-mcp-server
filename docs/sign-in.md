@@ -20,6 +20,44 @@ Answering yes to `setup`'s "Sign in without a saved password" question (saved as
 
 The tradeoff: **every sign-in needs your phone**, because there is no password for the server to supply. That's fine when you're at your desk using an assistant, and bad for anything unattended (a scheduled job, a headless agent) — automatic re-sign-in after a session expires waits until someone approves. Passwordless phone sign-in must already be turned on for your account in Microsoft Authenticator. If Microsoft asks for a password anyway, sign-in stops with an error naming `D2L_PASSWORDLESS` instead of waiting out the timeout; turn passwordless off and rerun `setup` to save a password.
 
+## Answering code challenges without your phone
+
+Some Microsoft Entra tenants ask for a **6-digit verification code** rather than a number to approve.
+If you save the authenticator **setup key** for that enrollment, sign-in switches Microsoft to its
+"Use a verification code" method and types a code it generates on this computer — so an automatic
+re-sign-in after your session expires finishes with nothing from your phone. Off unless you save a
+key; without one, nothing below runs and every challenge is handled exactly as it always was.
+
+Getting the key (Microsoft calls it a *software OATH token*):
+
+1. Go to <https://mysignins.microsoft.com> → **Security info** → **Add sign-in method** → **Authenticator app**.
+2. Choose **I want to use a different authenticator app**, then **Next**.
+3. On the QR page, click **Can't scan image?** Microsoft shows a **secret key** — that string is what to save.
+4. Finish enrollment in whatever app you normally use, so you still have the factor on your phone.
+5. Run `setup` and paste the key (or the whole `otpauth://` link) at the optional authenticator prompt.
+   A code showing on screen right now will not work; it has to be the enrollment key.
+
+Purdue allows this and documents it in its own knowledge base (KB 2219). Other schools may not —
+check your own IT policy before enrolling.
+
+The key is kept in your operating system credential store, next to your password, and is never
+written to `config.json` and never logged (neither is any code generated from it). `D2L_TOTP_SECRET`
+does the same job from the environment, for CI and containers that have no credential store; it is
+weaker, because anything that can read this process's environment gets your second factor.
+
+**The tradeoff, plainly:** a password and a second factor on the same computer are one factor on
+that computer. This still defeats someone who has only your password, from anywhere else, and it
+changes nothing about your other devices — but it defends against nothing already running as you on
+this machine. That is why it is opt-in and off by default. Don't do it on a shared computer.
+
+If your tenant offers no way to type a code, sign-in gives up on the code after half a minute and
+goes back to announcing the approval for you to tap, exactly as it does with no key saved. A Duo
+challenge is left alone (Duo codes come from a different enrollment), and so is Microsoft's
+passwordless approval view, where the phone *is* the first factor and no code can stand in for it.
+If Microsoft shows that approval view only because phone sign-in is turned on in your Authenticator
+app, and you have a password saved with the `passwordless` option off, sign-in takes "Use your
+password instead" so the code can answer the second factor that follows.
+
 ## If it gets stuck
 
 A missed MFA approval pauses automatic sign-in for 5 minutes. This retries immediately, takes over a stuck sign-in, or asks for a code:

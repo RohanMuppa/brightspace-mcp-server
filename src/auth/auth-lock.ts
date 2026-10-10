@@ -46,8 +46,13 @@ export const CHALLENGE_FILE = "challenge.json";
 
 export class AuthenticationInProgressError extends Error {
   readonly code = "AUTH_IN_PROGRESS";
-  /** The owner's MFA challenge, when the caller looked it up (see BrowserAuth.authenticate). */
-  challenge?: { numberMatch?: string };
+  /**
+   * The owner's MFA challenge, when the caller looked it up (see
+   * BrowserAuth.authenticate). Structurally `PendingChallenge` from
+   * mfa-challenge.ts, spelled out here because that module imports
+   * CHALLENGE_FILE from this one.
+   */
+  challenge?: { kind?: "automatic"; numberMatch?: string };
   constructor() {
     super("Authentication already in progress. Retry after the current authentication finishes.");
     this.name = "AuthenticationInProgressError";

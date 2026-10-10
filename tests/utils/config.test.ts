@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as path from "node:path";
 
 const fake = vi.hoisted(() => ({
-  dotenv: vi.fn(), password: vi.fn(), migrate: vi.fn(),
+  dotenv: vi.fn(), password: vi.fn(), totp: vi.fn(), migrate: vi.fn(),
   store: null as Record<string, unknown> | null,
 }));
 vi.mock("dotenv", () => ({ default: { config: fake.dotenv } }));
@@ -12,6 +12,7 @@ vi.mock("../../src/utils/config-store.js", () => ({
   getConfigStorePath: () => "/fake/config.json",
 }));
 vi.mock("../../src/utils/secure-config.js", () => ({ resolveStoredPassword: fake.password }));
+vi.mock("../../src/auth/credential-store.js", () => ({ getStoredTotpUri: fake.totp }));
 vi.mock("../../src/auth/legacy-state.js", () => ({ migrateLegacyState: fake.migrate }));
 import { accountSessionDirectory, loadConfig, parseSessionCookieEnv, readEnvSecret } from "../../src/utils/config.js";
 
@@ -21,6 +22,7 @@ describe("resolved authentication configuration", () => {
     for (const key of Object.keys(process.env).filter(key => key.startsWith("D2L_"))) vi.stubEnv(key, undefined);
     fake.store = null;
     fake.password.mockResolvedValue("native-password");
+    fake.totp.mockResolvedValue(null);
     fake.migrate.mockResolvedValue({ tokenState: "absent", browserState: "encrypted" });
   });
   afterEach(() => vi.unstubAllEnvs());
@@ -47,6 +49,43 @@ describe("resolved authentication configuration", () => {
   it("uses the setup MFA preference when no environment override is present", async () => {
     fake.store = { baseUrl: "https://school.example", username: "alice", headless: false };
     expect(await loadConfig()).toMatchObject({ headless: false });
+  });
+
+  it("loads a saved authenticator enrollment for the configured account, at any school", async () => {
+    const uri = "otpauth://totp/Test?secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
+    fake.store = { baseUrl: "https://school.example", username: "alice" };
+    fake.totp.mockResolvedValue(uri);
+    expect(await loadConfig()).toMatchObject({ totpUri: uri });
+    // Keyed on the account, not on one school's URL: the sign-in flow decides
+    // on its own whether a code can be typed.
+    expect(fake.totp).toHaveBeenCalledWith("https://school.example", "alice");
+  });
+
+  it("reads no enrollment when no username is configured", async () => {
+    fake.store = { baseUrl: "https://school.example" };
+    expect(await loadConfig()).toMatchObject({ totpUri: undefined });
+    expect(fake.totp).not.toHaveBeenCalled();
+  });
+
+  it("treats an unreadable credential store as no enrollment rather than a startup failure", async () => {
+    fake.store = { baseUrl: "https://school.example", username: "alice" };
+    fake.totp.mockRejectedValue(new Error("keychain locked"));
+    expect(await loadConfig()).toMatchObject({ totpUri: undefined });
+  });
+
+  it("takes D2L_TOTP_SECRET over the credential store and normalizes a bare setup key", async () => {
+    fake.store = { baseUrl: "https://school.example", username: "alice" };
+    fake.totp.mockResolvedValue("otpauth://totp/Saved?secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ");
+    vi.stubEnv("D2L_TOTP_SECRET", "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ");
+    const config = await loadConfig();
+    expect(config.totpUri).toBe("otpauth://totp/alice?secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ");
+    expect(fake.totp).not.toHaveBeenCalled();
+  });
+
+  it("fails loudly on a D2L_TOTP_SECRET that is not an enrollment", async () => {
+    fake.store = { baseUrl: "https://school.example", username: "alice" };
+    vi.stubEnv("D2L_TOTP_SECRET", "123456");
+    await expect(loadConfig()).rejects.toThrow("Invalid authenticator enrollment URI");
   });
 
   it("rejects credential-bearing URLs before accessing native storage", async () => {

@@ -34,6 +34,15 @@ export class UnsupportedAuthenticationError extends BrowserAuthError {
   }
 }
 
+/**
+ * An automatic verification-code sign-in that never reached Brightspace.
+ * Distinct from MfaApprovalError because nobody was ever asked to approve
+ * anything: telling the user to check their phone would be a lie, and the
+ * caller-facing guidance has to say "still working" instead.
+ * Idea from ElliotDrel/brightspace-mcp-server (branch codex/purdue-totp).
+ */
+export class AutomaticCodeAuthenticationError extends UnsupportedAuthenticationError {}
+
 export class MfaApprovalError extends BrowserAuthError {
   readonly code = "AUTH_MFA_FAILED";
   /**
@@ -71,16 +80,29 @@ export interface SSOFlow {
  * else uses the default flow, which already covers the common Shibboleth,
  * CAS, and Microsoft Entra forms.
  */
-export function createSSOFlow(config: AppConfig, requestMfaCode?: RequestMfaCode, onMfaChallenge?: OnMfaChallenge): SSOFlow {
+export function createSSOFlow(
+  config: AppConfig,
+  requestMfaCode?: RequestMfaCode,
+  onMfaChallenge?: OnMfaChallenge,
+  onAutomaticPending?: () => void,
+): SSOFlow {
   const credentials = {
     username: config.username,
     password: config.password,
+    // Handed to every flow, gated by none: the enrollment is saved per
+    // account, and the only code that reads it answers Microsoft Entra's
+    // verification-code form on login.microsoftonline.com. Gating on a
+    // school's own URL instead would hard-code one tenant into a
+    // school-agnostic server, and would still be the wrong test — what
+    // matters is the identity provider and the challenge it is showing.
+    totpUri: config.totpUri,
     baseUrl: config.baseUrl,
     headless: config.headless,
     rememberMfa: config.rememberMfa,
     passwordless: config.passwordless,
     requestMfaCode,
     onMfaChallenge,
+    onAutomaticPending,
   };
 
   if (isTUDelftBrightspace(config.baseUrl)) {
