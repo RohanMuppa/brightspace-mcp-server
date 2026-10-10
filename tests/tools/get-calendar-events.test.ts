@@ -277,6 +277,54 @@ describe("get_calendar_events", () => {
     expect(events.map((e: any) => e.courseName)).toEqual(["MA 261"]);
     expect(requested.some((p) => p.includes(`/${COURSE_A.Id}/`))).toBe(false);
   });
+
+  describe("all-day events (issue #221)", () => {
+    // All-day events carry days in StartDay/EndDay and no StartDateTime.
+    const allDay = (id: number, title: string, startDay: string, endDay: string | null) =>
+      event(id, title, "", { StartDateTime: null, EndDateTime: null, StartDay: startDay, EndDay: endDay });
+
+    const calendarOf = (...events: unknown[]) =>
+      setup((path) => {
+        if (path.includes("/enrollments/")) return enrollments(COURSE_A);
+        if (path.includes("/calendar/")) return page(...events);
+        return [];
+      });
+
+    it("keeps an all-day event happening today, though its midnight start is past", async () => {
+      const { call } = calendarOf(allDay(1, "Exam day", "2026-09-02T00:00:00.000Z", "2026-09-02T00:00:00.000Z"));
+
+      expect(parse(await call({}))).toEqual([
+        expect.objectContaining({ title: "Exam day", start: "2026-09-02T00:00:00.000Z", allDay: true }),
+      ]);
+    });
+
+    it("keeps a multi-day all-day event that is still underway", async () => {
+      const { call } = calendarOf(allDay(2, "Break", "2026-08-31T00:00:00.000Z", "2026-09-04T00:00:00.000Z"));
+
+      expect(parse(await call({})).map((e: any) => e.title)).toEqual(["Break"]);
+    });
+
+    it("drops an all-day event whose last day was yesterday", async () => {
+      const { call } = calendarOf(allDay(3, "Old break", "2026-08-28T00:00:00.000Z", "2026-09-01T00:00:00.000Z"));
+
+      expect(parse(await call({}))).toEqual([]);
+    });
+
+    it("still drops a timed event that started earlier today", async () => {
+      const { call } = calendarOf(event(4, "Morning lab", "2026-09-02T08:00:00.000Z"));
+
+      expect(parse(await call({}))).toEqual([]);
+    });
+
+    it("asks the calendar from a day back so today's all-day events come back", async () => {
+      const { call, requested } = calendarOf();
+
+      await call({});
+      const calendar = requested.find((p) => p.includes("/calendar/"))!;
+      const query = new URL(calendar, BASE).searchParams;
+      expect(Date.parse(query.get("startDateTime")!)).toBeLessThanOrEqual(NOW.getTime() - 24 * 60 * 60 * 1000);
+    });
+  });
 });
 
 /**
