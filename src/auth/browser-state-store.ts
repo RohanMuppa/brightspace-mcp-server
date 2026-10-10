@@ -15,6 +15,9 @@ export type BrowserState = Awaited<ReturnType<BrowserContext["storageState"]>>;
 
 export const BROWSER_STATE_FILE = "storage-state.encrypted.json";
 
+/** Plaintext browser state from before encryption; load() still adopts it if present. */
+export const LEGACY_BROWSER_STATE_FILE = "storage-state.json";
+
 function validState(value: unknown): value is BrowserState {
   const state = value as BrowserState | null;
   return !!state && Array.isArray(state.cookies) && Array.isArray(state.origins)
@@ -31,7 +34,7 @@ export class BrowserStateStore {
 
   constructor(private readonly sessionDir: string, private readonly options: SecureStoreOptions = {}) {
     this.file = path.join(sessionDir, BROWSER_STATE_FILE);
-    this.legacyFile = path.join(sessionDir, "storage-state.json");
+    this.legacyFile = path.join(sessionDir, LEGACY_BROWSER_STATE_FILE);
   }
 
   private storeError(action: string, error: unknown): never {

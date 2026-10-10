@@ -68,6 +68,18 @@ npx -y brightspace-mcp-server@latest auth
 
 Run it from your home folder — macOS blocks `npx` from Documents, Desktop, or Downloads without Files and Folders permission (`EPERM`). Grant access in System Settings → Privacy & Security → Files and Folders, or run elsewhere.
 
+## Signing out early
+
+To end the saved session before it lapses (on a shared computer, say) or to force a fresh sign-in:
+
+```bash
+npx -y brightspace-mcp-server@latest auth --logout
+```
+
+This deletes the saved session files for your configured account on this computer (it prints their names), so the next question, or `auth`, does a full sign-in. It keeps your saved password, `config.json`, and any authenticator or credential-store entries. It is a local sign-out only: it does not sign you out of Microsoft or Brightspace on their servers, so a browser you used elsewhere stays signed in.
+
+An AI app that is already running may hold an access token in memory until it expires; restart the app to drop it right away. If a sign-in is in progress it refuses and deletes nothing: wait for it to finish, then run it again. With nothing saved it says so and succeeds, so it is safe to run twice.
+
 ## Per-school notes
 
 | School | Preset | Notes |

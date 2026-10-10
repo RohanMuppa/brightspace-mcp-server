@@ -124,6 +124,8 @@ sits beside your password, so on **this** computer your two factors become one. 
 anyone who only has your password, and it changes nothing for your other devices. Full enrollment
 steps: [docs/sign-in.md](docs/sign-in.md#answering-code-challenges-without-your-phone).
 
+**To sign out early** (on a shared computer, say), run `npx -y brightspace-mcp-server@latest auth --logout`. It deletes this computer's saved Brightspace session, so the next question does a full sign-in. Your saved password, authenticator key, and settings are kept. An AI app that is already running can keep answering until its current access token expires; restart the app to drop it right away. It only clears this computer; it does not sign you out of Microsoft or Brightspace anywhere else. If a sign-in is in progress, it refuses and deletes nothing.
+
 How often you're asked is up to your school, not this tool. Everything else about sign-in — Duo, authenticator codes, visible-browser mode, and running without a browser at all (Docker, WSL, hardware keys) — is in [docs/sign-in.md](docs/sign-in.md).
 
 ## Something not working?

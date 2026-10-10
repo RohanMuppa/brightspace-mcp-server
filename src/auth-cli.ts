@@ -14,6 +14,7 @@ import { retireLegacyProfile } from "./auth/legacy-profile.js";
 import { formatPhaseMarker, type AuthPhase } from "./auth/auth-phases.js";
 import { AuthenticationInProgressError } from "./auth/auth-lock.js";
 import { AUTOMATIC_PENDING_MARKER, challengeMarker } from "./auth/mfa-challenge.js";
+import { runLogout } from "./auth/logout.js";
 import { configureDevActivity } from "./utils/dev-activity.js";
 import { AUTH_COMMAND, SETUP_COMMAND } from "./utils/commands.js";
 import { initUpdateChecker, peekUpdateNotice } from "./utils/update-checker.js";
@@ -37,6 +38,13 @@ async function requestMfaCode(): Promise<string> {
 }
 
 async function main(): Promise<void> {
+  // Local and offline: no banner, no update check, no hand-off to a newer
+  // release. It only deletes this machine's saved session files.
+  if (process.argv.includes("--logout")) {
+    process.exitCode = await runLogout();
+    return;
+  }
+
   const automatic = process.argv.includes("--automatic");
 
   // If this copy is stale, hand off to the current release instead of running
