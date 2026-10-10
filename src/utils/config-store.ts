@@ -15,6 +15,12 @@ export interface ConfigStoreData {
   username?: string;
   /** Read only for migration from v1. Never written by saveConfigStore. */
   password?: string;
+  /**
+   * An authenticator enrollment on its way to the native credential store.
+   * Setup input only: like `password`, saveConfigStore refuses to write it,
+   * so the seed can never reach config.json.
+   */
+  totpUri?: string;
   campus?: string;
   sessionDir?: string;
   tokenTtl?: number;
@@ -53,8 +59,8 @@ export function loadConfigStore(): ConfigStoreData {
 }
 
 export function saveConfigStore(config: ConfigStoreData): void {
-  if (config.password !== undefined) {
-    throw new Error("Passwords must be saved in the native credential store before saving configuration.");
+  if (config.password !== undefined || config.totpUri !== undefined) {
+    throw new Error("Secrets must be saved in the native credential store before saving configuration.");
   }
   const isWindows = process.platform === "win32";
   if (!fs.existsSync(CONFIG_DIR)) {

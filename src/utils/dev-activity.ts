@@ -7,7 +7,8 @@ import { AUTH_PHASES, type AuthPhase } from "../auth/auth-phases.js";
 
 type Event = "tool_started" | "tool_finished" | "http_response" | "auth_required"
   | "token_mint_started" | "token_mint_finished" | "recovery_started"
-  | "mfa_observed" | "recovery_finished" | "auth_phase";
+  | "mfa_observed" | "recovery_finished" | "auth_phase"
+  | "mfa_method_selected" | "mfa_code_submitted";
 type Outcome = "success" | "error" | "sessionExpired" | "transport";
 interface Fields { elapsedMs?: number; status?: number; outcome?: Outcome; reason?: string; phase?: AuthPhase }
 interface CallContext { callId: string; tool: string }
@@ -34,7 +35,8 @@ export function devActivity(event: Event, fields: Fields = {}): void {
 function write(event: Event, fields: Fields, context = calls.getStore(), idleMs?: number, sinceSuccessMs?: number): void {
   if (!directory) return;
   if (!["tool_started", "tool_finished", "http_response", "auth_required", "token_mint_started",
-    "token_mint_finished", "recovery_started", "mfa_observed", "recovery_finished", "auth_phase"].includes(event)) return;
+    "token_mint_finished", "recovery_started", "mfa_observed", "recovery_finished", "auth_phase",
+    "mfa_method_selected", "mfa_code_submitted"].includes(event)) return;
   const at = new Date().toISOString();
   const record: Record<string, unknown> = { at, runId, pid: process.pid, event };
   if (context) Object.assign(record, context);
@@ -42,7 +44,8 @@ function write(event: Event, fields: Fields, context = calls.getStore(), idleMs?
     if (typeof value === "number" && Number.isFinite(value) && value >= 0) record[key] = value;
   }
   if (["success", "error", "sessionExpired", "transport"].includes(fields.outcome ?? "")) record.outcome = fields.outcome;
-  if (["busy", "cooldown", "unsupported", "secureStorage", "transport", "timeout", "failed", "mfaPending"].includes(fields.reason ?? "")) record.reason = fields.reason;
+  if (["busy", "cooldown", "unsupported", "secureStorage", "transport", "timeout", "failed", "mfaPending",
+    "automaticPending", "inProgress"].includes(fields.reason ?? "")) record.reason = fields.reason;
   if ((AUTH_PHASES as readonly string[]).includes(fields.phase ?? "")) record.phase = fields.phase;
   try {
     mkdirSync(directory, { recursive: true, mode: 0o700 });
