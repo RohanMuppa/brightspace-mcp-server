@@ -17,7 +17,7 @@ import { assignmentLinkResolver } from "./assignment-links.js";
 import { dueIn } from "../utils/due-in.js";
 import type { AppConfig } from "../types/index.js";
 import { resolveCourses, type CourseRef } from "./resolve-courses.js";
-import { fetchCourseCalendarEvents, type CalendarEvent } from "./calendar-events.js";
+import { fetchCourseCalendarEvents, eventEndsAt, type CalendarEvent } from "./calendar-events.js";
 
 interface DropboxFolder {
   GroupTypeId?: number | null;
@@ -60,6 +60,8 @@ interface UpcomingItem {
   dueIn: string | null;
   startDate: string | null;
   endDate: string | null;
+  /** Present on an all-day event: dueDate and endDate are its first and last day. */
+  allDay?: true;
   location?: string;
   url: string;
 }
@@ -131,6 +133,7 @@ function calendarItems(events: CalendarEvent[], items: UpcomingItem[]): Upcoming
       dueIn: dueIn(event.start),
       startDate: null,
       endDate: event.end ?? null,
+      ...(event.allDay ? { allDay: true as const } : {}),
       ...(event.location ? { location: event.location } : {}),
       url: event.url,
     }));
@@ -308,11 +311,15 @@ export function registerGetUpcomingDueDates(
           return [];
         });
 
-        // Keep what falls inside the window, soonest first
+        // Keep what falls inside the window, soonest first. An all-day
+        // event counts until its last day ends, not just until its midnight start.
         const upcoming = items
           .filter((item) => {
             const due = new Date(item.dueDate).getTime();
-            return Number.isFinite(due) && due >= now && due <= windowEnd;
+            const until = item.allDay
+              ? eventEndsAt({ start: item.dueDate, end: item.endDate ?? undefined, allDay: true })
+              : due;
+            return Number.isFinite(due) && until >= now && due <= windowEnd;
           })
           .sort(
             (a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime()

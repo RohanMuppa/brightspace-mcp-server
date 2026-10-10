@@ -531,6 +531,46 @@ describe("get_upcoming_due_dates calendar events", () => {
     expect(Date.parse(query.get("endDateTime")!)).toBeGreaterThanOrEqual(Date.parse(daysFromNow(7)));
     expect(query.get("startDateTime")).toMatch(/Z$/);
   });
+
+  it("keeps an all-day event happening today and marks it allDay (issue #221)", async () => {
+    const { call } = setup((path) => {
+      if (path.includes("/enrollments/")) return enrollments(COURSE_A);
+      if (path.includes("/calendar/")) {
+        return {
+          Objects: [
+            {
+              ...midterm,
+              Title: "Project demo day",
+              StartDateTime: null,
+              EndDateTime: null,
+              StartDay: "2026-09-02T00:00:00.000Z",
+              EndDay: "2026-09-02T00:00:00.000Z",
+            },
+            {
+              ...midterm,
+              CalendarEventId: 902,
+              Title: "Last week's break",
+              StartDateTime: null,
+              EndDateTime: null,
+              StartDay: "2026-08-24T00:00:00.000Z",
+              EndDay: "2026-09-01T00:00:00.000Z",
+            },
+          ],
+          Next: null,
+        };
+      }
+      return [];
+    });
+
+    expect(parse(await call({ daysAhead: 7 }))).toEqual([
+      expect.objectContaining({
+        type: "event",
+        title: "Project demo day",
+        dueDate: "2026-09-02T00:00:00.000Z",
+        allDay: true,
+      }),
+    ]);
+  });
 });
 
 /**
