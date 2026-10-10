@@ -51,6 +51,8 @@ export interface CalendarEvent {
   courseName: string | null;
   start: string;
   end?: string;
+  /** Present on an all-day event, whose start and end are days, not times. */
+  allDay?: true;
   location?: string;
   description?: string;
   url: string;
@@ -59,6 +61,20 @@ export interface CalendarEvent {
 }
 
 const HOUR_MS = 60 * 60 * 1000;
+const DAY_MS = 24 * HOUR_MS;
+
+/**
+ * When an event stops counting as upcoming (epoch ms). A timed event counts
+ * only until it starts. An all-day event lasts through the end of its last
+ * day — EndDay names that day, not the midnight after it — so today's exam
+ * day or a week-long break still underway is not dropped as already past.
+ */
+export function eventEndsAt(event: Pick<CalendarEvent, "start" | "end" | "allDay">): number {
+  const start = new Date(event.start).getTime();
+  if (!event.allDay) return start;
+  const lastDay = event.end ? new Date(event.end).getTime() : start;
+  return Math.max(start, Number.isFinite(lastDay) ? lastDay : start) + DAY_MS;
+}
 
 function descriptionMarkdown(description: EventDataInfo["Description"]): string {
   const html = typeof description === "string" ? description : description?.Html || description?.Text || "";
@@ -71,6 +87,7 @@ function toCalendarEvent(raw: EventDataInfo, baseUrl: string, course: CourseRef)
   const start = raw.StartDateTime ?? raw.StartDay ?? null;
   if (!start) return null;
 
+  const allDay = !raw.StartDateTime;
   const end = raw.EndDateTime ?? raw.EndDay ?? null;
   const location = raw.LocationName?.trim();
   const description = descriptionMarkdown(raw.Description);
@@ -83,6 +100,7 @@ function toCalendarEvent(raw: EventDataInfo, baseUrl: string, course: CourseRef)
     courseName: course.name,
     start,
     ...(end ? { end } : {}),
+    ...(allDay ? { allDay: true as const } : {}),
     ...(location ? { location } : {}),
     ...(description ? { description } : {}),
     url: calendarUrl(baseUrl, course.id),
@@ -98,10 +116,13 @@ function toCalendarEvent(raw: EventDataInfo, baseUrl: string, course: CourseRef)
 }
 
 /**
- * Every calendar event in one course that starts inside [from, to] (epoch ms).
+ * Every calendar event in one course that starts inside [from, to] (epoch ms),
+ * plus any all-day event still underway at `from`.
  *
  * The request window is widened to whole hours so repeated calls within the
- * cache TTL share one cached response; the exact window is applied here.
+ * cache TTL share one cached response, and its start reaches back a day so an
+ * all-day event that began at today's midnight is in the response at all; the
+ * exact window is applied here.
  */
 export async function fetchCourseCalendarEvents(
   apiClient: D2LApiClient,
@@ -110,7 +131,7 @@ export async function fetchCourseCalendarEvents(
   from: number,
   to: number
 ): Promise<CalendarEvent[]> {
-  const requestFrom = new Date(Math.floor(from / HOUR_MS) * HOUR_MS).toISOString();
+  const requestFrom = new Date(Math.floor((from - DAY_MS) / HOUR_MS) * HOUR_MS).toISOString();
   const requestTo = new Date(Math.ceil(to / HOUR_MS) * HOUR_MS).toISOString();
 
   const raw = await fetchAllObjects<EventDataInfo>(
@@ -127,6 +148,6 @@ export async function fetchCourseCalendarEvents(
     .filter((event): event is CalendarEvent => {
       if (!event) return false;
       const start = new Date(event.start).getTime();
-      return Number.isFinite(start) && start >= from && start <= to;
+      return Number.isFinite(start) && eventEndsAt(event) >= from && start <= to;
     });
 }
