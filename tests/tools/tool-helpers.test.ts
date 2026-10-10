@@ -72,6 +72,9 @@ describe("sanitizeError", () => {
     ["timeout", "did not finish in time"],
     ["failed", "did not complete"],
     ["mfaPending", "Approve the sign-in request"],
+    // Nothing was asked of the user here, so the guidance must say so rather
+    // than send them looking for an approval that will never arrive.
+    ["automaticPending", "No phone approval is being requested"],
     ["inProgress", "still starting in the background"],
   ];
 
