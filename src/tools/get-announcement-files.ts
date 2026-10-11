@@ -41,6 +41,7 @@ export function registerGetAnnouncementFiles(
     "get_announcement_files",
     {
       title: "Get Announcement Files",
+      annotations: { readOnlyHint: true },
       description:
         "Read the files an instructor attached to an announcement: prompt questions, a rubric, an updated schedule, slides. Call it with just courseId to see which announcements have attachments, then with newsId and fileId to read one. Use this when the user asks what a file attached to an announcement says. Returns the text itself. Use download_file (newsId + fileId) instead when the user wants the file saved to disk.",
       inputSchema: GetAnnouncementFilesSchema,

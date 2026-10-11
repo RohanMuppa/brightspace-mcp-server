@@ -270,6 +270,7 @@ export function registerGetUpcomingDueDates(
     "get_upcoming_due_dates",
     {
       title: "Get Upcoming Due Dates",
+      annotations: { readOnlyHint: true },
       description:
         "Fetch upcoming due dates across all your courses, derived from the due dates on assignments (dropbox folders), quizzes, and graded discussion topics themselves, plus course calendar events such as exams and labs (type: event). Use this when the user asks about deadlines, what's due, upcoming work, or what they need to do this week.",
       inputSchema: GetUpcomingDueDatesSchema,

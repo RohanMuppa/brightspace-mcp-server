@@ -74,6 +74,7 @@ export function registerGetServerInfo(
     "get_server_info",
     {
       title: "Get Server Info",
+      annotations: { readOnlyHint: true },
       description:
         "Report which version of the Brightspace MCP server is running, the Node.js runtime, platform, config file path, session state directory, configured school URL, whether a credential is stored, the server's local timezone and UTC offset, (once a browser sign-in has been saved) what Microsoft remembered: stay-signed-in and the Don't ask again MFA checkbox, (when signed in) the account's uniqueName/displayName as signedInAs, and this process's request counters (requests: responses by status class, network errors, cache hits/misses, coalesced joins, and token refreshes). Use this for troubleshooting, when the user asks which version they have, or what timezone/account dates are being computed against. Never contacts Brightspace and never returns secrets.",
       inputSchema: GetServerInfoSchema,

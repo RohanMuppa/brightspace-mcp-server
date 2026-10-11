@@ -117,11 +117,14 @@ async function main(): Promise<void> {
     }
     // Another process's sign-in holds the lock and is showing a challenge:
     // pass it on, so this caller can tell its user what to approve.
-    if (automatic && error instanceof AuthenticationInProgressError && error.challenge) {
+    // Before it has one, say so anyway: the caller can wait on that sign-in.
+    if (automatic && error instanceof AuthenticationInProgressError) {
       console.log(RELAYED_CHALLENGE_MARKER);
-      console.log(error.challenge.kind === "automatic"
-        ? AUTOMATIC_PENDING_MARKER
-        : challengeMarker(error.challenge.numberMatch));
+      if (error.challenge) {
+        console.log(error.challenge.kind === "automatic"
+          ? AUTOMATIC_PENDING_MARKER
+          : challengeMarker(error.challenge.numberMatch));
+      }
     }
     process.exitCode = error instanceof NativeCredentialStoreError ? 5
       : code === "AUTH_IN_PROGRESS" ? 2

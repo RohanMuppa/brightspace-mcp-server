@@ -45,6 +45,7 @@ export function registerGetDropboxUserSubmissions(
     "get_dropbox_user_submissions",
     {
       title: "Get Dropbox User Submissions",
+      annotations: { readOnlyHint: true },
       description:
         "Retrieve all submissions made by one specific student (or group) in a dropbox folder, for an " +
         "instructor or TA — useful for reviewing a single student's work before drafting feedback. " +

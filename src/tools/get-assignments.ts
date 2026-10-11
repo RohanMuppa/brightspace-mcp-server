@@ -640,6 +640,7 @@ export function registerGetAssignments(
     "get_assignments",
     {
       title: "Get Assignments",
+      annotations: { readOnlyHint: true },
       description:
         "Fetch assignments and quizzes for a specific course or all enrolled courses. Shows dropbox submissions and quizzes with due dates, status, and rubric info. Use this when the user asks about assignments, homework, what to submit, quizzes, or assignment details and rubrics. " +
         "Read submissionStatus/attemptStatus, not just submission/attemptsUsed, to decide whether something was turned in: some tenants deny students access to submission or attempt data, in which case the status is \"unknown\" even though submission is null or attemptsUsed is 0. Never report an \"unknown\" item as missing, unsubmitted, or not attempted - say it could not be verified and point the user to Brightspace.",

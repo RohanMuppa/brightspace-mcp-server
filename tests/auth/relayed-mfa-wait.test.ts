@@ -108,9 +108,33 @@ describe("a caller whose sign-in found another process holding the lock", () => 
     await relay(child, marker);
     await pass(10);
     expect(first.settled).toBe(true);
+    // A real retry comes after the model has answered, past SIBLING_GRACE_MS.
+    await pass(2_000);
     child = nextChild();
     return first;
   }
+
+  it("answers a relayed call queued right behind the one that was told, at once and in full", async () => {
+    const runner = new AuthRunner({ sessionDir });
+    const first = track(runner.run());
+    await relay(child, "MFA_NUMBER:72");
+    expect(first.settled).toBe(true);
+
+    child = nextChild();
+    const queued = track(runner.run());
+    await relay(child, "MFA_NUMBER:72");
+
+    expect(queued.error).toMatchObject({ kind: "mfaPending", numberMatch: "72", duplicate: false });
+    expect(answerText(queued.error)).toContain("enter 72");
+
+    // Its answer does not restart the grace: a retry after it still waits.
+    await pass(2_000);
+    child = nextChild();
+    const retry = track(runner.run());
+    await relay(child, "MFA_NUMBER:72");
+    await pass(10_000);
+    expect(retry.settled).toBe(false);
+  });
 
   it("answers the first call at once with the owner's number, as before", async () => {
     const runner = new AuthRunner({ sessionDir });
@@ -283,5 +307,151 @@ describe("a caller whose sign-in found another process holding the lock", () => 
     await pass(10);
 
     expect(retry.settled).toBe(true);
+  });
+});
+
+/**
+ * The same two processes, a little earlier: A's sign-in holds the lock but is
+ * still opening the browser and the login pages, so there is no challenge to
+ * relay yet. B used to answer "busy, try again" at once, and a model often
+ * gave up there. B now waits on A until a number appears (answered at once),
+ * A finishes, or the call budget runs out.
+ */
+describe("a caller whose sign-in found another process still starting its own", () => {
+  let sessionDir: string;
+  let lockDir: string;
+  let challengeFile: string;
+  let child: Child;
+
+  const publish = (challenge: object) => fs.writeFileSync(challengeFile, JSON.stringify(challenge));
+
+  /** What this process's child prints when the owner has not reached a challenge yet. */
+  async function relayStarting(target: Child): Promise<void> {
+    target.stdout.write("AUTH_RELAYED\n");
+    await pass(1);
+    target.emit("close", 2);
+    await pass(1);
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    sessionDir = fs.mkdtempSync(path.join(os.tmpdir(), "brightspace-relayed-starting-test-"));
+    lockDir = path.join(sessionDir, ".auth.lock");
+    challengeFile = path.join(lockDir, "challenge.json");
+    fs.mkdirSync(lockDir);
+    child = nextChild();
+    vi.mocked(execFileSync).mockReturnValue("12345 100\n" as never);
+    vi.spyOn(process, "kill").mockReturnValue(true);
+  });
+
+  afterEach(() => {
+    for (const leftover of children.splice(0)) leftover.emit("close", 0);
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    vi.clearAllMocks();
+    fs.rmSync(sessionDir, { recursive: true, force: true });
+  });
+
+  it("waits instead of answering busy", async () => {
+    const call = track(new AuthRunner({ sessionDir }).run());
+    await relayStarting(child);
+    await pass(10_000);
+
+    expect(call.settled).toBe(false);
+  });
+
+  it("answers with the owner's number as soon as it appears", async () => {
+    const call = track(new AuthRunner({ sessionDir }).run());
+    await relayStarting(child);
+    await pass(8_000);
+    publish({ numberMatch: "72" });
+    await pass(2_000);
+
+    expect(call.error).toMatchObject({ kind: "mfaPending", numberMatch: "72", relayed: true });
+    expect(answerText(call.error)).toContain("enter 72");
+  });
+
+  it("answers a number-less challenge as soon as it appears", async () => {
+    const call = track(new AuthRunner({ sessionDir }).run());
+    await relayStarting(child);
+    await pass(3_000);
+    publish({});
+    await pass(2_000);
+
+    expect(call.error).toMatchObject({ kind: "mfaPending", relayed: true });
+  });
+
+  it("lets a retry of that number wait for the approval, like any relayed retry", async () => {
+    const runner = new AuthRunner({ sessionDir });
+    const first = track(runner.run());
+    await relayStarting(child);
+    publish({ numberMatch: "72" });
+    await pass(2_000);
+    expect(first.error).toMatchObject({ kind: "mfaPending", numberMatch: "72" });
+    await pass(2_000);
+
+    child = nextChild();
+    const retry = track(runner.run());
+    await relay(child, "MFA_NUMBER:72");
+    await pass(20_000);
+    expect(retry.settled).toBe(false);
+    fs.rmSync(lockDir, { recursive: true });
+    await pass(2_000);
+
+    expect(retry.value).toBe(true);
+  });
+
+  it("resolves as soon as the owner finishes without ever showing a challenge", async () => {
+    const call = track(new AuthRunner({ sessionDir }).run());
+    await relayStarting(child);
+    await pass(5_000);
+    fs.rmSync(lockDir, { recursive: true });
+    await pass(2_000);
+
+    expect(call.value).toBe(true);
+  });
+
+  it("keeps waiting when the owner turns out to be answering its own code", async () => {
+    const call = track(new AuthRunner({ sessionDir }).run());
+    await relayStarting(child);
+    publish({ kind: "automatic" });
+    await pass(20_000);
+    expect(call.settled).toBe(false);
+    fs.rmSync(lockDir, { recursive: true });
+    await pass(2_000);
+
+    expect(call.value).toBe(true);
+  });
+
+  it("answers still-signing-in, not busy, when the owner is still starting at the end of the window", async () => {
+    const call = track(new AuthRunner({ sessionDir }).run());
+    await relayStarting(child);
+    await pass(44_000);
+    expect(call.settled).toBe(false);
+    await pass(3_000);
+
+    expect(call.error).toMatchObject({ kind: "inProgress" });
+    expect(answerText(call.error)).not.toMatch(/another process/i);
+  });
+
+  it("gives a parallel batch one sign-in check and the number once", async () => {
+    const runner = new AuthRunner({ sessionDir });
+    const calls = [track(runner.run()), track(runner.run()), track(runner.run())];
+    await relayStarting(child);
+    await pass(3_000);
+    publish({ numberMatch: "72" });
+    await pass(2_000);
+
+    expect(vi.mocked(spawn)).toHaveBeenCalledTimes(1);
+    expect(calls.every((call) => call.settled)).toBe(true);
+    const texts = calls.map((call) => answerText(call.error));
+    expect(texts.filter((text) => text.includes("72"))).toHaveLength(1);
+  });
+
+  it("still answers busy when there is no session directory to watch", async () => {
+    const call = track(new AuthRunner().run());
+    await relayStarting(child);
+
+    expect(call.error).toMatchObject({ kind: "busy" });
   });
 });

@@ -53,6 +53,7 @@ export function registerGetDropboxFolders(
     "get_dropbox_folders",
     {
       title: "Get Dropbox Folders",
+      annotations: { readOnlyHint: true },
       description:
         "List all assignment/dropbox folders for a course, for an instructor or TA. Returns folder ID, " +
         "name, due date, start/end dates, submission type, visibility, and whether rubrics are attached. " +

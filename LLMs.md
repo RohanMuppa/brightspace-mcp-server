@@ -363,6 +363,7 @@ Add a preset to `SCHOOL_PRESETS` in `src/setup.ts`. If the school uses a non-sta
 2. Add the input schema to `src/tools/schemas.ts`.
 3. Export it from `src/tools/index.ts`.
 4. Register it in `src/index.ts`.
+5. If it only reads, give its config `annotations: { readOnlyHint: true }`. Claude Code and Claude Desktop run unmarked tools one at a time, which holds a batch behind a sign-in.
 
 Build paths with `apiClient.lp()`, `le()`, or `leGlobal()` and nothing else. They return a template carrying a `{lp}`/`{le}` placeholder, which `get()` and `getRaw()` substitute after discovering the versions, so a new tool gets lazy discovery and sign-in without asking for them. A hand-written path with a literal version skips discovery and will break when the tenant moves.
 

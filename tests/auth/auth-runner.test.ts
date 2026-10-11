@@ -247,6 +247,8 @@ describe("AuthRunner", () => {
     const firstFailure = expect(firstResult).rejects.toMatchObject({ kind: "mfaPending", numberMatch: "47" });
     child.stdout.write("MFA_NUMBER:47\n");
     await firstFailure;
+    // A real retry comes after the model has answered, past SIBLING_GRACE_MS.
+    await vi.advanceTimersByTimeAsync(2000);
 
     const second = first.run();
     child.emit("close", 0);
@@ -298,6 +300,8 @@ describe("AuthRunner", () => {
     const firstFailure = expect(first).rejects.toMatchObject({ kind: "mfaPending", numberMatch: "47" });
     child.stdout.write("MFA_NUMBER:47\n");
     await firstFailure;
+    // A real retry comes after the model has answered, past SIBLING_GRACE_MS.
+    await vi.advanceTimersByTimeAsync(2000);
 
     const second = runner.run();
     const secondFailure = expect(second).rejects.toMatchObject({ kind: "mfaPending", numberMatch: "47" });
@@ -336,6 +340,8 @@ describe("AuthRunner", () => {
     const firstFailure = expect(first).rejects.toMatchObject({ kind: "mfaPending", numberMatch: "47" });
     child.stdout.write("MFA_NUMBER:47\n");
     await firstFailure;
+    // A real retry comes after the model has answered, past SIBLING_GRACE_MS.
+    await vi.advanceTimersByTimeAsync(2000);
 
     const second = runner.run();
     await vi.advanceTimersByTimeAsync(2000);
@@ -356,6 +362,8 @@ describe("AuthRunner", () => {
     const firstFailure = expect(first).rejects.toMatchObject({ kind: "mfaPending", numberMatch: "47" });
     child.stdout.write("MFA_NUMBER:47\n");
     await firstFailure;
+    // A real retry comes after the model has answered, past SIBLING_GRACE_MS.
+    await vi.advanceTimersByTimeAsync(2000);
 
     let settled = false;
     const second = runner.run();
@@ -387,6 +395,8 @@ describe("AuthRunner", () => {
     const firstFailure = expect(firstResult).rejects.toMatchObject({ kind: "mfaPending", numberMatch: "47" });
     child.stdout.write("MFA_NUMBER:47\n");
     await firstFailure;
+    // A real retry comes after the model has answered, past SIBLING_GRACE_MS.
+    await vi.advanceTimersByTimeAsync(2000);
 
     const second = runner.run();
     child.emit("close", 0);
@@ -651,6 +661,59 @@ describe("AuthRunner", () => {
     await failure;
   });
 
+  // Claude Code and Claude Desktop run tool calls that are not marked
+  // read-only one at a time, so a batch arrives as a queue. A call queued
+  // right behind the one that got the number is its sibling: answered at
+  // once, or the model cannot show the user the number until it times out.
+  describe("a call queued right behind the one that got the number", () => {
+    async function firstTold(runner: AuthRunner) {
+      const first = expect(runner.run()).rejects.toMatchObject({ kind: "mfaPending", numberMatch: "47" });
+      child.stdout.write("MFA_NUMBER:47\n");
+      await vi.advanceTimersByTimeAsync(0);
+      await first;
+    }
+
+    it("is answered at once, with the number in full", async () => {
+      const runner = new AuthRunner();
+      await firstTold(runner);
+      await vi.advanceTimersByTimeAsync(100);
+
+      let answer: unknown;
+      void runner.run().catch((error: unknown) => { answer = error; });
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(answer).toMatchObject({ kind: "mfaPending", numberMatch: "47", duplicate: false });
+      expect(spawn).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not let a run of quick calls keep each other from waiting", async () => {
+      const runner = new AuthRunner();
+      await firstTold(runner);
+      for (const gap of [500, 500, 400]) {
+        await vi.advanceTimersByTimeAsync(gap);
+        await expect(runner.run()).rejects.toMatchObject({ kind: "mfaPending" });
+      }
+      await vi.advanceTimersByTimeAsync(200);
+
+      let settled = false;
+      void runner.run().then(() => { settled = true; }, () => { settled = true; });
+      await vi.advanceTimersByTimeAsync(10000);
+      expect(settled).toBe(false);
+    });
+
+    it("waits like any retry once the grace has passed", async () => {
+      const runner = new AuthRunner();
+      await firstTold(runner);
+      await vi.advanceTimersByTimeAsync(1500);
+
+      const retry = runner.run();
+      await vi.advanceTimersByTimeAsync(20000);
+      child.emit("close", 0);
+
+      expect(await retry).toBe(true);
+    });
+  });
+
   describe("a caller that can be told the challenge mid-call", () => {
     it("tells the caller the number to enter as soon as the challenge appears", async () => {
       const onChallenge = vi.fn();
@@ -700,6 +763,8 @@ describe("AuthRunner", () => {
       child.stdout.write("MFA_NUMBER:47\n");
       await vi.advanceTimersByTimeAsync(0);
       await first;
+    // A real retry comes after the model has answered, past SIBLING_GRACE_MS.
+    await vi.advanceTimersByTimeAsync(2000);
 
       const retry = runner.run(() => {});
       await vi.advanceTimersByTimeAsync(30000);
@@ -714,6 +779,8 @@ describe("AuthRunner", () => {
       child.stdout.write("MFA_NUMBER:47\n");
       await vi.advanceTimersByTimeAsync(0);
       await first;
+    // A real retry comes after the model has answered, past SIBLING_GRACE_MS.
+    await vi.advanceTimersByTimeAsync(2000);
 
       const retry = expect(runner.run(() => {})).rejects.toMatchObject({ kind: "cooldown" });
       await vi.advanceTimersByTimeAsync(10000);

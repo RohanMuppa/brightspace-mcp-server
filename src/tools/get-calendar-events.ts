@@ -27,6 +27,7 @@ export function registerGetCalendarEvents(
     "get_calendar_events",
     {
       title: "Get Calendar Events",
+      annotations: { readOnlyHint: true },
       description:
         "Fetch course calendar events — exams, midterms, labs, recitations, review sessions, schedule changes, and deadlines instructors typed straight onto the calendar — across all your courses or one course, in a time window (default: the next 7 days). Use this when the user asks when an exam is, what's on their calendar, or what's happening this week.",
       inputSchema: GetCalendarEventsSchema,

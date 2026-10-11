@@ -43,6 +43,7 @@ export function registerGetMyGroups(
     "get_my_groups",
     {
       title: "Get My Groups",
+      annotations: { readOnlyHint: true },
       description:
         "List the current user's project/discussion groups in a course, with each group's members. " +
         "Use this when a student asks who is in their project group, lab group, or discussion group.",

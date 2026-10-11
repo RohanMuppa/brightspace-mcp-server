@@ -159,6 +159,8 @@ describe("a parallel batch of tool calls against an expired session", () => {
     const lost = answer(runner.run());
     child.stdout.write(`MFA_NUMBER:${NUMBER}\n`);
     await lost;
+    // A real retry comes after the model has answered, past SIBLING_GRACE_MS.
+    await vi.advanceTimersByTimeAsync(2000);
 
     // A later call (another batch, or the model retrying) must carry the digits.
     const later = answer(runner.run());

@@ -60,6 +60,7 @@ export function registerGetRubricsForObject(
     "get_rubrics_for_object",
     {
       title: "Get Rubrics for Dropbox Folder",
+      annotations: { readOnlyHint: true },
       description:
         "Retrieve the full rubric table (criteria, levels, and point values) attached to a dropbox " +
         "folder, for an instructor or TA. Use get_dropbox_folders first to find folderId. Like " +
