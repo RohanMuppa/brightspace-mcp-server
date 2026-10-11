@@ -139,9 +139,9 @@ const AUTH_FAILURE_GUIDANCE: Record<AuthFailureKind, string> = {
     MFA_SOLO_CALL,
   inProgress:
     "Brightspace sign-in is still starting in the background (opening the browser and the " +
-    "school's login pages). Call this tool again right away: the next call joins the same " +
-    "sign-in, so it sends no second MFA prompt, and returns the number to approve as soon as " +
-    "one appears. Don't ask the user to do anything yet.",
+    "school's login pages). Call this tool again right away: the next call picks up that " +
+    "sign-in and returns the number to approve as soon as one appears. Don't ask the user to " +
+    "do anything yet.",
 };
 
 /**
