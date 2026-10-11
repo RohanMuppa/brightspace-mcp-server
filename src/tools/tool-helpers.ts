@@ -131,7 +131,9 @@ const AUTH_FAILURE_GUIDANCE: Record<AuthFailureKind, string> = {
     "as soon as it completes.",
   mfaPending:
     "Approve the sign-in request on your phone (Microsoft Authenticator or Duo). " +
-    "Tell the user that, then call this tool again right away without waiting for them to " +
+    "Tell the user that now, as text in your reply, before you make any other tool call: they " +
+    "can't see tool results, and some apps show nothing until you write it. Then call this tool " +
+    "again right away without waiting for them to " +
     "confirm: each call waits up to 45 seconds for the approval and returns the result as soon " +
     "as the sign-in completes. Keep calling until it succeeds or reports a different error. " +
     MFA_SOLO_CALL,
@@ -166,7 +168,9 @@ function authFailureMessage(error: AuthProcessError): string {
   if (error.kind === "automaticPending" && error.duplicate) return AUTOMATIC_ALREADY_REPORTED;
   if (error.kind === "mfaPending" && error.numberMatch) {
     return `Open Microsoft Authenticator and enter ${error.numberMatch} within 5 minutes. ` +
-      "Tell the user that number, then call this tool again right away without waiting for them " +
+      "Show the user that number now, as text in your reply, before you make any other tool call: " +
+      "they can't see tool results, and some apps show nothing until you write it. Then call this " +
+      "tool again right away without waiting for them " +
       "to confirm: each call waits up to 45 seconds for the approval and returns the result as " +
       "soon as the sign-in completes. Keep calling until it succeeds or reports a different error. " +
       MFA_SOLO_CALL;
