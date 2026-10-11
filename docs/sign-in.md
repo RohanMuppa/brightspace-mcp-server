@@ -10,6 +10,8 @@ Tokens renew over HTTPS, and a background browser silently replays your saved Mi
 
 The number to approve shows up right in the tool's response, and sign-in finishes in the background — approve it, call the tool again, and use the newest number if one goes stale. TOTP apps (Google Authenticator, etc.) get prompted via the terminal; visible-browser mode opens a window instead, though automatic recovery during a tool call still runs headless unless you set `D2L_HEADLESS=false`.
 
+If a second app (say Claude Desktop and a terminal session) is signed in to the same account, it waits on the first app's sign-in instead of asking again: approve the number once and both carry on.
+
 **Duo:** sign-in auto-answers "Is this your device?" with **yes**, since a headless run has nobody to click it — this also makes Duo remember the device, so skip it on shared machines. Set `D2L_DUO_PASSCODE` to swap the push for a typed passcode.
 
 **Microsoft "Don't ask again":** answering yes to `setup`'s "Remember this device" question (saved as `rememberMfa` in `config.json`; `D2L_REMEMBER_MFA` overrides it) makes the server tick that box when your school offers it, so later sign-ins can skip the second factor; how long that lasts is the school's setting, not the server's. It is off by default — leave it off on a shared machine — and `get_server_info` shows whether the box was ticked, offered, or left alone. How often you're asked for MFA at all is your school's sign-in frequency setting, the same approval you'd see in a regular browser.
