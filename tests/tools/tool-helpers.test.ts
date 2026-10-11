@@ -101,6 +101,8 @@ describe("sanitizeError", () => {
 
     expect(textOf(result)).toContain("call this tool again right away");
     expect(textOf(result)).toContain("45 seconds");
+    // Claude Desktop hides tool results, so the number has to reach the user as reply text.
+    expect(textOf(result)).toContain("before you make any other tool call");
   });
 
   // Issue #199: a client that runs calls in a parallel batch can hold the

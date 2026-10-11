@@ -24,7 +24,7 @@ const children: EventEmitter[] = [];
 const NUMBER = "47";
 const BATCH = 5;
 /** Wording only the full notice carries (AuthFailureKind "mfaPending" guidance). */
-const LONG_NOTICE = /Tell the user that number/;
+const LONG_NOTICE = /Show the user that number/;
 
 function mockChild() {
   const child = Object.assign(new EventEmitter(), {
