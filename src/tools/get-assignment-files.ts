@@ -66,6 +66,7 @@ export function registerGetAssignmentFiles(
     "get_assignment_files",
     {
       title: "Get Assignment Files",
+      annotations: { readOnlyHint: true },
       description:
         "Read the files an instructor attached to an assignment: the spec or instructions PDF, a starter workbook, a rubric document. Call it with just courseId to see which assignments have attachments, then with folderId and fileId to read one. Use this when the user asks what an assignment requires, what the instructions say, or to summarize a handout. Returns the text itself. Use download_file instead when the user wants the file saved to disk.",
       inputSchema: GetAssignmentFilesSchema,

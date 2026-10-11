@@ -429,6 +429,7 @@ export function registerGetAssignmentRubric(
     "get_assignment_rubric",
     {
       title: "Get Assignment Rubric",
+      annotations: { readOnlyHint: true },
       description:
         "Fetch the full grading rubric for a dropbox assignment: every criteria group, criterion, and achievement level with its points and description, plus the student's own graded outcome per criterion once it has been released. Use this when the user asks what a rubric wants, how an assignment will be graded, or why they got a particular score on a criterion.",
       inputSchema: GetAssignmentRubricSchema,

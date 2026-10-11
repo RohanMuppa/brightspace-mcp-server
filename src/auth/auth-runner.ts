@@ -78,6 +78,22 @@ const RELAY_POLL_MS = 1000;
 const RELAY_TOLD_MS = 5 * 60 * 1000;
 
 /**
+ * A call that arrives this soon after another call was answered with an MFA
+ * challenge is that call's sibling, not a retry. Claude Code and Claude
+ * Desktop run tool calls that are not marked read-only one at a time, so a
+ * batch the model sent together arrives as a queue: each call lands moments
+ * after the previous one answered. Treated as retries, they each waited up to
+ * 45 seconds for an approval the user could not give yet, because the model
+ * cannot show the number until the whole batch is done. A real retry comes
+ * after the model has read the answer and written to the user, which takes
+ * longer than this.
+ */
+const SIBLING_GRACE_MS = 1500;
+
+/** What a call is told when the sign-in it waited on is still short of its challenge. */
+const STILL_SIGNING_IN = "Sign-in is still running in the background. Try again.";
+
+/**
  * Calls arriving within this long of a batch's first call count as that batch
  * (issue #212). A client running tool calls in parallel sends them within
  * milliseconds; a model retrying after reading an answer takes a whole round
@@ -182,7 +198,7 @@ export interface AuthRunnerOptions {
 function withinCallBudget(work: Promise<boolean>, startedAt: number): Promise<boolean> {
   return new Promise<boolean>((resolve, reject) => {
     const budgetTimer = setTimeout(() => {
-      reject(new AuthProcessError("inProgress", "Sign-in is still running in the background. Try again."));
+      reject(new AuthProcessError("inProgress", STILL_SIGNING_IN));
     }, Math.max(0, CALL_BUDGET_MS - (Date.now() - startedAt)));
     budgetTimer.unref?.();
     work.then(
@@ -289,6 +305,9 @@ function dedupeChallenge(error: unknown, wave: Wave): unknown {
   return new AuthProcessError(error.kind, error.message, error.numberMatch, true, error.relayed);
 }
 
+/** Answers given to a queued sibling (see SIBLING_GRACE_MS); never a new telling. */
+const siblingAnswers = new WeakSet<AuthProcessError>();
+
 /** Identifies a challenge for "was this already reported to a caller". */
 const relayKey = (kind: string, numberMatch: string | undefined): string => `${kind}:${numberMatch ?? ""}`;
 
@@ -336,6 +355,12 @@ export class AuthRunner {
    * that sign-in instead of repeating the answer (see attendRelay).
    */
   private readonly relayTold = new Map<string, number>();
+  /**
+   * When a caller here was last answered with this process's own pending
+   * challenge (not a sibling's short answer). A call arriving within
+   * SIBLING_GRACE_MS of it is a queued sibling and is answered at once.
+   */
+  private challengeAnsweredAt: number | null = null;
   private readonly scriptPath: string;
   private readonly timeoutMs: number;
   private readonly onProgress?: (line: string) => void;
@@ -367,6 +392,8 @@ export class AuthRunner {
    * the next call to join.
    */
   async run(onChallenge?: (numberMatch: string | undefined) => void): Promise<boolean> {
+    const sibling = this.queuedSiblingAnswer();
+    if (sibling) throw sibling;
     // Synchronous, before any await: calls in one tick cannot split a batch.
     const wave = this.joinWave();
     // Also synchronous: what was already told BEFORE this call, so siblings in
@@ -378,26 +405,48 @@ export class AuthRunner {
       return await this.attend(onChallenge, toldBefore);
     } catch (error) {
       this.noteRelayReported(error);
-      throw dedupeChallenge(error, wave);
+      const answer = dedupeChallenge(error, wave);
+      if (answer instanceof AuthProcessError && answer.kind === "mfaPending" && !answer.duplicate && !answer.relayed) {
+        this.challengeAnsweredAt = Date.now();
+      }
+      throw answer;
     } finally {
       this.waiting -= 1;
       this.lastAttendedAt = Date.now();
     }
   }
 
-  private relayChallengesTold(): Set<string> {
+  /**
+   * The answer for a call queued right behind one that was just answered
+   * with this process's pending challenge
+   * (see SIBLING_GRACE_MS), or null when this call should run normally.
+   */
+  private queuedSiblingAnswer(): AuthProcessError | null {
+    const pending = this.pendingChallenge;
+    if (!this.childDone || pending?.kind !== "mfaPending" || this.challengeAnsweredAt === null) return null;
+    if (Date.now() - this.challengeAnsweredAt >= SIBLING_GRACE_MS) return null;
+    // In full, not the short sibling line: if the answer before it was lost,
+    // this one still carries the digits (#201). It does not restart the
+    // grace either, since it never reaches catch in run().
+    return new AuthProcessError(...mfaPendingFailure(pending.numberMatch), pending.numberMatch);
+  }
+
+  /** Relayed challenges already told to a caller here, and when. */
+  private relayChallengesTold(): Map<string, number> {
     const now = Date.now();
-    const told = new Set<string>();
+    const told = new Map<string, number>();
     for (const [key, at] of this.relayTold) {
       if (now - at > RELAY_TOLD_MS) this.relayTold.delete(key);
-      else told.add(key);
+      else told.set(key, at);
     }
     return told;
   }
 
   /** A relayed challenge that went back to a caller counts as told. */
   private noteRelayReported(error: unknown): void {
-    if (!(error instanceof AuthProcessError) || !error.relayed) return;
+    // A sibling's short answer is not a new telling: counting it would let a
+    // loop of quick calls keep every one of them inside SIBLING_GRACE_MS.
+    if (!(error instanceof AuthProcessError) || !error.relayed || error.duplicate || siblingAnswers.has(error)) return;
     if (error.kind !== "mfaPending" && error.kind !== "automaticPending") return;
     this.relayTold.set(relayKey(error.kind, error.numberMatch), Date.now());
   }
@@ -412,7 +461,7 @@ export class AuthRunner {
 
   private async attend(
     onChallenge: ((numberMatch: string | undefined) => void) | undefined,
-    toldBefore: ReadonlySet<string>,
+    toldBefore: ReadonlyMap<string, number>,
   ): Promise<boolean> {
     const startedAt = Date.now();
     try {
@@ -460,13 +509,22 @@ export class AuthRunner {
     error: AuthProcessError,
     startedAt: number,
     onChallenge: ((numberMatch: string | undefined) => void) | undefined,
-    toldBefore: ReadonlySet<string>,
+    toldBefore: ReadonlyMap<string, number>,
   ): Promise<boolean> {
-    const retry = toldBefore.has(relayKey(error.kind, error.numberMatch));
+    const toldAt = toldBefore.get(relayKey(error.kind, error.numberMatch));
+    if (error.kind === "mfaPending" && toldAt !== undefined && Date.now() - toldAt < SIBLING_GRACE_MS) {
+      // Queued right behind the call that was told (see SIBLING_GRACE_MS):
+      // answer in full at once, without counting it as a new telling.
+      const sibling = new AuthProcessError(error.kind, error.message, error.numberMatch, false, true);
+      siblingAnswers.add(sibling);
+      throw sibling;
+    }
+    const retry = toldAt !== undefined;
     if (error.kind === "mfaPending" && onChallenge && !retry) {
       try { onChallenge(error.numberMatch); } catch { /* Announcing must not interrupt authentication. */ }
     }
-    const waits = error.kind === "automaticPending" || (error.kind === "mfaPending" && retry);
+    // inProgress: the owner has not reached a challenge yet. Wait for one.
+    const waits = error.kind === "automaticPending" || error.kind === "inProgress" || (error.kind === "mfaPending" && retry);
     if (!waits) throw error;
     const windowMs = pollWindowMs(Date.now() - startedAt);
     if (windowMs <= 0) throw error;
@@ -491,10 +549,10 @@ export class AuthRunner {
   private async awaitRelayedOwner(error: AuthProcessError, windowMs: number): Promise<boolean> {
     const lockPath = authLockPath(this.sessionDir as string);
     const deadline = Date.now() + windowMs;
-    let latest: { automatic: boolean; numberMatch?: string } = {
-      automatic: error.kind === "automaticPending",
-      numberMatch: error.numberMatch,
-    };
+    type Seen = { phase: "starting" } | { phase: "automatic" } | { phase: "approval"; numberMatch?: string };
+    let latest: Seen = error.kind === "inProgress" ? { phase: "starting" }
+      : error.kind === "automaticPending" ? { phase: "automatic" }
+      : { phase: "approval", numberMatch: error.numberMatch };
     for (;;) {
       const held = await fs.access(lockPath).then(() => true, () => false);
       if (!held) {
@@ -503,9 +561,15 @@ export class AuthRunner {
       }
       const relayed = await relayChallenge(lockPath);
       if (relayed) {
-        latest = relayed.kind === "automatic"
-          ? { automatic: true }
-          : { automatic: false, numberMatch: relayed.numberMatch ?? (latest.automatic ? undefined : latest.numberMatch) };
+        const next: Seen = relayed.kind === "automatic"
+          ? { phase: "automatic" }
+          : { phase: "approval", numberMatch: relayed.numberMatch ?? (latest.phase === "approval" ? latest.numberMatch : undefined) };
+        // A challenge appearing while this caller waited on a sign-in that had
+        // none yet is what the user needs right now: answer with it at once.
+        if (next.phase === "approval" && latest.phase !== "approval") {
+          throw new AuthProcessError(...mfaPendingFailure(next.numberMatch), next.numberMatch, false, true);
+        }
+        latest = next;
       }
       const remaining = deadline - Date.now();
       if (remaining <= 0) break;
@@ -514,7 +578,8 @@ export class AuthRunner {
         timer.unref?.();
       });
     }
-    if (latest.automatic) throw automaticPendingFailure(true);
+    if (latest.phase === "starting") throw new AuthProcessError("inProgress", STILL_SIGNING_IN, undefined, false, true);
+    if (latest.phase === "automatic") throw automaticPendingFailure(true);
     throw new AuthProcessError(...mfaPendingFailure(latest.numberMatch), latest.numberMatch, false, true);
   }
 
@@ -697,6 +762,7 @@ export class AuthRunner {
           this.pendingChallenge = null;
           this.challengeSignal = null;
           this.wave = null;
+          this.challengeAnsweredAt = null;
         }
       });
       trackedCompletion.catch(() => { /* see comment above */ });
@@ -854,9 +920,12 @@ export class AuthRunner {
           // Busy because another process is signing in automatically: there is
           // nothing to approve, so say that rather than "busy".
           else if (code === 2 && automaticSeen) failures[2] = ["automaticPending", automaticPendingFailure().message];
+          // Busy because another process's sign-in has not reached a
+          // challenge yet: the caller can wait on it (see attendRelay).
+          else if (code === 2 && relayed && this.sessionDir) failures[2] = ["inProgress", STILL_SIGNING_IN];
           const [kind, message] = failures[code ?? -1] ?? ["failed", `Authentication failed. Run ${AUTH_COMMAND} to try again.`];
           kill("SIGKILL");
-          const challenged = kind === "mfaPending" || kind === "automaticPending";
+          const challenged = kind === "mfaPending" || kind === "automaticPending" || kind === "inProgress";
           finishChild(new AuthProcessError(kind, message, kind === "mfaPending" ? numberMatch : undefined, false, relayed && challenged));
         }
       });

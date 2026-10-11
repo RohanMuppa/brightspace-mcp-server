@@ -214,6 +214,7 @@ export function registerSearchCourse(
     "search_course",
     {
       title: "Search Course",
+      annotations: { readOnlyHint: true },
       description:
         "Search a course's content (modules, topics, file names), announcements, and discussion forums/topics by keyword in a single call, instead of reading the whole content tree. Use this when the user wants to find something specific, e.g. 'find the midterm review slides' or 'did anyone post about office hours'. Results are ranked: a result matching every query term ranks above one matching only some, and within that, a match in the title ranks above one only in the body text. If one source (e.g. discussions) can't be read, it's skipped and named in `note` rather than failing the whole search. This fans out over the entire content tree, announcements, and every discussion forum, so it can be slower than calling a single tool like get_course_content directly.",
       inputSchema: SearchCourseSchema,

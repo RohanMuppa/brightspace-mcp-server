@@ -29,6 +29,7 @@ export function registerGetClasslistEmails(
     "get_classlist_emails",
     {
       title: "Get Classlist Emails",
+      annotations: { readOnlyHint: true },
       description:
         "Fetch all email addresses for everyone in a course — instructors, TAs, and students. " +
         "Use this when the user wants a list of emails for a class, needs to email the whole class, " +

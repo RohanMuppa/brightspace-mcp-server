@@ -142,6 +142,7 @@ export function registerGetVideoTranscript(
     "get_video_transcript",
     {
       title: "Get Video Transcript",
+      annotations: { readOnlyHint: true },
       description:
         "Read the transcript of a video embedded in course content, such as a recorded lecture or explainer clip. " +
         "Call it with courseId and topicId from get_course_content (typeFilter: 'video' or 'other'), or with videoUrl " +

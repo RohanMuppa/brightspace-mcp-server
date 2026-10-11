@@ -47,6 +47,7 @@ export function registerGetDropboxFeedback(
     "get_dropbox_feedback",
     {
       title: "Get Dropbox Feedback",
+      annotations: { readOnlyHint: true },
       description:
         "Retrieve the existing feedback already saved for a specific user or group in a dropbox folder, " +
         "for an instructor or TA — score, graded state, feedback text, and rubric assessment detail. " +

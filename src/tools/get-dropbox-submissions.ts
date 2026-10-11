@@ -75,6 +75,7 @@ export function registerGetDropboxSubmissions(
     "get_dropbox_submissions",
     {
       title: "Get Dropbox Submissions",
+      annotations: { readOnlyHint: true },
       description:
         "List every student's (or group's) submission to a dropbox folder, for an instructor or TA — " +
         "submitter names, submission dates, late status, file lists, and feedback/grading status. " +

@@ -103,6 +103,7 @@ export function registerGetDiscussions(
     "get_discussions",
     {
       title: "Get Discussions",
+      annotations: { readOnlyHint: true },
       description:
         "Fetch discussion board content for a course including forums, topics, and posts. Use this when the user asks about discussion boards, forum posts, class discussions, or wants to see what's been posted. Provide just courseId to list all forums and their topics. Add forumId to get topics and posts for a specific forum. Add both forumId and topicId to get all posts in a specific discussion topic.",
       inputSchema: GetDiscussionsSchema,

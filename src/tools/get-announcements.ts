@@ -153,6 +153,7 @@ export function registerGetAnnouncements(
     "get_announcements",
     {
       title: "Get Announcements",
+      annotations: { readOnlyHint: true },
       description:
         "Fetch announcements from one course with courseId, or all courses when omitted, newest first. count is 1-50 per page. Continue with offset= pagination.nextOffset until it is null. Pagination metadata is in a separate JSON text block for array responses, or the pagination field with modifiedSince. A false coverageComplete means some courses were not fetched: retry from offset 0 after recovery. Offsets reflect the current filtered list; new posts can shift pages. Attachments are listed per announcement; fetch them with download_file (newsId + fileId) or read them with get_announcement_files.",
       inputSchema: GetAnnouncementsSchema,

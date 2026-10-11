@@ -309,6 +309,7 @@ export function registerGetCourseContent(
     "get_course_content",
     {
       title: "Get Course Content",
+      annotations: { readOnlyHint: true },
       description:
         "Fetch the content tree for a course showing modules, topics, files, and links. Use this when the user asks about course materials, lecture slides, uploaded files, content structure, or what's in a course module. Use moduleTitle to filter to a specific module (e.g. 'Labs', 'Staff', 'Homeworks') instead of fetching the entire tree. Use maxDepth to limit recursion depth for a table-of-contents view. A module or topic that isn't currently available carries isAvailable/availabilityStatus/availabilityMessage (and startDate/endDate when known) explaining why; absence of these fields means it's available now.",
       inputSchema: GetCourseContentSchema,
