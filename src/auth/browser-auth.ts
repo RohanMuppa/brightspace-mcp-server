@@ -15,7 +15,7 @@ import type { RequestMfaCode, OnMfaChallenge } from "./sso-flow.js";
 import { isDuoPrompt } from "./duo-mfa.js";
 import { BrowserStateStore, type BrowserState } from "./browser-state-store.js";
 import { hasNewerEntraState, recordMicrosoftSession } from "./microsoft-session.js";
-import { acquireProcessLock, AuthenticationInProgressError } from "./auth-lock.js";
+import { acquireProcessLock, AuthenticationInProgressError, inspectLockOwner } from "./auth-lock.js";
 import { authLockPath, publishAutomaticProgress, publishChallenge, relayChallenge } from "./mfa-challenge.js";
 import type { AuthPhase } from "./auth-phases.js";
 import { AuthCooldown } from "./auth-cooldown.js";
@@ -158,7 +158,10 @@ export class BrowserAuth {
     ).catch(async (error: unknown) => {
       // Hand back the number the owner is showing, so this caller's user can
       // approve that sign-in instead of being told only to wait for it.
-      if (error instanceof AuthenticationInProgressError) error.challenge = await relayChallenge(this.lockPath);
+      if (error instanceof AuthenticationInProgressError) {
+        error.challenge = await relayChallenge(this.lockPath);
+        error.ownerMode = (await inspectLockOwner(this.lockPath))?.mode;
+      }
       throw error;
     });
     try {

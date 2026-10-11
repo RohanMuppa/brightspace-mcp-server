@@ -53,6 +53,12 @@ export class AuthenticationInProgressError extends Error {
    * CHALLENGE_FILE from this one.
    */
   challenge?: { kind?: "automatic"; numberMatch?: string };
+  /**
+   * How the auth lock's owner holds it, when the caller looked it up (see
+   * BrowserAuth.authenticate). Set only for the auth lock, never for the
+   * other locks that throw this same error.
+   */
+  ownerMode?: "automatic" | "explicit";
   constructor() {
     super("Authentication already in progress. Retry after the current authentication finishes.");
     this.name = "AuthenticationInProgressError";
@@ -117,6 +123,18 @@ export const lockOps = {
   kill: (pid: number, signal: NodeJS.Signals): void => { process.kill(pid, signal); },
   isDead: isDeadImpl,
 };
+
+/**
+ * What a contender can tell about a lock's owner: how it holds the lock
+ * ("exclusive" reads back as "explicit", see readOwner) and whether that
+ * process is gone. undefined when there is no readable owner record, which
+ * is not proof the owner is gone (it may still be writing it).
+ */
+export async function inspectLockOwner(lockPath: string): Promise<{ mode: "automatic" | "explicit"; gone: boolean } | undefined> {
+  const owner = await readOwner(lockPath);
+  if (!owner) return undefined;
+  return { mode: owner.mode === "automatic" ? "automatic" : "explicit", gone: lockOps.isDead(owner) };
+}
 
 /** Remove only our fixed metadata names, after the directory was retired. */
 async function cleanRetired(lockPath: string): Promise<void> {

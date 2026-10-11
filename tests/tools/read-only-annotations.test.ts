@@ -7,20 +7,21 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { registerGetAnnouncements } from "../../src/tools/get-announcements.js";
 
 /**
- * Claude Code and Claude Desktop run tool calls in parallel only when the tool
- * says it is read-only, and one at a time otherwise. Run one at a time, a
- * batch that hits a sign-in queues behind the call that got the MFA number,
- * and the model cannot show that number until the whole queue has finished.
- * Every tool that only reads says so. The two download tools can write a file
- * to disk (downloadPath), so they do not.
+ * Claude Code runs MCP tool calls in parallel only when the tool says it is
+ * read-only, and one at a time otherwise. Run one at a time, a batch that hits
+ * a sign-in queues behind the call that got the MFA number, and the model
+ * cannot show that number until the whole queue has finished. Every tool that
+ * only reads says so. A tool that can save a file to disk (downloadPath) does
+ * not: clients also use the hint to skip permission prompts.
  */
-const WRITES_TO_DISK = new Set(["download_file", "download_dropbox_submission_file"]);
+const WRITES_TO_DISK = new Set(["download_file", "download_dropbox_submission_file", "get_syllabus"]);
 const toolsDir = path.join(process.cwd(), "src", "tools");
 
 function registrations(): Array<{ name: string; config: string }> {
   const found: Array<{ name: string; config: string }> = [];
   for (const file of fs.readdirSync(toolsDir).filter((name) => name.endsWith(".ts"))) {
-    const source = fs.readFileSync(path.join(toolsDir, file), "utf8");
+    // Normalized: a Windows checkout has CRLF line endings.
+    const source = fs.readFileSync(path.join(toolsDir, file), "utf8").replace(/\r\n/g, "\n");
     for (const match of source.matchAll(/registerTool\(\s*"([a-z_]+)",\s*\{([\s\S]*?)\n\s*\},\n/g)) {
       found.push({ name: match[1], config: match[2] });
     }
@@ -35,6 +36,17 @@ describe("read-only tool annotations", () => {
 
   it.each(registrations().filter(({ name }) => !WRITES_TO_DISK.has(name)))("marks $name read-only", ({ config }) => {
     expect(config).toContain("readOnlyHint: true");
+  });
+
+  it("leaves unmarked every tool whose source takes a downloadPath", () => {
+    const files = fs.readdirSync(toolsDir).filter((name) => name.endsWith(".ts"));
+    for (const file of files) {
+      const source = fs.readFileSync(path.join(toolsDir, file), "utf8").replace(/\r\n/g, "\n");
+      if (!source.includes("downloadPath")) continue;
+      for (const match of source.matchAll(/registerTool\(\s*"([a-z_]+)"/g)) {
+        expect(WRITES_TO_DISK, `${match[1]} in ${file} takes a downloadPath`).toContain(match[1]);
+      }
+    }
   });
 
   it.each([...WRITES_TO_DISK])("does not mark %s read-only, since it can write a file", (name) => {

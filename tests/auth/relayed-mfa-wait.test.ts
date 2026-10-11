@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setTimeout as realSleep } from "node:timers/promises";
 import { spawn, execFileSync } from "node:child_process";
 import { AuthRunner } from "../../src/auth/auth-runner.js";
+import { lockOps } from "../../src/auth/auth-lock.js";
 import { sanitizeError } from "../../src/tools/tool-helpers.js";
 
 /**
@@ -134,6 +135,55 @@ describe("a caller whose sign-in found another process holding the lock", () => 
     await relay(child, "MFA_NUMBER:72");
     await pass(10_000);
     expect(retry.settled).toBe(false);
+  });
+
+  it("answers a call queued behind a lock check that has not exited yet, without waiting for it", async () => {
+    const runner = new AuthRunner({ sessionDir });
+    const first = track(runner.run());
+    child.stdout.write("AUTH_RELAYED\nMFA_NUMBER:72\n");
+    await pass(1);
+    expect(first.settled).toBe(true);
+
+    const queued = track(runner.run());
+    await pass(1);
+
+    expect(queued.error).toMatchObject({ kind: "mfaPending", numberMatch: "72", duplicate: false });
+    expect(vi.mocked(spawn)).toHaveBeenCalledTimes(1);
+  });
+
+  it("treats a queued call as a sibling by when it arrived, however slow its lock check was", async () => {
+    const runner = new AuthRunner({ sessionDir });
+    const first = track(runner.run());
+    await relay(child, "MFA_NUMBER:72");
+    expect(first.error).toMatchObject({ kind: "mfaPending", numberMatch: "72" });
+
+    child = nextChild();
+    const queued = track(runner.run());
+    // This call's own lock check takes 3 s before it reports.
+    await pass(3_000);
+    await relay(child, "MFA_NUMBER:72");
+
+    expect(queued.error).toMatchObject({ kind: "mfaPending", numberMatch: "72" });
+  });
+
+  it("cuts a chain of queued relayed calls off after 20 seconds", async () => {
+    const runner = new AuthRunner({ sessionDir });
+    track(runner.run());
+    await relay(child, "MFA_NUMBER:72");
+    for (let i = 0; i < 19; i++) {
+      await pass(1_000);
+      child = nextChild();
+      const queued = track(runner.run());
+      await relay(child, "MFA_NUMBER:72");
+      expect(queued.error).toMatchObject({ kind: "mfaPending" });
+    }
+    await pass(1_000);
+    child = nextChild();
+    const late = track(runner.run());
+    await relay(child, "MFA_NUMBER:72");
+    await pass(5_000);
+
+    expect(late.settled).toBe(false);
   });
 
   it("answers the first call at once with the owner's number, as before", async () => {
@@ -327,7 +377,7 @@ describe("a caller whose sign-in found another process still starting its own", 
 
   /** What this process's child prints when the owner has not reached a challenge yet. */
   async function relayStarting(target: Child): Promise<void> {
-    target.stdout.write("AUTH_RELAYED\n");
+    target.stdout.write("AUTH_RELAYED_STARTING\n");
     await pass(1);
     target.emit("close", 2);
     await pass(1);
@@ -446,6 +496,39 @@ describe("a caller whose sign-in found another process still starting its own", 
     expect(calls.every((call) => call.settled)).toBe(true);
     const texts = calls.map((call) => answerText(call.error));
     expect(texts.filter((text) => text.includes("72"))).toHaveLength(1);
+  });
+
+  it("waits on the owner without waiting for its own lock check to exit", async () => {
+    const call = track(new AuthRunner({ sessionDir }).run());
+    // The child lingers after printing (its update check is still running).
+    child.stdout.write("AUTH_RELAYED_STARTING\n");
+    await pass(3_000);
+    publish({ numberMatch: "72" });
+    await pass(2_000);
+
+    expect(call.error).toMatchObject({ kind: "mfaPending", numberMatch: "72" });
+  });
+
+  it("answers at once when the owner's own-code sign-in turns into a number to approve", async () => {
+    const call = track(new AuthRunner({ sessionDir }).run());
+    await relayStarting(child);
+    publish({ kind: "automatic" });
+    await pass(10_000);
+    expect(call.settled).toBe(false);
+    publish({ numberMatch: "72" });
+    await pass(2_000);
+
+    expect(call.error).toMatchObject({ kind: "mfaPending", numberMatch: "72" });
+  });
+
+  it("stops waiting on an owner that died holding the lock", async () => {
+    fs.writeFileSync(path.join(lockDir, "owner.json"), JSON.stringify({ pid: 999999, host: "h", nonce: "n", mode: "automatic" }));
+    vi.spyOn(lockOps, "isDead").mockReturnValue(true);
+    const call = track(new AuthRunner({ sessionDir }).run());
+    await relayStarting(child);
+    await pass(3_000);
+
+    expect(call.error).toMatchObject({ kind: "inProgress", relayed: false });
   });
 
   it("still answers busy when there is no session directory to watch", async () => {

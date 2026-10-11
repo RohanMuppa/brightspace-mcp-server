@@ -13,7 +13,7 @@ import { NativeCredentialStoreError } from "./auth/credential-store.js";
 import { retireLegacyProfile } from "./auth/legacy-profile.js";
 import { formatPhaseMarker, type AuthPhase } from "./auth/auth-phases.js";
 import { AuthenticationInProgressError } from "./auth/auth-lock.js";
-import { AUTOMATIC_PENDING_MARKER, RELAYED_CHALLENGE_MARKER, challengeMarker } from "./auth/mfa-challenge.js";
+import { AUTOMATIC_PENDING_MARKER, challengeMarker, relayedLockLines } from "./auth/mfa-challenge.js";
 import { runLogout } from "./auth/logout.js";
 import { configureDevActivity } from "./utils/dev-activity.js";
 import { AUTH_COMMAND, SETUP_COMMAND } from "./utils/commands.js";
@@ -117,14 +117,11 @@ async function main(): Promise<void> {
     }
     // Another process's sign-in holds the lock and is showing a challenge:
     // pass it on, so this caller can tell its user what to approve.
-    // Before it has one, say so anyway: the caller can wait on that sign-in.
+    // Before it has one, say that it is starting, so the caller can wait on
+    // it. Only the auth lock's own contention sets challenge/ownerMode
+    // (BrowserAuth.authenticate); any other lock stays a plain "busy".
     if (automatic && error instanceof AuthenticationInProgressError) {
-      console.log(RELAYED_CHALLENGE_MARKER);
-      if (error.challenge) {
-        console.log(error.challenge.kind === "automatic"
-          ? AUTOMATIC_PENDING_MARKER
-          : challengeMarker(error.challenge.numberMatch));
-      }
+      for (const line of relayedLockLines(error.challenge, error.ownerMode)) console.log(line);
     }
     process.exitCode = error instanceof NativeCredentialStoreError ? 5
       : code === "AUTH_IN_PROGRESS" ? 2

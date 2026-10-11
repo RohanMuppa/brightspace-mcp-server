@@ -661,7 +661,7 @@ describe("AuthRunner", () => {
     await failure;
   });
 
-  // Claude Code and Claude Desktop run tool calls that are not marked
+  // Claude Code runs tool calls that are not marked
   // read-only one at a time, so a batch arrives as a queue. A call queued
   // right behind the one that got the number is its sibling: answered at
   // once, or the model cannot show the user the number until it times out.
@@ -686,14 +686,24 @@ describe("AuthRunner", () => {
       expect(spawn).toHaveBeenCalledTimes(1);
     });
 
-    it("does not let a run of quick calls keep each other from waiting", async () => {
+    it("chains a queue of siblings, each arriving just after the one before", async () => {
       const runner = new AuthRunner();
       await firstTold(runner);
-      for (const gap of [500, 500, 400]) {
+      for (const gap of [1000, 1000, 1000, 1000]) {
         await vi.advanceTimersByTimeAsync(gap);
+        await expect(runner.run()).rejects.toMatchObject({ kind: "mfaPending", numberMatch: "47" });
+      }
+      expect(spawn).toHaveBeenCalledTimes(1);
+    });
+
+    it("cuts a chain of quick calls off after 20 seconds, so a loop still has to wait", async () => {
+      const runner = new AuthRunner();
+      await firstTold(runner);
+      for (let i = 0; i < 19; i++) {
+        await vi.advanceTimersByTimeAsync(1000);
         await expect(runner.run()).rejects.toMatchObject({ kind: "mfaPending" });
       }
-      await vi.advanceTimersByTimeAsync(200);
+      await vi.advanceTimersByTimeAsync(1000);
 
       let settled = false;
       void runner.run().then(() => { settled = true; }, () => { settled = true; });

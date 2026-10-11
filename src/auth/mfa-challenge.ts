@@ -103,6 +103,31 @@ export const AUTOMATIC_PENDING_MARKER = "AUTH_AUTOMATIC_PENDING";
  */
 export const RELAYED_CHALLENGE_MARKER = "AUTH_RELAYED";
 
+/**
+ * Printed alone, instead of the relay marker and a challenge, when the lock
+ * belongs to another server's background sign-in that has not reached a
+ * challenge yet. The parent can wait on that sign-in (AuthRunner.attendRelay).
+ */
+export const RELAYED_STARTING_MARKER = "AUTH_RELAYED_STARTING";
+
+/**
+ * What an automatic child prints when its sign-in found the auth lock held:
+ * the owner's challenge after the relay marker; or, when a background sign-in
+ * (mode "automatic") holds the lock with no challenge yet, the starting
+ * marker. Nothing for anything else, so the parent answers "busy": an
+ * explicit `auth` run in a terminal never publishes a challenge, and an owner
+ * that cannot be identified may be a stuck lock someone has to clear.
+ */
+export function relayedLockLines(
+  challenge: PendingChallenge | undefined,
+  ownerMode: "automatic" | "explicit" | undefined,
+): string[] {
+  if (challenge) {
+    return [RELAYED_CHALLENGE_MARKER, challenge.kind === "automatic" ? AUTOMATIC_PENDING_MARKER : challengeMarker(challenge.numberMatch)];
+  }
+  return ownerMode === "automatic" ? [RELAYED_STARTING_MARKER] : [];
+}
+
 /** The stdout marker AuthRunner parses for a challenge. */
 export function challengeMarker(numberMatch: string | null | undefined): string {
   return numberMatch ? `MFA_NUMBER:${numberMatch}` : "MFA_PENDING";
