@@ -181,6 +181,11 @@ async function fetchCourseDueItems(
     for (const folder of unwrapList<DropboxFolder>(dropboxResult.value)) {
       if (folder.IsHidden === true) continue;
       if (!folder.DueDate) continue;
+      // Check the window before resolving the link: a group folder's link
+      // costs group-membership requests, wasted on an item the handler's
+      // window filter would drop anyway (issue #230).
+      const due = new Date(folder.DueDate).getTime();
+      if (!Number.isFinite(due) || due < from || due > to) continue;
       const link = await assignmentLink(folder);
 
       items.push({

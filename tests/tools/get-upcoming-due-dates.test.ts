@@ -244,6 +244,39 @@ describe("get_upcoming_due_dates", () => {
     expect(parse(await call({ daysAhead: 7 }))).toEqual([]);
   });
 
+  it("does not look up groups for a group assignment outside the window (issue #230)", async () => {
+    const { call, requested } = setup((path) => {
+      if (path.includes("/enrollments/")) return enrollments(COURSE_A);
+      if (path.includes("/dropbox/folders/")) {
+        return [
+          { Id: 1, Name: "Old project", DueDate: daysFromNow(-30), IsHidden: false, GroupTypeId: 7 },
+          { Id: 2, Name: "Far project", DueDate: daysFromNow(30), IsHidden: false, GroupTypeId: 7 },
+        ];
+      }
+      return [];
+    });
+
+    expect(parse(await call({ daysAhead: 7 }))).toEqual([]);
+    expect(requested.filter((p) => /whoami|groupcategories/.test(p))).toEqual([]);
+  });
+
+  it("still resolves the group link for a group assignment inside the window", async () => {
+    const { call } = setup((path) => {
+      if (path.includes("/enrollments/")) return enrollments(COURSE_A);
+      if (path.includes("/whoami")) return { Identifier: "9" };
+      if (path.includes("/groupcategories/7/groups/")) {
+        return [{ GroupId: 44, Name: "Team 4", Enrollments: [9] }];
+      }
+      if (path.includes("/dropbox/folders/")) {
+        return [{ Id: 3, Name: "Project", DueDate: daysFromNow(2), IsHidden: false, GroupTypeId: 7 }];
+      }
+      return [];
+    });
+
+    const [item] = parse(await call({ daysAhead: 7 }));
+    expect(item.url).toBe(`${BASE}/d2l/lms/dropbox/user/folder_submit_files.d2l?db=3&grpid=44&ou=101`);
+  });
+
   it("emits deep-link urls for assignments and quizzes", async () => {
     const { call } = setup((path) => {
       if (path.includes("/enrollments/")) return enrollments(COURSE_A);
