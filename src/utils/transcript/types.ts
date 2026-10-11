@@ -15,8 +15,16 @@ export interface TranscriptResult {
   durationSeconds: number | null;
 }
 
-/** Minimal fetch surface an adapter needs, so tests can inject a stub instead of touching global fetch. */
-export type FetchLike = (url: string) => Promise<{
+/**
+ * Minimal fetch surface an adapter needs, so tests can inject a stub instead
+ * of touching global fetch. The optional init exists because YouTube's caption
+ * list is only reachable through a POST to its InnerTube player endpoint (see
+ * youtube.ts); global fetch satisfies this shape unchanged.
+ */
+export type FetchLike = (
+  url: string,
+  init?: { method?: string; headers?: Record<string, string>; body?: string },
+) => Promise<{
   ok: boolean;
   status: number;
   json(): Promise<unknown>;

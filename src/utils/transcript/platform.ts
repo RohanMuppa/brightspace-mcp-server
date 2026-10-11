@@ -63,7 +63,14 @@ export function detectVideoPlatform(url: string): VideoPlatform {
   // BoilerCast at Purdue), which is why entry_id/wid are also checked as
   // query params or path segments before falling back to "unknown".
   if (hasHostLabel(host, "kaltura")) return "kaltura";
-  if (isDomainOrSubdomain(host, "youtube.com") || isDomainOrSubdomain(host, "youtu.be")) return "youtube";
+  if (
+    isDomainOrSubdomain(host, "youtube.com")
+    || isDomainOrSubdomain(host, "youtu.be")
+    // Privacy-mode embeds are the same video. extractYouTubeVideoId has always
+    // accepted this host, so leaving it out here made the tool answer
+    // "unsupported platform" for a link it could in fact read.
+    || isDomainOrSubdomain(host, "youtube-nocookie.com")
+  ) return "youtube";
   if (hasHostLabel(host, "panopto")) return "panopto";
   if (hasHostLabel(host, "yuja")) return "yuja";
   if (hasHostLabel(host, "echo360")) return "echo360";
@@ -125,8 +132,11 @@ export function extractYouTubeVideoId(url: string): string | null {
   if (isDomainOrSubdomain(host, "youtube.com") || isDomainOrSubdomain(host, "youtube-nocookie.com")) {
     const v = parsed.searchParams.get("v");
     if (v) return v;
-    const embedMatch = parsed.pathname.match(/\/embed\/([\w-]+)/);
-    if (embedMatch) return embedMatch[1];
+    // /embed/, /shorts/, /live/ and the old /v/ all name the video in the path.
+    // Only /embed/ was handled, so a Shorts or a premiere link reported that no
+    // video id could be found.
+    const pathMatch = parsed.pathname.match(/\/(?:embed|shorts|live|v)\/([\w-]+)/);
+    if (pathMatch) return pathMatch[1];
   }
   return null;
 }
