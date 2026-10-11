@@ -670,61 +670,55 @@ describe("AuthRunner", () => {
       expect(onChallenge).toHaveBeenCalledWith(undefined);
     });
 
-    it("keeps waiting after the challenge and resolves once the sign-in completes", async () => {
-      const result = new AuthRunner().run(() => {});
-      child.stdout.write("MFA_NUMBER:47\n");
-      await vi.advanceTimersByTimeAsync(30000);
-      child.emit("close", 0);
-
-      expect(await result).toBe(true);
-    });
-
-    it("rejects with the sign-in's own failure when it fails while the caller waits", async () => {
-      const result = new AuthRunner().run(() => {});
-      const failure = expect(result).rejects.toMatchObject({ kind: "cooldown" });
-      child.stdout.write("MFA_NUMBER:47\n");
-      await vi.advanceTimersByTimeAsync(10000);
-      child.emit("close", 3);
-      await failure;
-    });
-
-    it("answers with the pending challenge once the 45-second poll window lapses", async () => {
-      const result = new AuthRunner().run(() => {});
+    // Claude Desktop sends a progress token but never shows progress
+    // messages, so holding the call open after announcing kept the number
+    // from the user for up to 45 seconds. The first answer carries it.
+    it("still answers the first call with the number at once, even though it announced it", async () => {
+      const onChallenge = vi.fn();
+      const result = new AuthRunner().run(onChallenge);
       const failure = expect(result).rejects.toMatchObject({ kind: "mfaPending", numberMatch: "47" });
       child.stdout.write("MFA_NUMBER:47\n");
-      await vi.advanceTimersByTimeAsync(45000);
+      await vi.advanceTimersByTimeAsync(0);
       await failure;
 
+      expect(onChallenge).toHaveBeenCalledWith("47");
       expect(child.kill).not.toHaveBeenCalled();
     });
 
-    it("is still waiting just before the poll window lapses", async () => {
-      let settled = false;
-      void new AuthRunner().run(() => {}).then(() => { settled = true; }, () => { settled = true; });
-      child.stdout.write("MFA_NUMBER:47\n");
-      await vi.advanceTimersByTimeAsync(44000);
-
-      expect(settled).toBe(false);
-    });
-
-    it("answers by 55 seconds into the call when the challenge arrives late", async () => {
+    it("answers with the number as soon as a late challenge appears", async () => {
       const result = new AuthRunner().run(() => {});
       const failure = expect(result).rejects.toMatchObject({ kind: "mfaPending", numberMatch: "47" });
       await vi.advanceTimersByTimeAsync(30000);
       child.stdout.write("MFA_NUMBER:47\n");
-      await vi.advanceTimersByTimeAsync(25000);
+      await vi.advanceTimersByTimeAsync(0);
       await failure;
     });
 
-    it("is still waiting just before 55 seconds into the call when the challenge arrives late", async () => {
-      let settled = false;
-      void new AuthRunner().run(() => {}).then(() => { settled = true; }, () => { settled = true; });
-      await vi.advanceTimersByTimeAsync(30000);
+    it("lets the retry wait for the approval and resolve once the sign-in completes", async () => {
+      const runner = new AuthRunner();
+      const first = expect(runner.run(() => {})).rejects.toMatchObject({ kind: "mfaPending" });
       child.stdout.write("MFA_NUMBER:47\n");
-      await vi.advanceTimersByTimeAsync(24000);
+      await vi.advanceTimersByTimeAsync(0);
+      await first;
 
-      expect(settled).toBe(false);
+      const retry = runner.run(() => {});
+      await vi.advanceTimersByTimeAsync(30000);
+      child.emit("close", 0);
+
+      expect(await retry).toBe(true);
     });
 
+    it("gives the retry the sign-in's own failure when it fails while the retry waits", async () => {
+      const runner = new AuthRunner();
+      const first = expect(runner.run(() => {})).rejects.toMatchObject({ kind: "mfaPending" });
+      child.stdout.write("MFA_NUMBER:47\n");
+      await vi.advanceTimersByTimeAsync(0);
+      await first;
+
+      const retry = expect(runner.run(() => {})).rejects.toMatchObject({ kind: "cooldown" });
+      await vi.advanceTimersByTimeAsync(10000);
+      child.emit("close", 3);
+      await retry;
+    });
   });
 });

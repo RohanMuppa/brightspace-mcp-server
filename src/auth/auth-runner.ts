@@ -29,9 +29,9 @@ const KILL_GRACE_MS = 5000;
 
 /**
  * How long a caller keeps waiting for the background sign-in once the
- * challenge is known: long enough to find a phone and approve. Applies both
- * to a caller told the challenge mid-call (see run()'s onChallenge) and to a
- * retry that joins the background child after an early answer. The retry
+ * challenge is known: long enough to find a phone and approve. Applies to a
+ * retry that joins the background child after the answer carrying the
+ * challenge (the first answer never waits; see attend). The retry
  * used to wait only 5 s, so on clients that send no progress token (Claude
  * Desktop) every retry re-answered "enter the number" and the model asked
  * the user to confirm by hand instead of the server polling for the approval.
@@ -358,9 +358,9 @@ export class AuthRunner {
    * challenge appears (an mfaPending error carrying the number to enter: the
    * user cannot see it any other way), and the next call joins the background
    * sign-in and polls it for up to MFA_POLL_MS, never past CALL_BUDGET_MS from
-   * that call. With onChallenge, the caller is handed the challenge mid-call
-   * and the first call itself keeps waiting the same way. Either way an
-   * approval within the window completes the caller's original request; past
+   * that call. With onChallenge, the caller is also handed the challenge
+   * mid-call, but is still answered at once: a client may accept progress
+   * notices without showing them. An approval within the window completes the caller's original request; past
    * it, the caller gets the same mfaPending answer again and is expected to
    * call once more. No caller waits past CALL_BUDGET_MS: a sign-in still
    * short of its challenge by then answers inProgress and keeps running for
@@ -423,16 +423,19 @@ export class AuthRunner {
       }
       const childDone = this.childDone;
       if (!childDone || !(error instanceof AuthProcessError)) throw error;
-      // An mfaPending is only worth waiting on when the caller can relay the
-      // number mid-call. An automaticPending needs no relay at all — nobody is
-      // being asked for anything — so keep waiting on it either way.
-      const joinable = error.kind === "automaticPending" || (Boolean(onChallenge) && error.kind === "mfaPending");
-      if (!joinable) throw error;
-      const windowMs = pollWindowMs(Date.now() - startedAt);
-      if (windowMs <= 0) throw error;
+      // A new challenge always goes back in the answer, announced or not. A
+      // progress token says a client CAN receive mid-call notices, not that it
+      // shows them: Claude Desktop sends one and displays nothing, so holding
+      // the call open after announcing kept the number from the user for up
+      // to 45 seconds. The retry is what joins and waits for the approval.
+      // An automaticPending asks nothing of anyone, so keep waiting on it.
       if (error.kind === "mfaPending") {
         try { onChallenge?.(error.numberMatch); } catch { /* Announcing must not interrupt authentication. */ }
+        throw error;
       }
+      if (error.kind !== "automaticPending") throw error;
+      const windowMs = pollWindowMs(Date.now() - startedAt);
+      if (windowMs <= 0) throw error;
       return this.awaitBackgroundChild(childDone, windowMs);
     }
   }
@@ -443,15 +446,15 @@ export class AuthRunner {
    * exited, so unlike awaitBackgroundChild there is nothing here to join:
    * the lock is the only thing to watch.
    *
-   * The first answer is still immediate for a caller that cannot be told
-   * mid-call, because the number is what the user needs and every second
+   * The first answer is immediate, because the number is what the user needs and every second
    * before it is a second the other sign-in's window runs down. A RETRY of the
    * same challenge (already reported to a caller in this process) waits, like
    * a retry joining a local child, instead of re-answering at once: answering
    * a loop of retries in milliseconds made a model conclude the approval
    * window had closed while the other sign-in was still waiting. A caller
-   * that can be told mid-call is told and waits at once, and an owner
-   * answering its own code has nothing to relay, so every caller waits.
+   * that can be told mid-call is told too, but is answered at once all the
+   * same (see attend), and an owner answering its own code has nothing to
+   * relay, so every caller waits.
    */
   private attendRelay(
     error: AuthProcessError,
@@ -460,15 +463,13 @@ export class AuthRunner {
     toldBefore: ReadonlySet<string>,
   ): Promise<boolean> {
     const retry = toldBefore.has(relayKey(error.kind, error.numberMatch));
-    const waits = error.kind === "automaticPending"
-      || (error.kind === "mfaPending" && (Boolean(onChallenge) || retry));
+    if (error.kind === "mfaPending" && onChallenge && !retry) {
+      try { onChallenge(error.numberMatch); } catch { /* Announcing must not interrupt authentication. */ }
+    }
+    const waits = error.kind === "automaticPending" || (error.kind === "mfaPending" && retry);
     if (!waits) throw error;
     const windowMs = pollWindowMs(Date.now() - startedAt);
     if (windowMs <= 0) throw error;
-    if (error.kind === "mfaPending" && onChallenge) {
-      try { onChallenge(error.numberMatch); } catch { /* Announcing must not interrupt authentication. */ }
-      this.noteRelayReported(error);
-    }
     return this.awaitRelayedOwner(error, windowMs);
   }
 

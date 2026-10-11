@@ -220,19 +220,16 @@ describe("a caller whose sign-in found another process holding the lock", () => 
     expect(retry.error).toMatchObject({ kind: "mfaPending", numberMatch: "33" });
   });
 
-  it("announces the number to a caller that can be told mid-call, then waits for the owner", async () => {
+  it("announces the number to a caller that can be told mid-call, and still answers it at once", async () => {
     const runner = new AuthRunner({ sessionDir });
     const onChallenge = vi.fn();
 
     const call = track(runner.run(onChallenge));
     await relay(child, "MFA_NUMBER:72");
-    await pass(10_000);
+    await pass(1_000);
 
     expect(onChallenge).toHaveBeenCalledWith("72");
-    expect(call.settled).toBe(false);
-    fs.rmSync(lockDir, { recursive: true });
-    await pass(2_000);
-    expect(call.value).toBe(true);
+    expect(call.error).toMatchObject({ kind: "mfaPending", numberMatch: "72" });
   });
 
   it("waits on an owner that is answering its own verification code, even on the first call", async () => {
