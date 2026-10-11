@@ -47,6 +47,74 @@ describe("AuthRunner", () => {
     vi.clearAllMocks();
   });
 
+  /**
+   * A child answering its own verification code (an authenticator enrollment
+   * is saved) reports AUTH_AUTOMATIC_PENDING instead of a challenge marker:
+   * there is nothing on anyone's phone to approve, so no caller may be told to
+   * go approve one. Ported from ElliotDrel/brightspace-mcp-server
+   * (branch codex/purdue-totp, PR #54) and adapted to the file-based challenge
+   * relay this repo gained in #201.
+   */
+  it("waits out an automatic code sign-in without announcing a phone challenge", async () => {
+    const announce = vi.fn();
+    const result = new AuthRunner().run(announce);
+    child.stdout.write("AUTH_AUTOMATIC_PENDING\n");
+    await vi.advanceTimersByTimeAsync(2000);
+    child.emit("close", 0);
+    expect(await result).toBe(true);
+    expect(announce).not.toHaveBeenCalled();
+  });
+
+  it("keeps an automatic sign-in alive past the caller window and joins it on retry", async () => {
+    const runner = new AuthRunner();
+    // Joinable even with no onChallenge: nothing has to be relayed to anyone.
+    const failure = expect(runner.run()).rejects.toMatchObject({ kind: "automaticPending", numberMatch: undefined });
+    child.stdout.write("AUTH_AUTOMATIC_PENDING\n");
+    await vi.advanceTimersByTimeAsync(45000);
+    await failure;
+    expect(kill).not.toHaveBeenCalled();
+    const retry = runner.run();
+    child.emit("close", 0);
+    expect(await retry).toBe(true);
+    expect(spawn).toHaveBeenCalledTimes(1);
+  });
+
+  it("upgrades automatic progress to a real challenge when one appears", async () => {
+    const runner = new AuthRunner();
+    const failure = expect(runner.run()).rejects.toMatchObject({ kind: "mfaPending", numberMatch: "47" });
+    child.stdout.write("AUTH_AUTOMATIC_PENDING\n");
+    await vi.advanceTimersByTimeAsync(1000);
+    child.stdout.write("MFA_NUMBER:47\n");
+    await vi.advanceTimersByTimeAsync(44000);
+    await failure;
+    child.emit("close", 0);
+  });
+
+  it("bounds late automatic progress to the call budget and lets a retry join", async () => {
+    const runner = new AuthRunner();
+    const announce = vi.fn();
+    const failure = expect(runner.run(announce)).rejects.toMatchObject({ kind: "automaticPending" });
+    await vi.advanceTimersByTimeAsync(30000);
+    child.stdout.write("AUTH_AUTOMATIC_PENDING\n");
+    await vi.advanceTimersByTimeAsync(25000);
+    await failure;
+    expect(announce).not.toHaveBeenCalled();
+    expect(kill).not.toHaveBeenCalled();
+    const retry = runner.run(announce);
+    child.emit("close", 0);
+    expect(await retry).toBe(true);
+    expect(spawn).toHaveBeenCalledTimes(1);
+  });
+
+  it("answers automaticPending, not busy, when another process is signing in automatically", async () => {
+    const runner = new AuthRunner();
+    const failure = expect(runner.run()).rejects.toMatchObject({ kind: "automaticPending" });
+    child.stdout.write("AUTH_AUTOMATIC_PENDING\n");
+    await vi.advanceTimersByTimeAsync(1);
+    child.emit("close", 2);
+    await failure;
+  });
+
   it("runs automatic authentication and forwards complete MFA lines", async () => {
     const progress = vi.fn();
     const runner = new AuthRunner({ onProgress: progress });
@@ -471,6 +539,21 @@ describe("AuthRunner", () => {
     it("is stopped 45 seconds after its number was given when no caller came back", async () => {
       const runner = new AuthRunner();
       await answerEarly(runner);
+
+      await vi.advanceTimersByTimeAsync(45000);
+
+      expect(childTreeStopped()).toBe(true);
+    });
+
+    it("is stopped the same way when it was answering its own verification code", async () => {
+      // Nothing is waiting on it and nobody was asked to approve anything, but
+      // it still holds the cross-process sign-in lock every other server
+      // process is queued behind.
+      const runner = new AuthRunner();
+      const failure = expect(runner.run()).rejects.toMatchObject({ kind: "automaticPending" });
+      child.stdout.write("AUTH_AUTOMATIC_PENDING\n");
+      await vi.advanceTimersByTimeAsync(45000);
+      await failure;
 
       await vi.advanceTimersByTimeAsync(45000);
 

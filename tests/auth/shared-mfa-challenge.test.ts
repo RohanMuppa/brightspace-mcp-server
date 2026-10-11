@@ -18,6 +18,7 @@ import type { AppConfig } from "../../src/types/index.js";
 const mocks = vi.hoisted(() => ({
   load: vi.fn(), save: vi.fn(), launch: vi.fn(), mint: vi.fn(),
   announce: undefined as OnMfaChallenge | undefined,
+  automatic: undefined as (() => void) | undefined,
 }));
 vi.mock("../../src/auth/browser-state-store.js", () => ({
   BrowserStateStore: class { load = mocks.load; save = mocks.save; },
@@ -26,8 +27,9 @@ vi.mock("playwright", () => ({ chromium: { launch: mocks.launch } }));
 vi.mock("../../src/auth/token-mint.js", () => ({ mintAccessToken: mocks.mint }));
 vi.mock("../../src/auth/sso-flow.js", async (importActual) => ({
   ...await importActual<typeof import("../../src/auth/sso-flow.js")>(),
-  createSSOFlow: (_config: unknown, _code: unknown, onMfaChallenge?: OnMfaChallenge) => {
+  createSSOFlow: (_config: unknown, _code: unknown, onMfaChallenge?: OnMfaChallenge, onAutomaticPending?: () => void) => {
     mocks.announce = onMfaChallenge;
+    mocks.automatic = onAutomaticPending;
     return { hasCredentials: () => true, login: vi.fn() };
   },
 }));
@@ -58,6 +60,25 @@ async function ownerAtChallenge(number: string | null): Promise<{ approve: () =>
   vi.spyOn(auth as any, "harvestSessionMaterial").mockResolvedValue({ cookieHeader: "d2lSessionVal=aaa", csrfToken: "xsrf-1" });
   const finished = auth.authenticate({ automatic: true });
   await atChallenge;
+  return { approve, finished };
+}
+
+/** A sign-in answering its own verification code, parked until `approve` is called. */
+async function ownerAnsweringItsOwnCode(): Promise<{ approve: () => void; finished: Promise<unknown> }> {
+  const auth = newAuth();
+  let approve!: () => void;
+  let reported!: () => void;
+  const approved = new Promise<void>((resolve) => { approve = resolve; });
+  const atProgress = new Promise<void>((resolve) => { reported = resolve; });
+  vi.spyOn(auth as any, "navigateAndLogin").mockImplementation(async () => {
+    mocks.automatic?.();
+    reported();
+    await approved;
+    return true;
+  });
+  vi.spyOn(auth as any, "harvestSessionMaterial").mockResolvedValue({ cookieHeader: "d2lSessionVal=aaa", csrfToken: "xsrf-1" });
+  const finished = auth.authenticate({ automatic: true });
+  await atProgress;
   return { approve, finished };
 }
 
@@ -96,6 +117,19 @@ describe("a sign-in that finds another sign-in holding the lock", () => {
       expect(error).toMatchObject({ code: "AUTH_IN_PROGRESS" });
       expect((error as { challenge?: unknown }).challenge).toEqual({});
     });
+
+    owner.approve();
+    await owner.finished;
+  });
+
+  it("is told the owner is answering its own code, so it asks nobody to approve anything", async () => {
+    // An automatic verification-code sign-in has nothing on anyone's phone to
+    // approve. Published through the same lock-directory file as a number
+    // match, so a contender relays "still signing in" instead.
+    const owner = await ownerAnsweringItsOwnCode();
+
+    await vi.waitFor(() => expect(newAuth().authenticate({ automatic: true }))
+      .rejects.toMatchObject({ code: "AUTH_IN_PROGRESS", challenge: { kind: "automatic" } }));
 
     owner.approve();
     await owner.finished;

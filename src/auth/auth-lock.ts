@@ -46,16 +46,28 @@ export const CHALLENGE_FILE = "challenge.json";
 
 export class AuthenticationInProgressError extends Error {
   readonly code = "AUTH_IN_PROGRESS";
-  /** The owner's MFA challenge, when the caller looked it up (see BrowserAuth.authenticate). */
-  challenge?: { numberMatch?: string };
+  /**
+   * The owner's MFA challenge, when the caller looked it up (see
+   * BrowserAuth.authenticate). Structurally `PendingChallenge` from
+   * mfa-challenge.ts, spelled out here because that module imports
+   * CHALLENGE_FILE from this one.
+   */
+  challenge?: { kind?: "automatic"; numberMatch?: string };
   constructor() {
     super("Authentication already in progress. Retry after the current authentication finishes.");
     this.name = "AuthenticationInProgressError";
   }
 }
 
-/** How an owner acquired the lock: a background AuthRunner child, or an explicit `auth` run. */
-type LockMode = "automatic" | "explicit";
+/**
+ * How an owner acquired the lock: a background AuthRunner child, an explicit
+ * `auth` run, or a short exclusive hold such as `auth --logout` deleting the
+ * saved session. Only an explicit run ever takes over an owner, and only an
+ * "automatic" one; an "exclusive" holder is never taken over, and takes over
+ * no one. It is read back as "explicit" (see readOwner), which is just as
+ * untouchable.
+ */
+type LockMode = "automatic" | "explicit" | "exclusive";
 
 interface Owner {
   pid: number;
@@ -138,7 +150,11 @@ class Lease {
 }
 
 export interface AcquireLockOptions {
-  /** Who is acquiring: a background AuthRunner child ("automatic") or an explicit `auth` run ("explicit", the default). */
+  /**
+   * Who is acquiring: a background AuthRunner child ("automatic"), an explicit
+   * `auth` run ("explicit", the default), or a holder that must neither take
+   * over a live sign-in nor be taken over ("exclusive").
+   */
   mode?: LockMode;
 }
 

@@ -105,6 +105,27 @@ describe("a parallel batch of tool calls against an expired session", () => {
     }
   });
 
+  it("reports an automatic code sign-in once too, without telling anyone to approve", async () => {
+    // With a saved enrollment the child announces AUTH_AUTOMATIC_PENDING instead
+    // of a number. Every caller joins and waits (nobody is asked to relay
+    // anything); if the sign-in is still typing its code when the poll window
+    // lapses, all of them are answered at once, which is #212 again.
+    const runner = new AuthRunner();
+    const answers = BATCH_ANSWERS(runner);
+    child.stdout.write("AUTH_AUTOMATIC_PENDING\n");
+    await vi.advanceTimersByTimeAsync(46_000);
+
+    const [owner, ...contenders] = await Promise.all(answers);
+
+    expect(owner).toMatch(/answering its own verification code/);
+    for (const text of contenders) {
+      expect(text).toMatch(/sign-in is already in progress/i);
+      expect(text).toMatch(/retry/i);
+      expect(text).not.toMatch(/approve the sign-in|enter \d+/i);
+      expect(text.length).toBeLessThan(owner.length);
+    }
+  });
+
   it("starts one sign-in for the whole batch", async () => {
     const runner = new AuthRunner();
     BATCH_ANSWERS(runner);

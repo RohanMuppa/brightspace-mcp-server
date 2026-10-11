@@ -5,6 +5,7 @@
  */
 
 import { spawn, execFileSync } from "node:child_process";
+import * as fs from "node:fs/promises";
 import type { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import * as path from "node:path";
@@ -13,7 +14,7 @@ import { AuthError } from "../utils/errors.js";
 import { AUTH_COMMAND } from "../utils/commands.js";
 import { devActivity } from "../utils/dev-activity.js";
 import { parsePhaseMarker } from "./auth-phases.js";
-import { authLockPath, challengeRelayedAt } from "./mfa-challenge.js";
+import { AUTOMATIC_PENDING_MARKER, RELAYED_CHALLENGE_MARKER, authLockPath, challengeRelayedAt, relayChallenge } from "./mfa-challenge.js";
 
 /**
  * Timeout for the auth process. It has to outlast the child's own MFA wait,
@@ -61,6 +62,22 @@ const CALL_BUDGET_MS = 55000;
 const ABANDON_MS = MFA_POLL_MS;
 
 /**
+ * How often a caller waiting on ANOTHER process's sign-in looks at the lock.
+ * Each look also touches the challenge file (relayChallenge), which tells that
+ * process's abandonment watcher someone still wants its sign-in. It has to
+ * stay well under ABANDON_MS.
+ */
+const RELAY_POLL_MS = 1000;
+
+/**
+ * How long a relayed challenge stays "already told to a caller" for the rule
+ * that only a RETRY waits on another process's sign-in. The MFA window is five
+ * minutes, so a number reported longer ago than that belongs to a sign-in that
+ * is over; the same digits showing up again are a new challenge.
+ */
+const RELAY_TOLD_MS = 5 * 60 * 1000;
+
+/**
  * Calls arriving within this long of a batch's first call count as that batch
  * (issue #212). A client running tool calls in parallel sends them within
  * milliseconds; a model retrying after reading an answer takes a whole round
@@ -101,7 +118,21 @@ function mfaPendingFailure(numberMatch: string | undefined): [AuthFailureKind, s
     : ["mfaPending", "An MFA approval was not completed in time. Try again."];
 }
 
-export type AuthFailureKind = "busy" | "cooldown" | "unsupported" | "secureStorage" | "transport" | "timeout" | "failed" | "mfaPending" | "inProgress";
+/**
+ * The child is answering its own verification code from the saved
+ * authenticator enrollment. Deliberately NOT an mfaPending: there is nothing
+ * on anyone's phone to approve, so a caller told "approve the request" would
+ * send the user looking for a prompt that will never arrive.
+ */
+const automaticPendingFailure = (relayed = false): AuthProcessError => new AuthProcessError(
+  "automaticPending",
+  "Sign-in is entering its own verification code in the background. Try again.",
+  undefined,
+  false,
+  relayed,
+);
+
+export type AuthFailureKind = "busy" | "cooldown" | "unsupported" | "secureStorage" | "transport" | "timeout" | "failed" | "mfaPending" | "automaticPending" | "inProgress";
 
 export class AuthProcessError extends AuthError {
   constructor(
@@ -120,6 +151,13 @@ export class AuthProcessError extends AuthError {
      * instead of repeating the number and the instructions.
      */
     public readonly duplicate: boolean = false,
+    /**
+     * The challenge belongs to a sign-in in ANOTHER server process that holds
+     * the cross-process lock; this process's child only relayed it and
+     * exited. There is no local child to join, so a caller that wants to
+     * keep waiting watches the lock instead (see AuthRunner.attendRelay).
+     */
+    public readonly relayed: boolean = false,
   ) {
     super(message);
     this.name = "AuthProcessError";
@@ -234,8 +272,11 @@ function forwardLines(
 interface Wave { openedAt: number; delivered: Set<string>; closed: boolean }
 
 function dedupeChallenge(error: unknown, wave: Wave): unknown {
-  if (!(error instanceof AuthProcessError) || error.kind !== "mfaPending" || error.duplicate) return error;
-  const key = error.numberMatch ?? "";
+  // automaticPending repeats across a batch exactly as mfaPending did (#212),
+  // just without digits: one sign-in, N copies of the same paragraph.
+  if (!(error instanceof AuthProcessError) || error.duplicate) return error;
+  if (error.kind !== "mfaPending" && error.kind !== "automaticPending") return error;
+  const key = `${error.kind}:${error.numberMatch ?? ""}`;
   if (!wave.delivered.has(key)) {
     wave.delivered.add(key);
     // Once a challenge has gone back to the user, the batch is over: every
@@ -245,8 +286,11 @@ function dedupeChallenge(error: unknown, wave: Wave): unknown {
     wave.closed = true;
     return error;
   }
-  return new AuthProcessError(error.kind, error.message, error.numberMatch, true);
+  return new AuthProcessError(error.kind, error.message, error.numberMatch, true, error.relayed);
 }
+
+/** Identifies a challenge for "was this already reported to a caller". */
+const relayKey = (kind: string, numberMatch: string | undefined): string => `${kind}:${numberMatch ?? ""}`;
 
 export class AuthRunner {
   /**
@@ -273,7 +317,7 @@ export class AuthRunner {
    * childDone. Lets a later joiner re-answer immediately instead of
    * discovering the challenge is stale only after blocking on childDone.
    */
-  private pendingChallenge: { numberMatch?: string } | null = null;
+  private pendingChallenge: { kind: "mfaPending" | "automaticPending"; numberMatch?: string } | null = null;
   /** Resolves on the next marker from the current child; null between children. */
   private challengeSignal: Promise<void> | null = null;
   /** Callers inside run() right now. */
@@ -286,6 +330,12 @@ export class AuthRunner {
    * childDone; this only stops every call in the batch repeating the number.
    */
   private wave: Wave | null = null;
+  /**
+   * Challenges another process's sign-in is showing that a caller here was
+   * already told, by relayKey, and when. A retry of one of these waits on
+   * that sign-in instead of repeating the answer (see attendRelay).
+   */
+  private readonly relayTold = new Map<string, number>();
   private readonly scriptPath: string;
   private readonly timeoutMs: number;
   private readonly onProgress?: (line: string) => void;
@@ -319,15 +369,37 @@ export class AuthRunner {
   async run(onChallenge?: (numberMatch: string | undefined) => void): Promise<boolean> {
     // Synchronous, before any await: calls in one tick cannot split a batch.
     const wave = this.joinWave();
+    // Also synchronous: what was already told BEFORE this call, so siblings in
+    // one parallel batch are not each other's "retry" (they answer briefly via
+    // dedupeChallenge instead of waiting).
+    const toldBefore = this.relayChallengesTold();
     this.waiting += 1;
     try {
-      return await this.attend(onChallenge);
+      return await this.attend(onChallenge, toldBefore);
     } catch (error) {
+      this.noteRelayReported(error);
       throw dedupeChallenge(error, wave);
     } finally {
       this.waiting -= 1;
       this.lastAttendedAt = Date.now();
     }
+  }
+
+  private relayChallengesTold(): Set<string> {
+    const now = Date.now();
+    const told = new Set<string>();
+    for (const [key, at] of this.relayTold) {
+      if (now - at > RELAY_TOLD_MS) this.relayTold.delete(key);
+      else told.add(key);
+    }
+    return told;
+  }
+
+  /** A relayed challenge that went back to a caller counts as told. */
+  private noteRelayReported(error: unknown): void {
+    if (!(error instanceof AuthProcessError) || !error.relayed) return;
+    if (error.kind !== "mfaPending" && error.kind !== "automaticPending") return;
+    this.relayTold.set(relayKey(error.kind, error.numberMatch), Date.now());
   }
 
   private joinWave(): Wave {
@@ -338,18 +410,111 @@ export class AuthRunner {
     return this.wave;
   }
 
-  private async attend(onChallenge?: (numberMatch: string | undefined) => void): Promise<boolean> {
+  private async attend(
+    onChallenge: ((numberMatch: string | undefined) => void) | undefined,
+    toldBefore: ReadonlySet<string>,
+  ): Promise<boolean> {
     const startedAt = Date.now();
     try {
       return await withinCallBudget(this.runOnce(startedAt), startedAt);
     } catch (error) {
+      if (this.sessionDir && error instanceof AuthProcessError && error.relayed) {
+        return this.attendRelay(error, startedAt, onChallenge, toldBefore);
+      }
       const childDone = this.childDone;
-      if (!onChallenge || !childDone || !(error instanceof AuthProcessError) || error.kind !== "mfaPending") throw error;
+      if (!childDone || !(error instanceof AuthProcessError)) throw error;
+      // An mfaPending is only worth waiting on when the caller can relay the
+      // number mid-call. An automaticPending needs no relay at all — nobody is
+      // being asked for anything — so keep waiting on it either way.
+      const joinable = error.kind === "automaticPending" || (Boolean(onChallenge) && error.kind === "mfaPending");
+      if (!joinable) throw error;
       const windowMs = pollWindowMs(Date.now() - startedAt);
       if (windowMs <= 0) throw error;
-      try { onChallenge(error.numberMatch); } catch { /* Announcing must not interrupt authentication. */ }
+      if (error.kind === "mfaPending") {
+        try { onChallenge?.(error.numberMatch); } catch { /* Announcing must not interrupt authentication. */ }
+      }
       return this.awaitBackgroundChild(childDone, windowMs);
     }
+  }
+
+  /**
+   * The caller's sign-in found ANOTHER process's sign-in holding the lock,
+   * and that process is showing a challenge. The local child has already
+   * exited, so unlike awaitBackgroundChild there is nothing here to join:
+   * the lock is the only thing to watch.
+   *
+   * The first answer is still immediate for a caller that cannot be told
+   * mid-call, because the number is what the user needs and every second
+   * before it is a second the other sign-in's window runs down. A RETRY of the
+   * same challenge (already reported to a caller in this process) waits, like
+   * a retry joining a local child, instead of re-answering at once: answering
+   * a loop of retries in milliseconds made a model conclude the approval
+   * window had closed while the other sign-in was still waiting. A caller
+   * that can be told mid-call is told and waits at once, and an owner
+   * answering its own code has nothing to relay, so every caller waits.
+   */
+  private attendRelay(
+    error: AuthProcessError,
+    startedAt: number,
+    onChallenge: ((numberMatch: string | undefined) => void) | undefined,
+    toldBefore: ReadonlySet<string>,
+  ): Promise<boolean> {
+    const retry = toldBefore.has(relayKey(error.kind, error.numberMatch));
+    const waits = error.kind === "automaticPending"
+      || (error.kind === "mfaPending" && (Boolean(onChallenge) || retry));
+    if (!waits) throw error;
+    const windowMs = pollWindowMs(Date.now() - startedAt);
+    if (windowMs <= 0) throw error;
+    if (error.kind === "mfaPending" && onChallenge) {
+      try { onChallenge(error.numberMatch); } catch { /* Announcing must not interrupt authentication. */ }
+      this.noteRelayReported(error);
+    }
+    return this.awaitRelayedOwner(error, windowMs);
+  }
+
+  /**
+   * Wait up to windowMs for another process's sign-in to finish, by watching
+   * its lock directory about once a second.
+   *
+   * Each look also relays the challenge, which touches its file: that is the
+   * signal the owner's abandonment watcher (ABANDON_MS) reads as "someone is
+   * still waiting", so the owner is not killed under a user who is approving.
+   * The lock disappearing means the owner is done, and the caller resolves
+   * true so the client re-reads the session. If the owner FAILED there is no
+   * session, and the client's own "session expired" 401 follows; the next call
+   * starts a fresh sign-in and gets the owner's cooldown or error as usual.
+   * Spawning another sign-in here instead would risk a second MFA prompt for
+   * a login that just succeeded. When the window ends with the lock still
+   * held, the caller gets the latest challenge the owner showed.
+   */
+  private async awaitRelayedOwner(error: AuthProcessError, windowMs: number): Promise<boolean> {
+    const lockPath = authLockPath(this.sessionDir as string);
+    const deadline = Date.now() + windowMs;
+    let latest: { automatic: boolean; numberMatch?: string } = {
+      automatic: error.kind === "automaticPending",
+      numberMatch: error.numberMatch,
+    };
+    for (;;) {
+      const held = await fs.access(lockPath).then(() => true, () => false);
+      if (!held) {
+        this.relayTold.clear();
+        return true;
+      }
+      const relayed = await relayChallenge(lockPath);
+      if (relayed) {
+        latest = relayed.kind === "automatic"
+          ? { automatic: true }
+          : { automatic: false, numberMatch: relayed.numberMatch ?? (latest.automatic ? undefined : latest.numberMatch) };
+      }
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) break;
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, Math.min(RELAY_POLL_MS, remaining));
+        timer.unref?.();
+      });
+    }
+    if (latest.automatic) throw automaticPendingFailure(true);
+    throw new AuthProcessError(...mfaPendingFailure(latest.numberMatch), latest.numberMatch, false, true);
   }
 
   private runOnce(startedAt: number): Promise<boolean> {
@@ -413,6 +578,11 @@ export class AuthRunner {
       const graceTimer = setTimeout(() => {
         if (settled) return;
         settled = true;
+        const pending = this.pendingChallenge ?? challenge;
+        if (pending?.kind === "automaticPending") {
+          reject(automaticPendingFailure());
+          return;
+        }
         const numberMatch = this.pendingChallenge?.numberMatch ?? challenge?.numberMatch;
         reject(new AuthProcessError(...mfaPendingFailure(numberMatch), numberMatch));
       }, graceMs);
@@ -471,6 +641,12 @@ export class AuthRunner {
       let childFinished = false;
       let numberMatch: string | undefined;
       let challengeSeen = false;
+      /** The child said the challenge it is about to print is another process's. */
+      let relayed = false;
+      /** The child reported it is answering its own code (see the marker below). */
+      let automaticSeen = false;
+      /** watchAttention is armed once per child; a second timer could kill a live sign-in. */
+      let attentionWatched = false;
       let abandonTimer: ReturnType<typeof setTimeout> | undefined;
       let killTimer: ReturnType<typeof setTimeout> | undefined;
       const kill = (signal: NodeJS.Signals) => {
@@ -551,18 +727,42 @@ export class AuthRunner {
         finishChild(new AuthProcessError("timeout", `The sign-in was stopped because nobody approved its MFA prompt. Try again, or run ${AUTH_COMMAND}.`));
       };
 
+      const startWatching = () => {
+        if (attentionWatched) return;
+        attentionWatched = true;
+        watchAttention();
+      };
+
       const publishChallenge = (matched: string | undefined) => {
         challengeSeen = true;
-        const firstChallenge = this.pendingChallenge === null;
-        if (firstChallenge) watchAttention();
+        // An automatic sign-in that later shows a real approval challenge (it
+        // fell back, or Entra changed its mind) must be upgraded, so a joiner
+        // is told the number instead of "still working".
+        const firstChallenge = this.pendingChallenge === null || this.pendingChallenge.kind === "automaticPending";
+        startWatching();
         if (firstChallenge) devActivity("mfa_observed", { elapsedMs: Date.now() - started });
         if (firstChallenge || matched) {
-          this.pendingChallenge = { numberMatch: matched ?? this.pendingChallenge?.numberMatch };
+          this.pendingChallenge = { kind: "mfaPending", numberMatch: matched ?? this.pendingChallenge?.numberMatch };
         }
         if (firstChallenge) resolveChallengeSignal();
         if (!callerSettled) {
-          settleCaller(new AuthProcessError(...mfaPendingFailure(this.pendingChallenge?.numberMatch), this.pendingChallenge?.numberMatch));
+          settleCaller(new AuthProcessError(...mfaPendingFailure(this.pendingChallenge?.numberMatch), this.pendingChallenge?.numberMatch, false, relayed));
         }
+      };
+
+      /**
+       * The child is typing its own verification code. Watched for abandonment
+       * exactly like an approval challenge: a sign-in nobody is waiting on
+       * still holds the cross-process lock, and every caller is told to retry
+       * right away, which keeps it alive (see ABANDON_MS).
+       */
+      const publishAutomaticProgress = () => {
+        automaticSeen = true;
+        if (this.pendingChallenge) return;
+        this.pendingChallenge = { kind: "automaticPending" };
+        startWatching();
+        resolveChallengeSignal();
+        settleCaller(automaticPendingFailure(relayed));
       };
 
       // Runs once the child is actually done. Settles the caller too, if an
@@ -612,6 +812,12 @@ export class AuthRunner {
           publishChallenge(numberMatch);
         } else if (MFA_PENDING_MARKER.test(line)) {
           publishChallenge(undefined);
+        } else if (line === AUTOMATIC_PENDING_MARKER) {
+          publishAutomaticProgress();
+        } else if (line === RELAYED_CHALLENGE_MARKER) {
+          // Recorded as the line is read, so it is set before the challenge
+          // marker that follows it settles the caller.
+          relayed = true;
         } else {
           log("DEBUG", line);
         }
@@ -644,9 +850,13 @@ export class AuthRunner {
           // Busy, but the owning sign-in's challenge came through: the caller
           // was told what to approve, so answer with that, not "busy".
           if (code === 2 && challengeSeen) failures[2] = mfaPendingFailure(numberMatch);
+          // Busy because another process is signing in automatically: there is
+          // nothing to approve, so say that rather than "busy".
+          else if (code === 2 && automaticSeen) failures[2] = ["automaticPending", automaticPendingFailure().message];
           const [kind, message] = failures[code ?? -1] ?? ["failed", `Authentication failed. Run ${AUTH_COMMAND} to try again.`];
           kill("SIGKILL");
-          finishChild(new AuthProcessError(kind, message, kind === "mfaPending" ? numberMatch : undefined));
+          const challenged = kind === "mfaPending" || kind === "automaticPending";
+          finishChild(new AuthProcessError(kind, message, kind === "mfaPending" ? numberMatch : undefined, false, relayed && challenged));
         }
       });
     });
