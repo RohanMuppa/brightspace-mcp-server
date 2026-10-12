@@ -14,6 +14,7 @@ import { GetDropboxFeedbackSchema } from "./schemas.js";
 import { toolResponse, sanitizeError, errorResponse } from "./tool-helpers.js";
 import { convertHtmlToMarkdown } from "../utils/html-converter.js";
 import { log } from "../utils/logger.js";
+import { fetchCurrentUserId } from "./group-membership.js";
 
 interface D2LRubricCriterionCell {
   CriterionId: number;
@@ -49,17 +50,29 @@ export function registerGetDropboxFeedback(
       title: "Get Dropbox Feedback",
       annotations: { readOnlyHint: true },
       description:
-        "Retrieve the existing feedback already saved for a specific user or group in a dropbox folder, " +
-        "for an instructor or TA — score, graded state, feedback text, and rubric assessment detail. " +
-        "Use this before drafting new feedback to see what has already been recorded. Requires " +
-        "instructor or TA access to the course.",
+        "Retrieve the feedback saved for a dropbox folder — score, graded state, feedback text, and rubric " +
+        "assessment detail. Students: omit entityType and entityId to read your OWN released feedback on an " +
+        "assignment (it is not hidden; use this when get_assignments shows feedback unavailable). " +
+        "Instructors and TAs: pass entityType and entityId to read what is already saved for any user or " +
+        "group, e.g. before drafting new feedback; reading another user's feedback requires instructor or TA " +
+        "access to the course.",
       inputSchema: GetDropboxFeedbackSchema,
     },
     async (args: any) => {
       try {
         log("DEBUG", "get_dropbox_feedback tool called", { args });
 
-        const { courseId, folderId, entityType, entityId } = GetDropboxFeedbackSchema.parse(args);
+        const parsed = GetDropboxFeedbackSchema.parse(args);
+        const { courseId, folderId } = parsed;
+
+        // Omitted entity = the signed-in user's own feedback, which Brightspace
+        // lets a student read once it is released.
+        const own = parsed.entityId === undefined;
+        if (own && parsed.entityType === "group") {
+          return errorResponse("entityId is required when entityType is group.");
+        }
+        const entityType = parsed.entityType ?? "user";
+        const entityId = parsed.entityId ?? await fetchCurrentUserId(apiClient);
 
         const feedbackPath = apiClient.le(
           courseId,
@@ -72,8 +85,11 @@ export function registerGetDropboxFeedback(
         } catch (error) {
           if (error instanceof ApiError && error.status === 403) {
             return errorResponse(
-              "Instructor or TA access required for this course. This tool reads another user's " +
-              "grading feedback, which Brightspace only grants to course staff."
+              own
+                ? "Brightspace refused this read of your own feedback; it has not been released yet, or " +
+                  "this course does not expose it through the API. Check the assignment in Brightspace."
+                : "Instructor or TA access required for this course. Reading another user's grading " +
+                  "feedback is only granted to course staff; to read your own, omit entityType and entityId."
             );
           }
           if (error instanceof ApiError && error.status === 404) {
@@ -83,7 +99,9 @@ export function registerGetDropboxFeedback(
               entityType,
               entityId,
               feedback: null,
-              note: "No feedback found. This submission has not been graded yet.",
+              note: own
+                ? "No feedback found. This submission has not been graded yet, or its feedback has not been released."
+                : "No feedback found. This submission has not been graded yet.",
             });
           }
           throw error;

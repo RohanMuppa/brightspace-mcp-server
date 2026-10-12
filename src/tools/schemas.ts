@@ -225,10 +225,10 @@ export const GetDropboxFeedbackSchema = z.object({
     .describe("Course ID the dropbox folder belongs to."),
   folderId: z.coerce.number().int().positive()
     .describe("Dropbox folder ID."),
-  entityType: z.enum(["user", "group"])
-    .describe("Whether entityId identifies an individual user or a group."),
-  entityId: z.coerce.number().int().positive()
-    .describe("User ID or group ID whose existing feedback to retrieve."),
+  entityType: z.enum(["user", "group"]).optional()
+    .describe("Whether entityId identifies an individual user or a group. Omit both entityType and entityId to read your own feedback."),
+  entityId: z.coerce.number().int().positive().optional()
+    .describe("User ID or group ID whose existing feedback to retrieve. Omit to read the signed-in user's own feedback."),
 });
 
 export const GetRubricsForObjectSchema = z.object({

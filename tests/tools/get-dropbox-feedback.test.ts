@@ -12,7 +12,8 @@ const forbidden = (): never => { throw new ApiError(403, "/feedback/user", "Forb
 function setup(respond: (path: string) => unknown) {
   const apiClient = {
     le: (orgUnitId: number, p: string) => `/d2l/api/le/1.0/${orgUnitId}${p}`,
-    get: vi.fn(async (path: string) => respond(path)),
+    lp: (p: string) => `/d2l/api/lp/1.0${p}`,
+    get: vi.fn(async (path: string) => (path.endsWith("/users/whoami") ? { Identifier: "501" } : respond(path))),
   };
 
   let handler: (args: unknown) => Promise<any>;
@@ -95,5 +96,49 @@ describe("get_dropbox_feedback", () => {
 
     await call({ courseId: COURSE_ID, folderId: FOLDER_ID, entityType: "group", entityId: 42 });
     expect(requested[0]).toContain("/feedback/group/42");
+  });
+
+  describe("a student's own feedback", () => {
+    it("defaults to the signed-in user when entityType and entityId are omitted", async () => {
+      const requested: string[] = [];
+      const { call } = setup((path) => {
+        requested.push(path);
+        return { Score: 8, Feedback: { Text: "Good", Html: "" }, IsGraded: true, RubricAssessments: null };
+      });
+      const result = await call({ courseId: COURSE_ID, folderId: FOLDER_ID });
+      expect(result.isError).toBeUndefined();
+      expect(requested.at(-1)).toContain("/dropbox/folders/55/feedback/user/501");
+      expect(body(result)).toMatchObject({ entityType: "user", entityId: 501, feedback: { score: 8, feedbackText: "Good" } });
+    });
+
+    it("still needs an entityId for a group", async () => {
+      const { call } = setup(() => ({}));
+      const result = await call({ courseId: COURSE_ID, folderId: FOLDER_ID, entityType: "group" });
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain("entityId");
+    });
+
+    it("explains a 403 on your own feedback as not released, not as a missing staff role", async () => {
+      const { call } = setup(forbidden);
+      const result = await call({ courseId: COURSE_ID, folderId: FOLDER_ID });
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain("not been released");
+      expect(result.content[0].text).not.toContain("Instructor or TA access required");
+    });
+
+    it("tells a student that another user's feedback is staff-only on an explicit 403", async () => {
+      const { call } = setup(forbidden);
+      const result = await call({ courseId: COURSE_ID, folderId: FOLDER_ID, entityType: "user", entityId: 999 });
+      expect(result.content[0].text).toContain("Instructor or TA access required for this course");
+      expect(result.content[0].text).toContain("omit entityType and entityId");
+    });
+
+    it("says not graded or not released on a 404 for your own feedback", async () => {
+      const { call } = setup(notFound);
+      const parsed = body(await call({ courseId: COURSE_ID, folderId: FOLDER_ID }));
+      expect(parsed.feedback).toBeNull();
+      expect(parsed.note).toContain("not been graded yet");
+      expect(parsed.note).toContain("not been released");
+    });
   });
 });

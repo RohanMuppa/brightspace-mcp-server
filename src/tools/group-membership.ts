@@ -13,12 +13,18 @@ export interface GroupMembership { category: GroupCategoryDto; group: GroupDto }
 const inaccessible = (error: unknown) => error instanceof ApiError
   && (error.status === 403 || error.status === 404);
 
-/** Shared membership lookup. API cache/coalescing bounds repeat reads; no classlist is needed. */
-export async function fetchMyGroupMemberships(apiClient: D2LApiClient, courseId: number, categoryId?: number) {
+/** The signed-in user's id, from the cached whoami read. */
+export async function fetchCurrentUserId(apiClient: D2LApiClient): Promise<number> {
   const me = await apiClient.get<{ Identifier: number | string }>(apiClient.lp("/users/whoami"),
     { ttl: DEFAULT_CACHE_TTLS.roster });
   const myId = Number(me.Identifier);
   if (!Number.isSafeInteger(myId) || myId <= 0) throw new Error("Brightspace returned an invalid current user identifier.");
+  return myId;
+}
+
+/** Shared membership lookup. API cache/coalescing bounds repeat reads; no classlist is needed. */
+export async function fetchMyGroupMemberships(apiClient: D2LApiClient, courseId: number, categoryId?: number) {
+  const myId = await fetchCurrentUserId(apiClient);
 
   let categories: GroupCategoryDto[];
   try {

@@ -65,7 +65,7 @@ School-specific quirks: [docs/sign-in.md](docs/sign-in.md#per-school-notes).
 
 | About | Try |
 |-------|-----|
-| Grades | "Am I passing all my classes?" · "Compare my grades across courses" · "Is there feedback on my midterm?" (quiz-scored grades link to the quiz, since quiz feedback, including feedback only viewable in LockDown Browser, isn't readable through the API) |
+| Grades | "Am I passing all my classes?" · "Compare my grades across courses" · "What did my professor say about Mini-Assignment 1?" (own assignment feedback is read from every route Brightspace documents for students) · "Is there feedback on my midterm?" (quiz-scored grades link to the quiz, since quiz feedback, including feedback only viewable in LockDown Browser, isn't readable through the API) |
 | Due dates | "What's due in the next 48 hours?" · "Build me a study schedule for the week" |
 | Assignments and rubrics | "What does the lab 4 spec actually ask for?" · "Why did I lose points on the analysis criterion?" |
 | Quizzes and exams | "Which quizzes close this week?" · "Is there a midterm in the gradebook that isn't on my assignments list?" |
@@ -76,7 +76,7 @@ School-specific quirks: [docs/sign-in.md](docs/sign-in.md#per-school-notes).
 | Discussions | "Summarize the latest posts in the final project thread" |
 | Lecture videos | "What did the professor say about pinch-off in Tuesday's recording?" (Kaltura, including BoilerCast LTI links, and YouTube) |
 | Calendar | "When is my midterm?" · "Is lab cancelled on Thursday?" |
-| For instructors and TAs | "Which students haven't submitted Lab 4 yet?" · "What feedback did I leave on this student's homework?" · "Download that student's submitted PDF" (students see a clear "instructor access required" note) |
+| For instructors and TAs | "Which students haven't submitted Lab 4 yet?" · "What feedback did I leave on this student's homework?" · "Download that student's submitted PDF" (students get a clear "instructor access required" note for these, but can read their own released feedback, below) |
 | Signing out | "Sign me out of Brightspace" (your AI app may ask you to confirm first; details under [When it asks you to sign in](#when-it-asks-you-to-sign-in)) |
 
 ## Prompts

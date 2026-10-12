@@ -16,6 +16,7 @@ import { gradebookUrl, quizUrl } from "../utils/deep-links.js";
 import { assignmentLinkResolver } from "./assignment-links.js";
 import { dueIn } from "../utils/due-in.js";
 import { feedbackText, FEEDBACK_UNAVAILABLE_NOTE } from "../utils/feedback.js";
+import { fetchCurrentUserId } from "./group-membership.js";
 import { toOutputAssessment, type RubricAssessmentDto, type RubricDto } from "./get-assignment-rubric.js";
 import type { AppConfig } from "../types/index.js";
 
@@ -62,6 +63,10 @@ interface DropboxFolder {
 }
 
 interface DropboxSubmission {
+  /** Present when the tenant answers mysubmissions with D2L's EntityDropbox shape. */
+  Submissions?: DropboxSubmission[];
+  /** Released feedback D2L embeds in an EntityDropbox / submission entry. */
+  Feedback?: DropboxFeedback & { IsGraded?: boolean } | null;
   Id: number;
   SubmittedBy: { Identifier: string; DisplayName: string };
   SubmissionDate: string;
@@ -70,6 +75,7 @@ interface DropboxSubmission {
 }
 
 interface DropboxFeedback {
+  IsGraded?: boolean;
   Score: number | null;
   Feedback: { Text: string; Html: string } | null;
   RubricAssessments?: RubricAssessmentDto[];
@@ -322,12 +328,17 @@ export async function fetchCourseAssignments(
       // Adapted from JoshuaMontclair/brightspace-mcp-server (MIT).
       let submissions: DropboxSubmission[] = [];
       let submissionsKnown = true;
+      let embeddedFeedback: DropboxFeedback | null = null;
       try {
         const submissionsRaw = await apiClient.get<{ Objects: DropboxSubmission[] } | DropboxSubmission[]>(
           apiClient.le(courseId, `/dropbox/folders/${folder.Id}/submissions/mysubmissions/`),
           { ttl: DEFAULT_CACHE_TTLS.assignments }
         );
-        submissions = Array.isArray(submissionsRaw) ? submissionsRaw : (submissionsRaw as any).Objects ?? [];
+        const entries: DropboxSubmission[] = Array.isArray(submissionsRaw) ? submissionsRaw : (submissionsRaw as any).Objects ?? [];
+        // D2L documents EntityDropbox ({ Feedback, Submissions: [...] }) for this
+        // route; older tenants answer with the flat submissions. Accept both.
+        embeddedFeedback = entries.find((e) => e.Feedback)?.Feedback ?? null;
+        submissions = entries.flatMap((e) => (Array.isArray(e.Submissions) ? e.Submissions : [e]));
       } catch (error: any) {
         if (isAuthUnavailable(error)) throw error;
         // 404 is how D2L reports "nothing submitted yet" - that one is known.
@@ -355,6 +366,34 @@ export async function fetchCourseAssignments(
         if (error?.status !== 404 && error?.status !== 403) {
           log("DEBUG", `Failed to fetch feedback for folder ${folder.Id}`, error);
         }
+      }
+
+      // myFeedback is not one of D2L's documented entity types, so when it has
+      // nothing, read the student's own released feedback from the documented
+      // routes: the Feedback embedded in mysubmissions (already fetched), then
+      // feedback/user/{me}. Draft (IsGraded: false) feedback is not released.
+      let feedbackSource: "myFeedback" | "submission" | "user" | null = feedback ? "myFeedback" : null;
+      if (!feedback && submissions.length > 0) {
+        if (embeddedFeedback && embeddedFeedback.IsGraded !== false) {
+          feedback = embeddedFeedback;
+          feedbackSource = "submission";
+        } else if (folder.GroupTypeId === null || folder.GroupTypeId === undefined) {
+          try {
+            const myId = await fetchCurrentUserId(apiClient);
+            const own = await apiClient.get<DropboxFeedback>(
+              apiClient.le(courseId, `/dropbox/folders/${folder.Id}/feedback/user/${myId}`),
+              { ttl: DEFAULT_CACHE_TTLS.assignments }
+            );
+            if (own && own.IsGraded !== false) {
+              feedback = own;
+              feedbackSource = "user";
+            }
+          } catch (error: any) {
+            if (isAuthUnavailable(error)) throw error;
+            log("DEBUG", `Own-feedback fallback failed for folder ${folder.Id}`, error);
+          }
+        }
+        if (feedback) feedbackStatus = "retrieved";
       }
 
       // Instructor-provided URL links attached to the folder. Omitted
@@ -436,6 +475,7 @@ export async function fetchCourseAssignments(
             }
           : null,
         feedbackStatus,
+        ...(feedbackSource ? { feedbackSource } : {}),
         feedbackCommentsStatus: commentsRetrieved ? "retrieved" : "unavailable",
         feedbackUrl: baseUrl ? gradebookUrl(baseUrl, courseId) : null,
         ...(commentsRetrieved ? {} : { feedbackStatusNote: FEEDBACK_UNAVAILABLE_NOTE }),
