@@ -24,6 +24,13 @@ function mockChild() {
   return child;
 }
 
+/** Track whether and how a call has settled, without awaiting it. */
+function track<T>(call: Promise<T>) {
+  const state = { settled: false, value: undefined as T | undefined, error: undefined as unknown };
+  call.then((value) => { state.settled = true; state.value = value; }, (error: unknown) => { state.settled = true; state.error = error; });
+  return state;
+}
+
 describe("AuthRunner", () => {
   let child: ReturnType<typeof mockChild>;
   let kill: ReturnType<typeof vi.spyOn>;
@@ -79,15 +86,18 @@ describe("AuthRunner", () => {
     expect(spawn).toHaveBeenCalledTimes(1);
   });
 
-  it("upgrades automatic progress to a real challenge when one appears", async () => {
+  // Issue #229: the caller waiting on the automatic sign-in is answered with
+  // the number the moment it falls back to one, not when its 45 s poll ends.
+  it("upgrades automatic progress to a real challenge at once when one appears", async () => {
     const runner = new AuthRunner();
-    const failure = expect(runner.run()).rejects.toMatchObject({ kind: "mfaPending", numberMatch: "47" });
+    const answer = track(runner.run());
     child.stdout.write("AUTH_AUTOMATIC_PENDING\n");
     await vi.advanceTimersByTimeAsync(1000);
+    expect(answer.settled).toBe(false);
     child.stdout.write("MFA_NUMBER:47\n");
-    await vi.advanceTimersByTimeAsync(44000);
-    await failure;
-    child.emit("close", 0);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(answer.error).toMatchObject({ kind: "mfaPending", numberMatch: "47" });
+    expect(spawn).toHaveBeenCalledTimes(1);
   });
 
   it("bounds late automatic progress to the call budget and lets a retry join", async () => {
@@ -194,7 +204,7 @@ describe("AuthRunner", () => {
     expect(spawn).toHaveBeenCalledTimes(2);
   });
 
-  it.each([[2, "busy"], [3, "cooldown"], [4, "unsupported"], [5, "secureStorage"], [6, "transport"], [1, "failed"], [7, "mfaPending"]])(
+  it.each([[2, "busy"], [3, "cooldown"], [4, "unsupported"], [5, "secureStorage"], [6, "transport"], [1, "failed"], [7, "cooldown"]])(
     "preserves child exit %s as a %s error", async (code, kind) => {
       const result = new AuthRunner().run();
       const failure = expect(result).rejects.toMatchObject({ kind });
@@ -216,7 +226,7 @@ describe("AuthRunner", () => {
     const result = new AuthRunner().run();
     const failure = expect(result).rejects.toMatchObject({ kind: "mfaPending", numberMatch: undefined });
     child.stdout.write("MFA_NUMBER:not-a-number\n");
-    child.emit("close", 7);
+    child.stdout.write("MFA_PENDING\n");
     await failure;
   });
 
@@ -257,15 +267,22 @@ describe("AuthRunner", () => {
     expect(spawn).toHaveBeenCalledTimes(1);
   });
 
-  it("rejects a joined background child that later closes with a pending MFA exit code", async () => {
+  // The child's MFA loop gave up (exit 7) and recorded the cooldown: telling
+  // the caller still polling to enter a number that no longer works, then
+  // answering its next call with the cooldown, contradicted itself (#229).
+  it("gives a joined caller the cooldown, not the stale number, when the background child's MFA loop gives up", async () => {
     const runner = new AuthRunner();
     const firstResult = runner.run();
     const firstFailure = expect(firstResult).rejects.toMatchObject({ kind: "mfaPending", numberMatch: "47" });
     child.stdout.write("MFA_NUMBER:47\n");
     await firstFailure;
+    // A real retry comes after the model has answered, past SIBLING_GRACE_MS.
+    await vi.advanceTimersByTimeAsync(2000);
 
     const second = runner.run();
-    const secondFailure = expect(second).rejects.toMatchObject({ kind: "mfaPending" });
+    const secondFailure = expect(second).rejects.toMatchObject({ kind: "cooldown", numberMatch: undefined });
+    child.stdout.write("MFA_NUMBER:47\n");
+    await vi.advanceTimersByTimeAsync(0);
     child.emit("close", 7);
     await secondFailure;
     expect(spawn).toHaveBeenCalledTimes(1);
@@ -332,6 +349,62 @@ describe("AuthRunner", () => {
     await secondFailure;
 
     expect(spawn).toHaveBeenCalledTimes(1);
+  });
+
+  // Issue #229: Entra's number expired and the child asked for a new one.
+  // The user is approving the old one, so a retry already polling hears the
+  // new number at once instead of when its 45-second wait ends.
+  it("answers a polling joiner at once when the background child reports a changed number", async () => {
+    const runner = new AuthRunner();
+    const first = expect(runner.run()).rejects.toMatchObject({ kind: "mfaPending", numberMatch: "42" });
+    child.stdout.write("MFA_NUMBER:42\n");
+    await first;
+    await vi.advanceTimersByTimeAsync(2000);
+
+    const second = track(runner.run());
+    await vi.advanceTimersByTimeAsync(10000);
+    expect(second.settled).toBe(false);
+    child.stdout.write("MFA_NUMBER:73\n");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(second.error).toMatchObject({ kind: "mfaPending", numberMatch: "73", duplicate: false });
+
+    // Told 73 now, the next retry waits on it as usual.
+    await vi.advanceTimersByTimeAsync(2000);
+    const third = track(runner.run());
+    await vi.advanceTimersByTimeAsync(30000);
+    expect(third.settled).toBe(false);
+    child.emit("close", 0);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(third.value).toBe(true);
+    expect(spawn).toHaveBeenCalledTimes(1);
+  });
+
+  it("answers a retry at once with a number that changed after the last answer", async () => {
+    const runner = new AuthRunner();
+    const first = expect(runner.run()).rejects.toMatchObject({ kind: "mfaPending", numberMatch: "42" });
+    child.stdout.write("MFA_NUMBER:42\n");
+    await first;
+    await vi.advanceTimersByTimeAsync(2000);
+    child.stdout.write("MFA_NUMBER:73\n");
+    await vi.advanceTimersByTimeAsync(5000);
+
+    const retry = track(runner.run());
+    await vi.advanceTimersByTimeAsync(0);
+    expect(retry.error).toMatchObject({ kind: "mfaPending", numberMatch: "73" });
+  });
+
+  it("keeps a polling joiner waiting when the child repeats the number it was told", async () => {
+    const runner = new AuthRunner();
+    const first = expect(runner.run()).rejects.toMatchObject({ kind: "mfaPending", numberMatch: "42" });
+    child.stdout.write("MFA_NUMBER:42\n");
+    await first;
+    await vi.advanceTimersByTimeAsync(2000);
+
+    const second = track(runner.run());
+    child.stdout.write("MFA_NUMBER:42\n");
+    child.stdout.write("MFA_PENDING\n");
+    await vi.advanceTimersByTimeAsync(30000);
+    expect(second.settled).toBe(false);
   });
 
   it("resolves a joiner early when the background child closes within the poll window", async () => {

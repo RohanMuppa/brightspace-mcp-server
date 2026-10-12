@@ -205,17 +205,18 @@ describe("a caller whose sign-in found another process holding the lock", () => 
     expect(retry.settled).toBe(false);
   });
 
-  it("answers the retry with the owner's latest number once the 45-second window ends", async () => {
+  // Issue #229: the owner's number expired and it asked for a new one. The
+  // user is approving the old one, so the waiting retry hears it within a poll.
+  it("answers the retry with the owner's changed number at once", async () => {
     const runner = new AuthRunner({ sessionDir });
     await firstCallTold(runner);
 
     const retry = track(runner.run());
     await relay(child, "MFA_NUMBER:72");
     await pass(20_000);
-    publish({ numberMatch: "15" });
-    await pass(24_000);
     expect(retry.settled).toBe(false);
-    await pass(2_000);
+    publish({ numberMatch: "15" });
+    await pass(1_000);
 
     expect(retry.settled).toBe(true);
     expect(retry.error).toMatchObject({ kind: "mfaPending", numberMatch: "15" });
