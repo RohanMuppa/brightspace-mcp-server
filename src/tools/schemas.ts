@@ -183,6 +183,8 @@ export const GetMyGroupsSchema = z.object({
 
 export const GetServerInfoSchema = z.object({});
 
+export const SignOutSchema = z.object({});
+
 // ── Instructor / TA dropbox tools ──────────────────────────────────────────
 // Read-only, instructor/TA-side views of a course's dropbox (assignment)
 // folders and the submissions inside them. These answer "who has/hasn't

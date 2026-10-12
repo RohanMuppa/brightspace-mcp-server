@@ -158,6 +158,29 @@ export class SessionStore {
     }
   }
 
+  /**
+   * A cheap identity for the saved session file, so a running server can tell
+   * "same file" from "signed out" from "signed out and signed in again". A
+   * single stat: nothing is read or decrypted and no lock is taken, so it is
+   * cheap enough to ask before every request.
+   *
+   * - `null`: the file definitely does not exist (ENOENT). Signed out.
+   * - a string: the file exists; it changes whenever the file is replaced or
+   *   rewritten (inode, size, and the modified, changed and birth times in
+   *   nanoseconds; Windows may report inode 0, which the times and size still
+   *   distinguish).
+   * - `undefined`: the stat failed for any other reason. An unreadable
+   *   directory is not evidence of a sign-out, so callers keep what they have.
+   */
+  async fingerprint(): Promise<string | null | undefined> {
+    try {
+      const stat = await fs.stat(this.sessionFilePath, { bigint: true });
+      return `${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}:${stat.birthtimeNs}`;
+    } catch (error) {
+      return (error as NodeJS.ErrnoException).code === "ENOENT" ? null : undefined;
+    }
+  }
+
   /** Missing files return null. Damaged or inaccessible secrets fail without MFA. */
   async load(): Promise<TokenData | null> {
     try {

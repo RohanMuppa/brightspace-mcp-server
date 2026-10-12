@@ -404,6 +404,17 @@ export class AuthRunner {
   }
 
   /**
+   * Whether this process has a sign-in child running: true from the moment it
+   * is spawned (before the child has taken the cross-process sign-in lock, so
+   * a lock check alone would miss it) until the child exits, even after the
+   * caller that started it was answered early with an MFA challenge. Read-only;
+   * sign_out uses it to refuse to delete a session a sign-in is about to write.
+   */
+  busy(): boolean {
+    return this.inFlight !== null || this.childDone !== null;
+  }
+
+  /**
    * Authenticate, joining the login this process already started if there is
    * one. Returns true on success and throws a useful error on failure.
    *

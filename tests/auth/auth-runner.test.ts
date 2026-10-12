@@ -798,4 +798,42 @@ describe("AuthRunner", () => {
       await retry;
     });
   });
+
+  describe("busy()", () => {
+    it("is false before any sign-in", () => {
+      expect(new AuthRunner().busy()).toBe(false);
+    });
+
+    it("is true as soon as the child is spawned and false once it exits", async () => {
+      const runner = new AuthRunner();
+      const result = runner.run();
+      const settled = expect(result).resolves.toBe(true);
+      expect(spawn).toHaveBeenCalledTimes(1);
+      expect(runner.busy()).toBe(true);
+      child.emit("close", 0);
+      await settled;
+      await vi.advanceTimersByTimeAsync(0);
+      expect(runner.busy()).toBe(false);
+    });
+
+    it("stays true while a background child runs after the caller was answered early, then goes false when it exits", async () => {
+      const runner = new AuthRunner();
+      const failure = expect(runner.run()).rejects.toMatchObject({ kind: "mfaPending", numberMatch: "47" });
+      child.stdout.write("MFA_NUMBER:47\n");
+      await failure;
+      expect(runner.busy()).toBe(true);
+      child.emit("close", 0);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(runner.busy()).toBe(false);
+    });
+
+    it("is false again after a failed sign-in", async () => {
+      const runner = new AuthRunner();
+      const failure = expect(runner.run()).rejects.toMatchObject({ kind: "cooldown" });
+      child.emit("close", 3);
+      await failure;
+      await vi.advanceTimersByTimeAsync(0);
+      expect(runner.busy()).toBe(false);
+    });
+  });
 });

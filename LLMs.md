@@ -142,9 +142,9 @@ Visible mode applies to the manual `auth` command, whose window remains open for
 npx -y brightspace-mcp-server@latest auth
 ```
 
-## Sign out early (`auth --logout`)
+## Sign out early (`sign_out` / `auth --logout`)
 
-When the user wants to end the saved session before it lapses (a shared computer, handing the machine on, forcing a fresh sign-in), have them run:
+When the user wants to end the saved session before it lapses (a shared computer, handing the machine on, forcing a fresh sign-in), either call the `sign_out` tool (only when they explicitly ask; it runs the same deletion in-process) or have them run:
 
 ```bash
 npx -y brightspace-mcp-server@latest auth --logout
@@ -152,9 +152,11 @@ npx -y brightspace-mcp-server@latest auth --logout
 
 It resolves the account's session directory exactly as sign-in does (`D2L_SESSION_DIR` override, else the configured or default `~/.d2l-session`, plus `accounts/<account-hash>/` only when a username is configured) and deletes `session.json`, `storage-state.encrypted.json`, and `microsoft-session.json` there, plus a plaintext `storage-state.json` if an old install left one. It prints the names it removed. The next tool call, or `auth`, does a full sign-in.
 
-It never touches the saved password, `config.json`, any authenticator or credential-store entry (the session encryption key stays and is reused), other accounts' directories, or the MFA cooldown record. This is a local sign-out only: it does not log out of Microsoft or D2L on their servers. A running MCP server may keep an access token in memory until it expires, so tell the user to restart their AI client to drop it immediately.
+It never touches the saved password, `config.json`, any authenticator or credential-store entry (the session encryption key stays and is reused), other accounts' directories, or the MFA cooldown record. This is a local sign-out only: it does not log out of Microsoft or D2L on their servers. Every MCP server already running on this computer notices on its next request: before using its in-memory token or a cached response it checks that `session.json` still exists, and treats a deleted one as signed out. Two exceptions: a server started with `D2L_ACCESS_TOKEN` or `D2L_SESSION_COOKIE` is never signed out by a deleted file (it has no saved session), and a server older than this check keeps its in-memory token and cached answers, up to about an hour (the token lifetime). A user on an old version should quit and reopen their AI app to drop that right away.
 
 It holds the sign-in lock while deleting and never takes over a running sign-in. If a sign-in is in progress it deletes nothing, says so, and exits 2 (the code `auth` uses for the same case); with nothing to clear it says so and exits 0; any other failure exits 1.
+
+`sign_out` (`src/tools/sign-out.ts`) calls the same `clearSavedSession(config.sessionDir)` and then `apiClient.clearCache()` and `tokenManager.forgetSession()` (drops this process's in-memory token, touches no files), and answers in plain text rather than JSON. Outcomes: signed out (lists the files removed, what was kept, and says other Brightspace apps on this computer are signed out and sign in again from scratch on their next question, and that a saved password or authenticator key can make that sign-in finish with little or no approval); already signed out (no saved session); sign-in in progress (the sign-in lock is held, or `AuthRunner.busy()` says this process has a sign-in child that has not exited yet, which covers the moment before the child takes the lock; nothing deleted, ask again after it finishes; not flagged as an error); `D2L_ACCESS_TOKEN`/`D2L_SESSION_COOKIE` in use (nothing deleted, remove the setting from the client config or `.env`); a file that could not be deleted, `session.json` included (`isError`, names the file, try again); any other failure (`isError`, fixed text with no raw error; the detail goes to the log). Never call it to recover from an error or to retry a sign-in.
 
 ## Browser-free sign-in (`D2L_SESSION_COOKIE` / `D2L_ACCESS_TOKEN`)
 
@@ -200,8 +202,9 @@ Registered in `src/tools/index.ts`, schemas in `src/tools/schemas.ts`:
 | `get_dropbox_feedback` | Instructor/TA: feedback already saved for a user or group in a dropbox folder — score, graded state, feedback text, rubric assessment |
 | `get_rubrics_for_object` | The full rubric table (criteria, levels, points) attached to a dropbox folder |
 | `download_dropbox_submission_file` | Instructor/TA: download one file from a student's (or group's) dropbox submission |
+| `sign_out` | Delete this computer's saved Brightspace session for the configured account (the in-chat `auth --logout`), then clear this server's response cache and in-memory token. Call it ONLY when the user explicitly asks to sign out or log out of Brightspace — never to fix an error, as part of another answer, or to retry a sign-in. Annotated `destructiveHint: true` (not read-only), so clients ask first. Plain-text result; no arguments |
 
-These twenty-five are the whole surface. An available-update notice, when there is one, rides along as a second text block on the first successful result.
+These twenty-six are the whole surface. An available-update notice, when there is one, rides along as a second text block on the first successful result.
 
 Of the `get_dropbox_*`/`download_dropbox_submission_file` tools above, `get_dropbox_submissions`, `get_dropbox_user_submissions`, `get_dropbox_feedback`, and `download_dropbox_submission_file` are instructor/TA-side: they read every student's submissions and feedback for a course, which Brightspace only grants to course staff. A student account calling one of those gets a clear "Instructor or TA access required for this course" note (403) rather than a generic or broken-looking error. `get_dropbox_folders` and `get_rubrics_for_object` read the same folder-listing endpoint a student's own client uses, so they are not gated the same way. A 404 (no folders, no submissions, folder not found) comes back as an empty list/null with an explanatory `note`, not a failure. They are read-only — there is no tool in this server that posts a grade or feedback back to Brightspace.
 
@@ -290,7 +293,7 @@ src/
     errors.ts               API error taxonomy
     types.ts                D2L response types
   auth/
-    auth-runner.ts          Orchestrates reauth on 401/expiry
+    auth-runner.ts          Orchestrates reauth on 401/expiry; `busy()` is true while this process has a sign-in child running (used by `sign_out`)
     browser-auth.ts         Playwright-driven login flow
     sso-flow.ts             Picks the login flow for the configured host
     purdue-sso.ts           Default SSO handler (Shibboleth, CAS, Entra forms)
@@ -302,10 +305,10 @@ src/
     browser-state-store.ts  Encrypted cookie and browser storage persistence
     credential-store.ts     Native password and encryption-key storage
     auth-lock.ts            Process-shared authentication and write locks
-    logout.ts               `auth --logout`: deletes the saved session files under the sign-in lock
+    logout.ts               `auth --logout`: deletes the saved session files under the sign-in lock (shared with the `sign_out` tool)
     mfa-challenge.ts        Pending MFA challenge shared with other processes through the lock directory
     auth-cooldown.ts        Failed-MFA automatic retry policy
-    token-manager.ts        Token refresh and validation
+    token-manager.ts        Token refresh and validation; `forgetSession()` drops the in-memory token without touching files (used by `sign_out`)
   utils/
     config-store.ts         ~/.brightspace-mcp/config.json reader/writer
     config.ts               Resolved config (store + env fallback)

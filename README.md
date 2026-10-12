@@ -77,6 +77,7 @@ School-specific quirks: [docs/sign-in.md](docs/sign-in.md#per-school-notes).
 | Lecture videos | "What did the professor say about pinch-off in Tuesday's recording?" (Kaltura, including BoilerCast LTI links, and YouTube) |
 | Calendar | "When is my midterm?" · "Is lab cancelled on Thursday?" |
 | For instructors and TAs | "Which students haven't submitted Lab 4 yet?" · "What feedback did I leave on this student's homework?" · "Download that student's submitted PDF" (students see a clear "instructor access required" note) |
+| Signing out | "Sign me out of Brightspace" (your AI app may ask you to confirm first; details under [When it asks you to sign in](#when-it-asks-you-to-sign-in)) |
 
 ## Prompts
 
@@ -124,7 +125,7 @@ sits beside your password, so on **this** computer your two factors become one. 
 anyone who only has your password, and it changes nothing for your other devices. Full enrollment
 steps: [docs/sign-in.md](docs/sign-in.md#answering-code-challenges-without-your-phone).
 
-**To sign out early** (on a shared computer, say), run `npx -y brightspace-mcp-server@latest auth --logout`. It deletes this computer's saved Brightspace session, so the next question does a full sign-in. Your saved password, authenticator key, and settings are kept. An AI app that is already running can keep answering until its current access token expires; restart the app to drop it right away. It only clears this computer; it does not sign you out of Microsoft or Brightspace anywhere else. If a sign-in is in progress, it refuses and deletes nothing.
+**To sign out early** (on a shared computer, say), just ask your AI app to sign you out of Brightspace, or run `npx -y brightspace-mcp-server@latest auth --logout` in a terminal. It deletes this computer's saved Brightspace session, so the next question does a full sign-in. Your saved password, authenticator key, and settings are kept, so with a saved authenticator key that sign-in can finish without you; on a shared computer, also delete the saved `brightspace-mcp-server` entries from your computer's password store (Keychain Access on a Mac, Credential Manager on Windows). Other AI apps open on this computer are signed out too and will ask you to sign in on their next question. (An app you opened before updating may keep answering for up to an hour; quit and reopen it to sign it out right away.) It only clears this computer; it does not sign you out of Microsoft or Brightspace anywhere else. If a sign-in is in progress, it refuses and deletes nothing.
 
 How often you're asked is up to your school, not this tool. Everything else about sign-in — Duo, authenticator codes, visible-browser mode, and running without a browser at all (Docker, WSL, hardware keys) — is in [docs/sign-in.md](docs/sign-in.md).
 

@@ -148,6 +148,13 @@ export class D2LApiClient {
    * Adapted from JhostinAleck/brightspace-mcp (MIT) — RequestCoalescer.ts.
    */
   private readonly pendingGets = new Map<string, Promise<unknown>>();
+  /**
+   * Bumped by clearCache(). A GET remembers the value it started under and
+   * stores its result only if it is unchanged, so a read begun with the old
+   * session cannot refill a cache that was cleared (sign-out) while it was in
+   * flight.
+   */
+  private cacheGeneration = 0;
   private readonly statsData: ClientStats = {
     statusClasses: { "2xx": 0, "401": 0, "403": 0, "404": 0, "429": 0, "5xx": 0, other: 0 },
     networkErrors: 0,
@@ -290,6 +297,12 @@ export class D2LApiClient {
     // ten minutes of due dates to get_upcoming_due_dates. Trusting the
     // surviving entry served the longer caller's staleness to the shorter one.
     if (options?.ttl) {
+      // The saved session may have been deleted by another process (logout),
+      // or replaced by a different account's. A signed-out server must not
+      // answer from memory, so drop every cached response and let this read
+      // take the normal path. Only asked when something is cached, so a cold
+      // cache costs nothing.
+      if (this.cache.size > 0 && await this.tokenManager.sessionChanged?.()) this.clearCache();
       const age = this.cache.ageOf(path);
       if (age !== undefined && age <= options.ttl) {
         log("DEBUG", `Cache hit: ${path}`);
@@ -309,11 +322,12 @@ export class D2LApiClient {
       return pending;
     }
 
+    const generation = this.cacheGeneration;
     const inFlight = (async (): Promise<T> => {
       const resolved = await this.resolvePath(path);
       const data = await this.withAuthentication(resolved, token => this.makeRequest<T>(resolved, token));
 
-      if (options?.ttl) {
+      if (options?.ttl && generation === this.cacheGeneration) {
         this.cache.set(path, data, options.ttl);
         log("DEBUG", `Cached response for ${path} (TTL: ${options.ttl}ms)`);
       }
@@ -714,9 +728,13 @@ export class D2LApiClient {
   }
 
   /**
-   * Clear all cached responses.
+   * Clear all cached responses, and stop later callers joining GETs already
+   * in flight (they began under the session being discarded; those callers
+   * still get their own answer, but it is not remembered).
    */
   clearCache(): void {
+    this.cacheGeneration++;
+    this.pendingGets.clear();
     this.cache.clear();
     log("DEBUG", "Cache cleared");
   }

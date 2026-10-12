@@ -24,6 +24,7 @@ export { registerGetDiscussions } from "./get-discussions.js";
 export { registerGetVideoTranscript } from "./get-video-transcript.js";
 export { registerGetServerInfo } from "./get-server-info.js";
 export { registerSearchCourse } from "./search-course.js";
+export { registerSignOut } from "./sign-out.js";
 
 // Instructor / TA dropbox tools (read-only)
 export { registerGetDropboxFolders } from "./get-dropbox-folders.js";

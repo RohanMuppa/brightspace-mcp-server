@@ -29,7 +29,7 @@ export interface TokenManagerOptions {
   /** Injection seam for tests. */
   mint?: typeof mintAccessToken;
   /** Persistence injection keeps unit tests independent of native credentials. */
-  sessionStore?: Pick<SessionStore, "load" | "save" | "clear" | "saveIfCurrent" | "clearIfCurrent">;
+  sessionStore?: Pick<SessionStore, "load" | "save" | "clear" | "saveIfCurrent" | "clearIfCurrent"> & Partial<Pick<SessionStore, "fingerprint">>;
   /**
    * Pre-issued Bearer token from D2L_ACCESS_TOKEN. When set, getToken() hands
    * it back directly on every call — no disk, no mint, no browser — and takes
@@ -62,6 +62,21 @@ export class TokenManager {
   /** Single in-flight mint, so concurrent callers share one request. */
   private mintInFlight: Promise<TokenData | null> | null = null;
   private rejectedAccessToken: string | null = null;
+  /**
+   * The saved session this process last read or wrote, as the account it
+   * belongs to. Kept even while cachedToken is null (an unusable token on
+   * disk), so a later sign-in can still be compared with the account that
+   * the in-memory state, and the API client's response cache, were built for.
+   * Null once the session is known to be gone.
+   */
+  private identityToken: TokenData | null = null;
+  /** SessionStore.fingerprint() of the file when identityToken was read or written. */
+  private observedFingerprint: string | undefined;
+  /**
+   * Set when the session was signed out or replaced by a different account
+   * since sessionChanged() last answered. Errs toward true.
+   */
+  private sessionReplaced = false;
 
   constructor(sessionDir?: string);
   constructor(options: TokenManagerOptions);
@@ -103,7 +118,12 @@ export class TokenManager {
       return token;
     }
 
-    // Check memory cache first
+    // Check memory cache first, after asking whether the saved session is
+    // still the one this process remembers. Another process may have signed
+    // out (deleted it), or signed in again, since this token was cached; when
+    // it has, the memory is dropped or refreshed from disk here. Skipped when
+    // nothing is remembered, so a cold start costs no extra stat.
+    await this.syncWithDisk();
     if (this.cachedToken && this.isUsable(this.cachedToken)) {
       log("DEBUG", "Returning cached token");
       return this.cachedToken;
@@ -111,6 +131,7 @@ export class TokenManager {
 
     // Try loading from disk
     const storedToken = await this.sessionStore.load();
+    if (storedToken) await this.observe(storedToken);
     if (storedToken && this.isUsable(storedToken)) {
       log("DEBUG", "Loaded valid token from session store");
       this.cachedToken = storedToken;
@@ -129,6 +150,119 @@ export class TokenManager {
 
     log("DEBUG", "No valid token available");
     return null;
+  }
+
+  /**
+   * Whether the saved session was signed out or replaced by a different
+   * account since this was last asked, for example by `brightspace-auth
+   * --logout` or the sign_out tool running in another process, or a new
+   * sign-in as someone else. When it was, anything built under the old
+   * session (the API client's response cache) must not be trusted. Costs one
+   * stat while the file is unchanged.
+   *
+   * True when the file is missing, and when a reload shows a different
+   * account than the one remembered. Names are compared when both sides have
+   * one, otherwise the session cookie; with neither, the answer is true,
+   * because when unsure the safe move is to clear. The same account's token
+   * re-minted by another process (hourly) is not a change, so it does not
+   * wipe a cache that is still valid. The answer is true once per change.
+   * Always false for D2L_ACCESS_TOKEN / D2L_SESSION_COOKIE, which have no
+   * saved session. An unreadable or undeterminable state answers false.
+   */
+  async sessionChanged(): Promise<boolean> {
+    if (this.envAccessToken || this.envSessionCookie) return false;
+    await this.syncWithDisk();
+    const changed = this.sessionReplaced;
+    this.sessionReplaced = false;
+    return changed;
+  }
+
+  /**
+   * Drop everything remembered about the saved session without touching any
+   * file: the cached token, a remembered rejection and the recorded file
+   * identity. The next getToken() reads the disk afresh. Call it right after
+   * deleting the session files (the sign_out tool does), so this process stops
+   * acting signed in even when another app has already signed in again and
+   * recreated the file, which a plain existence check could not tell apart.
+   * Also makes the next sessionChanged() answer true, so cached API responses
+   * are not served either.
+   */
+  forgetSession(): void {
+    this.cachedToken = null;
+    this.rejectedAccessToken = null;
+    this.identityToken = null;
+    this.observedFingerprint = undefined;
+    this.sessionReplaced = true;
+  }
+
+  /**
+   * Compare the saved file with what this process last saw of it, and bring
+   * memory in line: file gone, forget everything; file replaced or rewritten,
+   * reload it and adopt it (flagging a different account). A fingerprint
+   * that cannot be determined, or an unreadable replacement, keeps the
+   * current state, with an unreadable replacement flagged as changed.
+   * Does nothing, and costs nothing, when nothing is remembered.
+   */
+  private async syncWithDisk(): Promise<void> {
+    if (!this.identityToken && !this.rejectedAccessToken) return;
+    const fingerprint = await this.sessionStore.fingerprint?.();
+    if (fingerprint === null) {
+      log("DEBUG", "The saved session is gone; dropping the in-memory token");
+      this.forgetSession();
+      return;
+    }
+    if (typeof fingerprint !== "string" || !this.identityToken || fingerprint === this.observedFingerprint) return;
+
+    log("DEBUG", "The saved session changed on disk; reloading it");
+    let loaded: TokenData | null;
+    try {
+      loaded = await this.sessionStore.load();
+    } catch (error) {
+      // Cannot tell whose session this is. Keep serving the token in memory,
+      // do not record the fingerprint (so the next call tries again), and
+      // make sure cached responses are not trusted.
+      log("WARN", "The saved session changed but could not be read", error);
+      this.sessionReplaced = true;
+      return;
+    }
+    if (!loaded) {
+      this.forgetSession();
+      return;
+    }
+    this.adopt(loaded, fingerprint);
+    this.cachedToken = this.isUsable(loaded) ? loaded : null;
+  }
+
+  /**
+   * Remember `token` as the session now on disk. `fingerprint` is the file's
+   * identity from a stat taken before it was read; without one, it is taken
+   * now, after the read or write that produced `token`. If another process
+   * rewrote the file in the instant between that read or write and the stat,
+   * this records their file's identity against our token, so the change goes
+   * unnoticed until the next rewrite. That is acceptable: the token held is
+   * itself valid, and the window is microseconds wide.
+   */
+  private adopt(token: TokenData, fingerprint: string | null | undefined): void {
+    if (this.identityToken && !this.sameAccount(this.identityToken, token)) this.sessionReplaced = true;
+    this.identityToken = token;
+    this.observedFingerprint = fingerprint ?? undefined;
+  }
+
+  private async observe(token: TokenData): Promise<void> {
+    this.adopt(token, await this.sessionStore.fingerprint?.());
+  }
+
+  /**
+   * Whether two sessions belong to the same account on the same tenant.
+   * Unknown is not the same: with no name on both sides and no shared cookie,
+   * this answers false.
+   */
+  private sameAccount(a: TokenData, b: TokenData): boolean {
+    if (a.tenantOrigin !== b.tenantOrigin) return false;
+    if (a.uniqueName !== undefined && b.uniqueName !== undefined) {
+      return a.uniqueName.toLowerCase() === b.uniqueName.toLowerCase();
+    }
+    return a.cookieHeader !== undefined && a.cookieHeader === b.cookieHeader;
   }
 
   /**
@@ -210,7 +344,15 @@ export class TokenManager {
     // The auth CLI or another MCP process can finish a login while HTTP minting
     // is in flight. Its newer session wins over either result of this request.
     const current = await this.sessionStore.load();
-    if (current && !this.sameToken(current, stale)) {
+    if (!current) {
+      // Signed out while the mint was in flight. Saving a token now would
+      // quietly undo that, so drop everything and let the caller sign in.
+      log("DEBUG", "The saved session was removed during the refresh");
+      this.forgetSession();
+      return null;
+    }
+    if (!this.sameToken(current, stale)) {
+      await this.observe(current);
       this.cachedToken = current;
       if (this.isUsable(current)) return current;
       throw new TokenRefreshError("saved authentication changed during refresh");
@@ -233,6 +375,7 @@ export class TokenManager {
         displayName: stale.displayName,
       };
       if (!await this.sessionStore.saveIfCurrent(token, stale)) return this.afterConcurrentChange();
+      await this.observe(token);
       this.cachedToken = token;
       this.rejectedAccessToken = null;
       log("INFO", "Minted a fresh access token from the session cookie");
@@ -243,6 +386,7 @@ export class TokenManager {
       log("INFO", "The session cookie has expired, a browser login is needed");
       if (!await this.sessionStore.clearIfCurrent(stale)) return this.afterConcurrentChange();
       this.cachedToken = null;
+      this.observedFingerprint = undefined;
       return null;
     }
 
@@ -254,6 +398,7 @@ export class TokenManager {
    */
   async setToken(token: TokenData): Promise<void> {
     await this.sessionStore.save(token);
+    await this.observe(token);
     this.cachedToken = token;
     this.rejectedAccessToken = null;
     log("DEBUG", "Token cached and persisted");
@@ -264,6 +409,9 @@ export class TokenManager {
    */
   async clearToken(): Promise<void> {
     this.cachedToken = null;
+    this.identityToken = null;
+    this.observedFingerprint = undefined;
+    this.sessionReplaced = true;
     await this.sessionStore.clear();
     log("DEBUG", "Token cleared from memory and disk");
   }
@@ -282,8 +430,16 @@ export class TokenManager {
   }
 
   private async afterConcurrentChange(): Promise<TokenData | null> {
-    this.cachedToken = await this.sessionStore.load();
-    if (this.cachedToken && this.isUsable(this.cachedToken)) return this.cachedToken;
+    const loaded = await this.sessionStore.load();
+    if (!loaded) {
+      // Nothing is saved any more: the user signed out. That is not a refresh
+      // failure; the caller proceeds to the ordinary sign-in.
+      this.forgetSession();
+      return null;
+    }
+    await this.observe(loaded);
+    this.cachedToken = loaded;
+    if (this.isUsable(loaded)) return loaded;
     throw new TokenRefreshError("saved authentication changed during refresh");
   }
 

@@ -72,7 +72,7 @@ Run it from your home folder — macOS blocks `npx` from Documents, Desktop, or 
 
 ## Signing out early
 
-To end the saved session before it lapses (on a shared computer, say) or to force a fresh sign-in:
+To end the saved session before it lapses (on a shared computer, say) or to force a fresh sign-in, run:
 
 ```bash
 npx -y brightspace-mcp-server@latest auth --logout
@@ -80,7 +80,9 @@ npx -y brightspace-mcp-server@latest auth --logout
 
 This deletes the saved session files for your configured account on this computer (it prints their names), so the next question, or `auth`, does a full sign-in. It keeps your saved password, `config.json`, and any authenticator or credential-store entries. It is a local sign-out only: it does not sign you out of Microsoft or Brightspace on their servers, so a browser you used elsewhere stays signed in.
 
-An AI app that is already running may hold an access token in memory until it expires; restart the app to drop it right away. If a sign-in is in progress it refuses and deletes nothing: wait for it to finish, then run it again. With nothing saved it says so and succeeds, so it is safe to run twice.
+Or just ask your AI app to sign you out of Brightspace; it does the same thing.
+
+Other AI apps open on this computer are signed out too and will ask you to sign in on their next question. (An app you opened before updating may keep answering for up to an hour; quit and reopen it to sign it out right away.) Your saved password and authenticator key stay, so with a saved authenticator key the next sign-in can finish without you; on a shared computer, also delete the saved `brightspace-mcp-server` entries from your computer's password store (Keychain Access on a Mac, Credential Manager on Windows). If a sign-in is in progress it refuses and deletes nothing: wait for it to finish, then run it again. With nothing saved it says so and succeeds, so it is safe to run twice.
 
 ## Per-school notes
 

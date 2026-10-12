@@ -6,7 +6,7 @@ import { acquireProcessLock, AuthenticationInProgressError, lockOps } from "../.
 import { authLockPath } from "../../src/auth/mfa-challenge.js";
 import { BrowserStateStore } from "../../src/auth/browser-state-store.js";
 import { getStoredPassword, setStoredPassword } from "../../src/auth/credential-store.js";
-import { clearSavedSession, runLogout } from "../../src/auth/logout.js";
+import { clearSavedSession, RemoveError, runLogout } from "../../src/auth/logout.js";
 import { recordMicrosoftSession } from "../../src/auth/microsoft-session.js";
 import { SessionStore } from "../../src/auth/session-store.js";
 import { accountSessionDirectory } from "../../src/utils/config.js";
@@ -101,6 +101,22 @@ describe("clearSavedSession", () => {
     expect(await clearSavedSession(dir)).toEqual({ removed: [] });
     expect(await exists(dir)).toBe(false);
     expect(await exists(path.join(root, "accounts"))).toBe(false);
+  });
+
+  it("throws an exported RemoveError naming the file when a removal fails", async () => {
+    await fs.mkdir(path.join(root, "microsoft-session.json"));
+    const error = await clearSavedSession(root).catch((caught) => caught);
+    expect(error).toBeInstanceOf(RemoveError);
+    expect((error as RemoveError).file).toBe("microsoft-session.json");
+  });
+
+  it("reports a session.json that cannot be deleted as a RemoveError naming it, not a store error", async () => {
+    // A non-empty directory where the file belongs cannot be unlinked, on any platform.
+    await fs.mkdir(path.join(root, "session.json"));
+    await fs.writeFile(path.join(root, "session.json", "inner"), "x");
+    const error = await clearSavedSession(root).catch((caught) => caught);
+    expect(error).toBeInstanceOf(RemoveError);
+    expect((error as RemoveError).file).toBe("session.json");
   });
 
   it("leaves no lock directory behind after removing files", async () => {
@@ -228,8 +244,9 @@ describe("runLogout", () => {
     expect(output()).toMatch(/saved password/i);
     expect(output()).toContain("config.json");
     expect(output()).toMatch(/authenticator/i);
-    expect(output()).toMatch(/still hold an access token in memory/i);
-    expect(output()).toMatch(/restart your AI client/i);
+    expect(output()).toMatch(/other Brightspace apps open on this computer sign out on their next request/i);
+    expect(output()).toMatch(/opened before updating may keep answering for up to an hour/i);
+    expect(output()).toMatch(/quit and reopen it/i);
     expect(output()).toMatch(/not sign you out of Microsoft or Brightspace/i);
     expect(output()).toContain("npx -y brightspace-mcp-server@latest auth");
     // Names only, never a path.
@@ -239,7 +256,7 @@ describe("runLogout", () => {
   it("says there is nothing to clear and exits 0", async () => {
     expect(await runLogout({ sessionDir: dir, print })).toBe(0);
     expect(output()).toMatch(/nothing to clear/i);
-    expect(output()).toMatch(/still hold an access token in memory/i);
+    expect(output()).toMatch(/sign out on their next request/i);
     expect(output()).not.toMatch(/removed/i);
   });
 
@@ -265,5 +282,16 @@ describe("runLogout", () => {
 
     expect(output()).toContain("storage-state.encrypted.json");
     expect(output()).toMatch(/run .* again/i);
+  });
+
+  it("exits 1 with the incomplete guidance when session.json cannot be deleted", async () => {
+    await fs.mkdir(path.join(dir, "session.json"));
+    await fs.writeFile(path.join(dir, "session.json", "inner"), "x");
+
+    expect(await runLogout({ sessionDir: dir, print })).toBe(1);
+
+    expect(output()).toMatch(/Sign-out is incomplete/);
+    expect(output()).toContain("session.json");
+    expect(output()).toMatch(/Close anything that may be using that file/);
   });
 });
