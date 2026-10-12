@@ -183,7 +183,7 @@ Registered in `src/tools/index.ts`, schemas in `src/tools/schemas.ts`:
 | `get_assignment_rubric` | Full rubric table (criteria groups, levels, points, descriptions) for a dropbox assignment, plus the student's own graded outcome per criterion when the tenant exposes it |
 | `get_upcoming_due_dates` | Due dates across all courses within a window |
 | `get_calendar_events` | Course calendar events (exams, labs, schedule changes, hand-made deadlines) in a window, default the next 7 days |
-| `get_announcements` | Recent course announcements, with each one's attached files (`attachments`) |
+| `get_announcements` | Recent course announcements, with each one's attached files (`attachments`). `body` is the full post as markdown converted from D2L's Html (links, lists, tables and embedded-content addresses kept), falling back to D2L's plain Text only for a text-only post; `pagination.truncated` means more posts remain, never that a body was cut |
 | `get_syllabus` | Syllabus document for a course |
 | `get_course_content` | Module tree and content topics; module descriptions are Markdown preserving embedded links (with plain-text fallback) |
 | `get_discussions` | Discussion forums and recent posts |

@@ -19,6 +19,14 @@ function getTurndownService(): TurndownServiceType {
     turndownService = new TurndownService({
       headingStyle: "atx",
       codeBlockStyle: "fenced",
+      // Turndown routes any element with no text (an <object>, say) to the
+      // blank rule before the rules above are consulted, so an embedded
+      // object has to be recognised here to keep its address.
+      blankReplacement: (_content, node) => {
+        const el = node as unknown as HTMLElement;
+        if (EMBEDDED_TAGS.includes(el.nodeName)) return embeddedLink(el);
+        return (node as unknown as { isBlock: boolean }).isBlock ? "\n\n" : "";
+      },
     });
 
     // Turndown has no rule for <script>, <style> or <noscript>, so it falls
@@ -93,6 +101,15 @@ function getTurndownService(): TurndownServiceType {
       },
     });
 
+    // Embedded frames and media carry no text, so Turndown dropped them
+    // whole: a post whose details sat in an embedded PDF or video read as if
+    // that part did not exist. Keep the address as a link so the model can
+    // see that something was embedded and where it lives.
+    turndownService.addRule("embeddedContent", {
+      filter: ["iframe", "object", "embed", "video", "audio"],
+      replacement: (_content, node) => embeddedLink(node as HTMLElement),
+    });
+
     turndownService.addRule("imageSessionTokens", {
       filter: "img",
       replacement: (_content, node) => {
@@ -106,6 +123,17 @@ function getTurndownService(): TurndownServiceType {
     });
   }
   return turndownService;
+}
+
+const EMBEDDED_TAGS = ["IFRAME", "OBJECT", "EMBED", "VIDEO", "AUDIO"];
+
+/** A link to an embedded frame or media file; empty when it has no usable address. */
+function embeddedLink(el: HTMLElement): string {
+  const raw = el.getAttribute("src") ?? el.getAttribute("data") ?? "";
+  if (!raw.trim() || isUnsafeHref(raw)) return "";
+  const label = (el.getAttribute("title") || el.getAttribute("aria-label") || "Embedded content")
+    .replace(/[\[\]]/g, "");
+  return `[${label}](${stripD2lSessionParams(raw).replace(/([()])/g, "\\$1")})`;
 }
 
 /** True for `javascript:`/`data:` hrefs -- never a legitimate content link. */

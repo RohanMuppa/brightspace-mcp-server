@@ -188,4 +188,27 @@ describe("convertHtmlToMarkdown", () => {
       );
     });
   });
+
+  it("keeps the address of embedded iframes, objects, embeds and media instead of dropping them", () => {
+    const { markdown } = convertHtmlToMarkdown(
+      '<p>Watch</p><iframe title="Pitch tips" src="https://www.youtube.com/embed/abc?d2lSessionVal=SECRET"></iframe>' +
+        '<object data="https://x.test/flyer.pdf"></object><embed src="https://x.test/deck.pdf">' +
+        '<video src="https://x.test/v.mp4"></video><audio src="https://x.test/a.mp3"></audio><p>after</p>'
+    );
+    expect(markdown).toContain("[Pitch tips](https://www.youtube.com/embed/abc)");
+    expect(markdown).toContain("(https://x.test/flyer.pdf)");
+    expect(markdown).toContain("(https://x.test/deck.pdf)");
+    expect(markdown).toContain("(https://x.test/v.mp4)");
+    expect(markdown).toContain("(https://x.test/a.mp3)");
+    expect(markdown).not.toContain("SECRET");
+    expect(markdown).toContain("Watch");
+    expect(markdown).toContain("after");
+  });
+
+  it("drops an embed with no usable address and never emits a javascript: link", () => {
+    const { markdown } = convertHtmlToMarkdown(
+      '<p>a</p><iframe></iframe><iframe src="javascript:alert(1)"></iframe><p>b</p>'
+    );
+    expect(markdown).toBe("a\n\nb");
+  });
 });
