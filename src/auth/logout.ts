@@ -50,6 +50,8 @@ async function removeSessionFile(sessionDir: string): Promise<boolean> {
   try {
     return await new SessionStore(sessionDir).remove();
   } catch (error) {
+    // A session write that holds its lock too long is still "in progress", not a file that won't delete.
+    if (error instanceof AuthenticationInProgressError) throw error;
     throw new RemoveError(SESSION_FILE, error);
   }
 }

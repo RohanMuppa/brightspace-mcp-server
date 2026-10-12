@@ -167,7 +167,9 @@ export class TokenManager {
    * re-minted by another process (hourly) is not a change, so it does not
    * wipe a cache that is still valid. The answer is true once per change.
    * Always false for D2L_ACCESS_TOKEN / D2L_SESSION_COOKIE, which have no
-   * saved session. An unreadable or undeterminable state answers false.
+   * saved session. A failed stat answers false; a replaced file this process
+   * cannot read answers true (the in-memory token is still served, but cached
+   * responses are not trusted until the file reads again).
    */
   async sessionChanged(): Promise<boolean> {
     if (this.envAccessToken || this.envSessionCookie) return false;

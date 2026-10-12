@@ -284,6 +284,19 @@ describe("runLogout", () => {
     expect(output()).toMatch(/run .* again/i);
   });
 
+  it("reports a session write that holds its lock as in progress, not as a file that won't delete", async () => {
+    await fs.writeFile(path.join(dir, "session.json"), "x");
+    const remove = vi.spyOn(SessionStore.prototype, "remove").mockRejectedValue(new AuthenticationInProgressError("session write in progress"));
+    try {
+      expect(await runLogout({ sessionDir: dir, print })).toBe(2);
+    } finally {
+      remove.mockRestore();
+    }
+
+    expect(output()).toMatch(/sign-in is in progress/);
+    expect(output()).not.toMatch(/incomplete/i);
+  });
+
   it("exits 1 with the incomplete guidance when session.json cannot be deleted", async () => {
     await fs.mkdir(path.join(dir, "session.json"));
     await fs.writeFile(path.join(dir, "session.json", "inner"), "x");
