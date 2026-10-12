@@ -14,6 +14,7 @@ import { toolResponse, toolResponseWithNotice, sanitizeError, isAuthUnavailable,
 import { log } from "../utils/logger.js";
 import { applyCourseFilter } from "../utils/course-filter.js";
 import { matchesModifiedSince } from "../utils/modified-since.js";
+import { convertHtmlToMarkdown } from "../utils/html-converter.js";
 import type { AppConfig } from "../types/index.js";
 
 function pageInfo(offset: number, count: number, returned: number, total: number | null, unavailableCourseIds: number[] = []) {
@@ -33,7 +34,7 @@ function arrayPage(items: unknown[], pagination: ReturnType<typeof pageInfo>, no
 export interface NewsItem {
   Id: number;
   Title: string;
-  Body: { Text: string; Html: string } | null;
+  Body: { Text?: string | null; Html?: string | null } | null;
   CreatedBy: { Identifier: string; DisplayName: string } | null;
   CreatedDate: string | null;
   LastModifiedBy: { Identifier: string; DisplayName: string };
@@ -121,6 +122,20 @@ export async function fetchCourseNews(
 }
 
 /**
+ * The announcement text a reader should see. D2L's RichText.Text is only "the
+ * plaintext form of the text": it carries no link targets, and the API makes
+ * no promise that it is present or equal to Html. The Html is the post as the
+ * instructor wrote it, so it leads (as markdown, keeping links, lists and
+ * tables); Text is the fallback for a text-only post or Html with nothing
+ * readable in it.
+ */
+export function newsBodyText(body: NewsItem["Body"]): string {
+  if (!body) return "";
+  const markdown = body.Html ? convertHtmlToMarkdown(body.Html).markdown.trim() : "";
+  return markdown || body.Text || "";
+}
+
+/**
  * Map a raw D2L news item to a clean announcement object.
  */
 export function mapNewsItem(item: NewsItem) {
@@ -132,7 +147,7 @@ export function mapNewsItem(item: NewsItem) {
   return {
     id: item.Id,
     title: item.Title,
-    body: item.Body?.Text ?? "",
+    body: newsBodyText(item.Body),
     createdBy: item.CreatedBy?.DisplayName ?? "Unknown",
     date: effectiveDate(item),
     isPinned: item.IsPinned,
@@ -155,7 +170,7 @@ export function registerGetAnnouncements(
       title: "Get Announcements",
       annotations: { readOnlyHint: true },
       description:
-        "Fetch announcements from one course with courseId, or all courses when omitted, newest first. count is 1-50 per page. Continue with offset= pagination.nextOffset until it is null. Pagination metadata is in a separate JSON text block for array responses, or the pagination field with modifiedSince. A false coverageComplete means some courses were not fetched: retry from offset 0 after recovery. Offsets reflect the current filtered list; new posts can shift pages. Attachments are listed per announcement; fetch them with download_file (newsId + fileId) or read them with get_announcement_files.",
+        "Fetch announcements from one course with courseId, or all courses when omitted, newest first. count is 1-50 per page. Each body is the full announcement text as markdown (links kept); pagination.truncated only means more announcements remain, never that a body was cut. Continue with offset= pagination.nextOffset until it is null. Pagination metadata is in a separate JSON text block for array responses, or the pagination field with modifiedSince. A false coverageComplete means some courses were not fetched: retry from offset 0 after recovery. Offsets reflect the current filtered list; new posts can shift pages. Attachments are listed per announcement; fetch them with download_file (newsId + fileId) or read them with get_announcement_files.",
       inputSchema: GetAnnouncementsSchema,
     },
     async (args: any) => {
