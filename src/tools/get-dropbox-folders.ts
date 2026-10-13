@@ -23,7 +23,8 @@ interface D2LDropboxFolder {
   EndDate: string | null;
   DueDate: string | null;
   IsHidden: boolean;
-  GroupTypeId: number | null;
+  /** Missing and null both mean an individual folder (Dropbox.DropboxFolder). */
+  GroupTypeId?: number | null;
   SubmissionType: number | null;
   Assessment: {
     ScoreDenominator: number | null;
@@ -101,7 +102,7 @@ export function registerGetDropboxFolders(
           name: f.Name,
           categoryId: f.CategoryId,
           isHidden: f.IsHidden,
-          isGroup: f.GroupTypeId !== null,
+          isGroup: f.GroupTypeId !== null && f.GroupTypeId !== undefined,
           submissionType: submissionTypeLabel(f.SubmissionType),
           dueDate: f.DueDate ?? null,
           startDate: f.StartDate ?? null,

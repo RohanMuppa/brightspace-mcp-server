@@ -66,6 +66,19 @@ describe("get_dropbox_folders", () => {
     expect(parsed.folders[0].folderId).toBe(55);
   });
 
+  it("calls a folder with no GroupTypeId an individual folder (#240)", async () => {
+    const individual = folder();
+    delete (individual as Record<string, unknown>).GroupTypeId;
+    const { call } = setup(() => [individual, folder({ Id: 56, GroupTypeId: 7 })]);
+    const result = await call({ courseId: COURSE_ID });
+
+    const parsed = body(result);
+    expect(parsed.folders.map((f: any) => [f.folderId, f.isGroup])).toEqual([
+      [55, false],
+      [56, true],
+    ]);
+  });
+
   it("returns a clear instructor/TA note on 403, not a generic error", async () => {
     const { call } = setup(forbidden);
     const result = await call({ courseId: COURSE_ID });
