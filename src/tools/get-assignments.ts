@@ -270,6 +270,32 @@ async function recoverContentQuizzes(
   }));
 }
 
+/** Whether a course's quiz list can be read as the whole of its quizzes. */
+type QuizCoverage =
+  | { quizCoverage: "complete" }
+  | { quizCoverage: "incomplete"; quizCoverageNote: string };
+
+/**
+ * Coverage of the three routes quizzes are found through. Any one that did
+ * not answer may hide quizzes the others cannot see, so the inventory is only
+ * complete when all three did.
+ */
+function quizCoverage(answered: { quizList: boolean; content: boolean; gradebook: boolean }): QuizCoverage {
+  const unread = [
+    answered.quizList ? null : "the course's quiz list",
+    answered.content ? null : "the course content (checked for quizzes the quiz list omits)",
+    answered.gradebook ? null : "the gradebook (checked for graded work the quiz list omits)",
+  ].filter((source): source is string => source !== null);
+  if (unread.length === 0) return { quizCoverage: "complete" };
+  return {
+    quizCoverage: "incomplete",
+    quizCoverageNote:
+      `Brightspace did not return ${unread.join(", or ")}, so this course may have quizzes not listed here. ` +
+      "Do not treat the listed quizzes as all of them, and do not report an unlisted quiz as missing or not taken - " +
+      "tell the user to check Brightspace directly.",
+  };
+}
+
 /**
  * Fetch assignments (dropbox + quizzes) for a single course
  *
@@ -280,6 +306,15 @@ export async function fetchCourseAssignments(
   courseId: number,
   baseUrl?: string
 ): Promise<any[]> {
+  return (await fetchCourseInventory(apiClient, courseId, baseUrl)).assignments;
+}
+
+/** A course's assignments and quizzes, with whether its quiz list is complete. */
+async function fetchCourseInventory(
+  apiClient: D2LApiClient,
+  courseId: number,
+  baseUrl?: string
+): Promise<{ assignments: any[] } & QuizCoverage> {
   const assignments: any[] = [];
   const assignmentLink = assignmentLinkResolver(apiClient, baseUrl, courseId);
 
@@ -620,7 +655,14 @@ export async function fetchCourseAssignments(
     log("DEBUG", `Failed to fetch the gradebook for course ${courseId}`, gradebookResult.reason);
   }
 
-  return assignments;
+  return {
+    assignments,
+    ...quizCoverage({
+      quizList: quizResult.status === "fulfilled",
+      content: contentResult.status === "fulfilled",
+      gradebook: gradebookResult.status === "fulfilled",
+    }),
+  };
 }
 
 /**
@@ -683,7 +725,8 @@ export function registerGetAssignments(
       annotations: { readOnlyHint: true },
       description:
         "Fetch assignments and quizzes for a specific course or all enrolled courses. Shows dropbox submissions and quizzes with due dates, status, and rubric info. Use this when the user asks about assignments, homework, what to submit, quizzes, or assignment details and rubrics. " +
-        "Read submissionStatus/attemptStatus, not just submission/attemptsUsed, to decide whether something was turned in: some tenants deny students access to submission or attempt data, in which case the status is \"unknown\" even though submission is null or attemptsUsed is 0. Never report an \"unknown\" item as missing, unsubmitted, or not attempted - say it could not be verified and point the user to Brightspace.",
+        "Read submissionStatus/attemptStatus, not just submission/attemptsUsed, to decide whether something was turned in: some tenants deny students access to submission or attempt data, in which case the status is \"unknown\" even though submission is null or attemptsUsed is 0. Never report an \"unknown\" item as missing, unsubmitted, or not attempted - say it could not be verified and point the user to Brightspace. " +
+        "Each course also carries quizCoverage: when it is \"incomplete\", a quiz source could not be read, so the course may have quizzes not listed - never present the listed quizzes as all of them.",
       inputSchema: GetAssignmentsSchema,
     },
     async (args: any) => {
@@ -696,10 +739,10 @@ export function registerGetAssignments(
         // Single course case
         if (courseId) {
           try {
-            const assignments = await fetchCourseAssignments(apiClient, courseId, config.baseUrl);
+            const inventory = await fetchCourseInventory(apiClient, courseId, config.baseUrl);
 
-            log("INFO", `get_assignments: Retrieved ${assignments.length} assignments for course ${courseId}`);
-            return toolResponse({ courseId, assignments });
+            log("INFO", `get_assignments: Retrieved ${inventory.assignments.length} assignments for course ${courseId}`);
+            return toolResponse({ courseId, ...inventory });
           } catch (error) {
             // A pending sign-in is not an empty course: the routes never
             // answered, so the result says so instead of reporting zero
@@ -759,12 +802,12 @@ export function registerGetAssignments(
         // Fetch assignments for each course (handle 403s gracefully)
         const assignmentPromises = filteredEnrollments.map(async (item) => {
           try {
-            const assignments = await fetchCourseAssignments(apiClient, item.OrgUnit.Id, config.baseUrl);
+            const inventory = await fetchCourseInventory(apiClient, item.OrgUnit.Id, config.baseUrl);
 
             return {
               courseId: item.OrgUnit.Id,
               courseName: item.OrgUnit.Name,
-              assignments,
+              ...inventory,
             };
           } catch (error: any) {
             // 403 means no access (past course, etc) - log and skip
@@ -807,7 +850,7 @@ export function registerGetAssignments(
         const pending = settled.filter((c) => c.authPending);
         const courses = settled
           .filter((c) => !c.authPending)
-          .map(({ courseId, courseName, assignments }) => ({ courseId, courseName, assignments }));
+          .map(({ authPending: _authPending, authError: _authError, ...course }) => course);
 
         log(
           "INFO",
