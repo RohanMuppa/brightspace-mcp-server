@@ -45,7 +45,7 @@ function setupTool(failing: Partial<Record<Route, () => Error>> = {}) {
         if (failing.quizzes) throw failing.quizzes();
         return { Objects: [{ QuizId: 66, Name: "Quiz 1", IsActive: true }] };
       }
-      if (path.endsWith("/content/toc")) {
+      if (path.includes("/content/toc")) {
         if (failing.toc) throw failing.toc();
         return { Modules: [] };
       }

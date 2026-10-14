@@ -12,7 +12,7 @@ import { toolResponse, sanitizeError, isAuthUnavailable, authPendingNotice } fro
 import { convertHtmlToMarkdown } from "../utils/html-converter.js";
 import { log } from "../utils/logger.js";
 import { applyCourseFilter } from "../utils/course-filter.js";
-import { gradebookUrl, quizUrl } from "../utils/deep-links.js";
+import { contentTopicUrl, gradebookUrl, quizUrl } from "../utils/deep-links.js";
 import { assignmentLinkResolver } from "./assignment-links.js";
 import { dueIn } from "../utils/due-in.js";
 import { feedbackText, FEEDBACK_UNAVAILABLE_NOTE } from "../utils/feedback.js";
@@ -119,6 +119,8 @@ interface QuizReadData {
   SubmissionGracePeriod?: number | null;
   Password?: string | null;
   ContentMetadataOnly?: boolean;
+  /** The grade column the quiz writes to; ties a gradebook column to its quiz. */
+  GradeItemId?: number | null;
 }
 
 /** The display HTML of a quiz rich-text field, nested shape or flat. */
@@ -196,29 +198,77 @@ interface ContentTableOfContents {
  */
 const STUDENT_SCORED = new Set([1, 2, 3, 4]);
 
-/** Quiz topics visible in course content but absent from the quiz listing. */
-function missingContentQuizTopics(raw: unknown, listedIds: Set<number>): ContentQuizTopic[] {
+/** Which route a quiz was found through, reported on every quiz row. */
+type QuizSource = "quizList" | "courseContent" | "gradebook";
+
+/** A quiz and the route that found it. A content topic with no id has QuizId null. */
+interface FoundQuiz {
+  quiz: Omit<QuizReadData, "QuizId"> & { QuizId: number | null };
+  source: QuizSource;
+  /** The content topic behind a quiz recovered from course content. */
+  topicId?: number;
+}
+
+/** The quiz id a content topic points at, or null when it carries none. */
+function contentQuizId(topic: ContentQuizTopic): number | null {
+  const candidates = [
+    topic.ToolItemId,
+    Number(topic.ActivityId),
+    // quiz_summary.d2l?qi=N and quiz_start_frame_auto.d2l?qi=N: the same qi
+    // parameter quizUrl() builds, present when ToolItemId is not.
+    Number(/(?:[?&]|&amp;)qi=(\d+)(?:[&#]|$)/i.exec(topic.Url ?? "")?.[1]),
+  ];
+  for (const id of candidates) {
+    if (typeof id === "number" && Number.isSafeInteger(id) && id > 0) return id;
+  }
+  return null;
+}
+
+/** Titles compare by words, not by case or spacing, so a topic can be matched to a listed quiz. */
+function normalizedTitle(title: unknown): string {
+  return typeof title === "string" ? title.trim().replace(/\s+/g, " ").toLowerCase() : "";
+}
+
+/**
+ * Quiz topics visible in course content but absent from the quiz listing.
+ * Topics are returned once each. Those that name a quiz are keyed by id; one
+ * that names none is kept only if no listed quiz carries its title.
+ */
+function missingContentQuizTopics(
+  raw: unknown,
+  listedIds: Set<number>,
+  listedTitles: Set<string>
+): Array<{ topic: ContentQuizTopic; quizId: number | null }> {
   if (!raw || typeof raw !== "object") return [];
 
-  const found = new Map<number, ContentQuizTopic>();
-  const visit = (modules: ContentModule[] | undefined): void => {
-    if (!Array.isArray(modules)) return;
+  const found = new Map<string, { topic: ContentQuizTopic; quizId: number | null }>();
+  const visit = (modules: ContentModule[] | undefined, depth: number): void => {
+    if (!Array.isArray(modules) || depth > 50) return;
     for (const module of modules) {
       for (const topic of module.Topics ?? []) {
         const isQuiz = topic.ActivityType === 4
           || topic.TypeIdentifier?.toLowerCase() === "quiz"
-          || /(?:[?&]|&amp;)type=quiz(?:[&#]|$)/i.test(topic.Url ?? "");
-        if (!isQuiz || topic.IsHidden || topic.IsBroken || topic.IsExempt) continue;
+          || /(?:[?&]|&amp;)type=quiz(?:[&#]|$)/i.test(topic.Url ?? "")
+          || /\/lms\/quizzing\/user\/quiz_/i.test(topic.Url ?? "");
+        // A hidden or broken topic is not something the student can open. An
+        // exempt one (IsExempt: exempt from grading, per the content docs)
+        // still can be, so it is kept.
+        if (!isQuiz || topic.IsHidden || topic.IsBroken) continue;
 
-        const activityId = topic.ToolItemId ?? Number(topic.ActivityId);
-        if (!Number.isSafeInteger(activityId) || activityId <= 0 || listedIds.has(activityId)) continue;
-        if (!found.has(activityId)) found.set(activityId, topic);
+        const quizId = contentQuizId(topic);
+        if (quizId !== null) {
+          if (listedIds.has(quizId)) continue;
+        } else if (listedTitles.has(normalizedTitle(topic.Title))) {
+          continue;
+        }
+        const key = quizId !== null ? `quiz:${quizId}` : `topic:${topic.TopicId}`;
+        if (!found.has(key)) found.set(key, { topic, quizId });
       }
-      visit(module.Modules);
+      visit(module.Modules, depth + 1);
     }
   };
 
-  visit((raw as ContentTableOfContents).Modules);
+  visit((raw as ContentTableOfContents).Modules, 0);
   return [...found.values()];
 }
 
@@ -232,17 +282,20 @@ async function recoverContentQuizzes(
   apiClient: D2LApiClient,
   courseId: number,
   toc: unknown,
-  listedIds: Set<number>
-): Promise<QuizReadData[]> {
-  return Promise.all(missingContentQuizTopics(toc, listedIds).map(async (topic) => {
-    const quizId = topic.ToolItemId ?? Number(topic.ActivityId);
-    try {
-      return await apiClient.get<QuizReadData>(apiClient.le(courseId, `/quizzes/${quizId}`), {
-        ttl: DEFAULT_CACHE_TTLS.assignments,
-      });
-    } catch (error) {
-      if (isAuthUnavailable(error)) throw error;
-      log("DEBUG", `Failed to fetch content-linked quiz ${quizId}: using content metadata`, error);
+  listedIds: Set<number>,
+  listedTitles: Set<string>
+): Promise<FoundQuiz[]> {
+  return Promise.all(missingContentQuizTopics(toc, listedIds, listedTitles).map(async ({ topic, quizId }): Promise<FoundQuiz> => {
+    if (quizId !== null) {
+      try {
+        const quiz = await apiClient.get<QuizReadData>(apiClient.le(courseId, `/quizzes/${quizId}`), {
+          ttl: DEFAULT_CACHE_TTLS.assignments,
+        });
+        return { quiz, source: "courseContent", topicId: topic.TopicId };
+      } catch (error) {
+        if (isAuthUnavailable(error)) throw error;
+        log("DEBUG", `Failed to fetch content-linked quiz ${quizId}: using content metadata`, error);
+      }
     }
 
     let detail = topic;
@@ -257,17 +310,109 @@ async function recoverContentQuizzes(
     }
 
     return {
-      QuizId: quizId,
-      Name: detail.Title || topic.Title,
-      Description: detail.Description ?? null,
-      StartDate: detail.StartDate ?? detail.StartDateTime ?? topic.StartDateTime ?? null,
-      EndDate: detail.EndDate ?? detail.EndDateTime ?? topic.EndDateTime ?? null,
-      DueDate: detail.DueDate ?? null,
-      IsActive: true,
-      AttemptsAllowed: null,
-      ContentMetadataOnly: true,
+      source: "courseContent",
+      topicId: topic.TopicId,
+      quiz: {
+        QuizId: quizId,
+        Name: detail.Title || topic.Title,
+        Description: detail.Description ?? null,
+        StartDate: detail.StartDate ?? detail.StartDateTime ?? topic.StartDateTime ?? null,
+        EndDate: detail.EndDate ?? detail.EndDateTime ?? topic.EndDateTime ?? null,
+        DueDate: detail.DueDate ?? null,
+        IsActive: true,
+        AttemptsAllowed: null,
+        ContentMetadataOnly: true,
+      },
     };
   }));
+}
+
+/**
+ * Quizzes behind gradebook columns that nothing else accounted for. A column
+ * linked to a tool item (AssociatedTool) the quiz list and content both omit
+ * may still be a quiz the student can read by id, so it is asked for once.
+ * The answer is accepted only when the quiz names that very column as its
+ * GradeItemId: a discussion or survey that happens to share the id answers
+ * 404 or names a different column, and stays a bare gradebook row.
+ *
+ * Tools already seen on a dropbox folder are not asked; once one column has
+ * matched a known quiz, only that quiz tool's other columns are.
+ */
+const MAX_GRADEBOOK_QUIZ_PROBES = 20;
+
+async function recoverGradebookQuizzes(
+  apiClient: D2LApiClient,
+  courseId: number,
+  gradebook: unknown,
+  folderIds: Set<number>,
+  quizIds: Set<number>
+): Promise<FoundQuiz[]> {
+  if (!Array.isArray(gradebook)) return [];
+
+  const columns = (gradebook as GradeObject[]).filter((c) =>
+    STUDENT_SCORED.has(c?.GradeObjectTypeId as number) && typeof c.Id === "number"
+  );
+  const toolIdsOf = (ids: Set<number>): Set<number> => new Set(
+    columns
+      .filter((c) => ids.has(c.AssociatedTool?.ToolItemId as number))
+      .map((c) => c.AssociatedTool!.ToolId)
+  );
+  const quizTools = toolIdsOf(quizIds);
+  const folderTools = toolIdsOf(folderIds);
+
+  const candidates = columns
+    .filter((c) => {
+      const itemId = c.AssociatedTool?.ToolItemId;
+      if (typeof itemId !== "number" || !Number.isSafeInteger(itemId) || itemId <= 0) return false;
+      if (quizIds.has(itemId) || folderIds.has(itemId)) return false;
+      if (quizTools.size > 0) return quizTools.has(c.AssociatedTool!.ToolId);
+      return !folderTools.has(c.AssociatedTool!.ToolId);
+    })
+    .slice(0, MAX_GRADEBOOK_QUIZ_PROBES);
+
+  const found = await Promise.all(candidates.map(async (column): Promise<FoundQuiz | null> => {
+    const itemId = column.AssociatedTool!.ToolItemId;
+    try {
+      const quiz = await apiClient.get<QuizReadData>(apiClient.le(courseId, `/quizzes/${itemId}`), {
+        ttl: DEFAULT_CACHE_TTLS.assignments,
+      });
+      if (quiz?.QuizId === itemId && quiz.GradeItemId === column.Id) {
+        return { quiz, source: "gradebook" };
+      }
+    } catch (error) {
+      if (isAuthUnavailable(error)) throw error;
+      log("DEBUG", `Gradebook column ${column.Id} is not a readable quiz (${itemId})`, error);
+    }
+    return null;
+  }));
+  return found.filter((item): item is FoundQuiz => item !== null);
+}
+
+/**
+ * The content table of contents with date-restricted items included. D2L's
+ * default view omits modules and topics outside their date window, which is
+ * exactly where a closed (or not yet opened) quiz sits; ignoreDateRestrictions
+ * is documented to be open to students. A tenant that refuses the parameter
+ * still gets the default view, reported as such so coverage is not overstated.
+ */
+async function fetchContentToc(
+  apiClient: D2LApiClient,
+  courseId: number
+): Promise<{ toc: ContentTableOfContents; datesIncluded: boolean }> {
+  try {
+    const toc = await apiClient.get<ContentTableOfContents>(
+      apiClient.le(courseId, "/content/toc?ignoreDateRestrictions=true&ignoreModuleDateRestrictions=true"),
+      { ttl: DEFAULT_CACHE_TTLS.courseContent }
+    );
+    return { toc, datesIncluded: true };
+  } catch (error) {
+    if (isAuthUnavailable(error)) throw error;
+    log("DEBUG", `Content table of contents with date restrictions ignored failed for course ${courseId}: using the default view`, error);
+  }
+  const toc = await apiClient.get<ContentTableOfContents>(apiClient.le(courseId, "/content/toc"), {
+    ttl: DEFAULT_CACHE_TTLS.courseContent,
+  });
+  return { toc, datesIncluded: false };
 }
 
 /** Whether a course's quiz list can be read as the whole of its quizzes. */
@@ -280,10 +425,18 @@ type QuizCoverage =
  * not answer may hide quizzes the others cannot see, so the inventory is only
  * complete when all three did.
  */
-function quizCoverage(answered: { quizList: boolean; content: boolean; gradebook: boolean }): QuizCoverage {
+function quizCoverage(answered: {
+  quizList: boolean;
+  /** "full" read with date restrictions ignored; "dateRestricted" only the default view. */
+  content: "full" | "dateRestricted" | "failed";
+  gradebook: boolean;
+}): QuizCoverage {
   const unread = [
     answered.quizList ? null : "the course's quiz list",
-    answered.content ? null : "the course content (checked for quizzes the quiz list omits)",
+    answered.content === "full" ? null
+      : answered.content === "dateRestricted"
+        ? "the course content with date-restricted items included (quizzes whose module or access window has not opened or has closed are hidden from the default view)"
+        : "the course content (checked for quizzes the quiz list omits)",
     answered.gradebook ? null : "the gradebook (checked for graded work the quiz list omits)",
   ].filter((source): source is string => source !== null);
   if (unread.length === 0) return { quizCoverage: "complete" };
@@ -334,9 +487,7 @@ async function fetchCourseInventory(
     apiClient.get<GradeObject[]>(apiClient.le(courseId, "/grades/"), {
       ttl: DEFAULT_CACHE_TTLS.assignments,
     }),
-    apiClient.get<ContentTableOfContents>(apiClient.le(courseId, "/content/toc"), {
-      ttl: DEFAULT_CACHE_TTLS.courseContent,
-    }),
+    fetchContentToc(apiClient, courseId),
   ]);
 
   // Each route may fail on its own without costing the others, but a failed
@@ -525,23 +676,41 @@ async function fetchCourseInventory(
 
   // Process quizzes. Content discovery remains useful when the list route is
   // forbidden or unavailable, so a failed list starts from an empty set.
-  let quizzes: QuizReadData[] = [];
+  const quizzes: FoundQuiz[] = [];
   if (quizResult.status === "fulfilled") {
-    quizzes = quizResult.value;
+    quizzes.push(...quizResult.value.map((quiz): FoundQuiz => ({ quiz, source: "quizList" })));
   } else {
     log("DEBUG", `Failed to fetch quizzes for course ${courseId}`, quizResult.reason);
   }
 
+  const knownQuizIds = () => new Set(
+    quizzes.map((found) => found.quiz.QuizId).filter((id): id is number => typeof id === "number")
+  );
+  const knownQuizTitles = () => new Set(quizzes.map((found) => normalizedTitle(found.quiz.Name)));
+
   if (contentResult.status === "fulfilled") {
-    const listedIds = new Set(quizzes.map((quiz) => quiz.QuizId));
     quizzes.push(...await recoverContentQuizzes(
       apiClient,
       courseId,
-      contentResult.value,
-      listedIds
+      contentResult.value.toc,
+      knownQuizIds(),
+      knownQuizTitles()
     ));
   } else {
     log("DEBUG", `Failed to fetch course content for quiz discovery in course ${courseId}`, contentResult.reason);
+  }
+
+  if (gradebookResult.status === "fulfilled") {
+    const folderIds = new Set(
+      assignments.map((item) => item.id).filter((id): id is number => typeof id === "number")
+    );
+    quizzes.push(...await recoverGradebookQuizzes(
+      apiClient,
+      courseId,
+      gradebookResult.value,
+      folderIds,
+      knownQuizIds()
+    ));
   }
 
     // Students on this tenant get 403 from /quizzes/{id}/attempts/. Once the
@@ -549,14 +718,15 @@ async function fetchCourseInventory(
     // the answer would be the same 403, at one wasted request each.
     let attemptsForbidden = false;
 
-    for (const quiz of quizzes) {
-      // Skip inactive quizzes
-      if (!quiz.IsActive) continue;
+    for (const { quiz, source, topicId } of quizzes) {
+      // Skip quizzes the instructor marked inactive. A row that does not say
+      // is not inactive: only an explicit false hides a quiz.
+      if (quiz.IsActive === false) continue;
 
       // Fetch quiz attempts. null means "not measured", which is different
       // from an empty list, and the output says which one it was.
       let attempts: QuizAttemptData[] | null = null;
-      if (!attemptsForbidden && !quiz.ContentMetadataOnly) {
+      if (!attemptsForbidden && !quiz.ContentMetadataOnly && quiz.QuizId !== null) {
         try {
           const attemptsRaw = await apiClient.get<{ Objects: QuizAttemptData[] } | QuizAttemptData[]>(
             apiClient.le(courseId, `/quizzes/${quiz.QuizId}/attempts/`),
@@ -606,8 +776,17 @@ async function fetchCourseInventory(
       const quizAssignment = {
         type: "quiz",
         id: quiz.QuizId,
+        ...(quiz.QuizId === null && topicId !== undefined ? { topicId } : {}),
         name: quiz.Name,
-        url: baseUrl ? quizUrl(baseUrl, courseId, quiz.QuizId) : null,
+        // A content quiz with no quiz id links to its content topic instead.
+        url: !baseUrl
+          ? null
+          : quiz.QuizId !== null
+            ? quizUrl(baseUrl, courseId, quiz.QuizId)
+            : topicId !== undefined ? contentTopicUrl(baseUrl, courseId, topicId) : null,
+        // Which route found this quiz: the course's quiz list, a quiz topic
+        // in the course content, or a gradebook column linked to it.
+        source,
         instructions: descriptionHtml
           ? convertHtmlToMarkdown(descriptionHtml).markdown
           : "",
@@ -659,7 +838,9 @@ async function fetchCourseInventory(
     assignments,
     ...quizCoverage({
       quizList: quizResult.status === "fulfilled",
-      content: contentResult.status === "fulfilled",
+      content: contentResult.status !== "fulfilled"
+        ? "failed"
+        : contentResult.value.datesIncluded ? "full" : "dateRestricted",
       gradebook: gradebookResult.status === "fulfilled",
     }),
   };
@@ -726,6 +907,7 @@ export function registerGetAssignments(
       description:
         "Fetch assignments and quizzes for a specific course or all enrolled courses. Shows dropbox submissions and quizzes with due dates, status, and rubric info. Use this when the user asks about assignments, homework, what to submit, quizzes, or assignment details and rubrics. " +
         "Read submissionStatus/attemptStatus, not just submission/attemptsUsed, to decide whether something was turned in: some tenants deny students access to submission or attempt data, in which case the status is \"unknown\" even though submission is null or attemptsUsed is 0. Never report an \"unknown\" item as missing, unsubmitted, or not attempted - say it could not be verified and point the user to Brightspace. " +
+        "Quizzes come from the quiz list, the course content, and the gradebook; each quiz row says which in source. A quiz with id null was found only as a content topic. "+
         "Each course also carries quizCoverage: when it is \"incomplete\", a quiz source could not be read, so the course may have quizzes not listed - never present the listed quizzes as all of them.",
       inputSchema: GetAssignmentsSchema,
     },

@@ -43,6 +43,15 @@ export function quizUrl(
   return `${trimBaseUrl(baseUrl)}/d2l/lms/quizzing/user/quiz_summary.d2l?qi=${quizId}&ou=${courseId}`;
 }
 
+/** Link to a topic in the course content viewer. */
+export function contentTopicUrl(
+  baseUrl: string,
+  courseId: number,
+  topicId: number
+): string {
+  return `${trimBaseUrl(baseUrl)}/d2l/le/content/${courseId}/viewContent/${topicId}/View`;
+}
+
 /**
  * Link to a course's own grades page. There is no per-column page a student
  * may open, so every gradebook row in a course shares this one link.
