@@ -1,5 +1,6 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import { registerGetAssignments } from "../../src/tools/get-assignments.js";
+import { ApiError } from "../../src/api/errors.js";
 import type { AppConfig } from "../../src/types/index.js";
 
 /**
@@ -27,6 +28,7 @@ const LE = `/d2l/api/le/1.0/${COURSE.Id}`;
 const notFound = () => Object.assign(new Error("Not Found"), { status: 404 });
 const forbidden = () => Object.assign(new Error("Forbidden"), { status: 403 });
 const badRequest = () => Object.assign(new Error("Bad Request"), { status: 400 });
+const serverError = () => Object.assign(new Error("Server Error"), { status: 500 });
 
 const config = {
   baseUrl: BASE,
@@ -96,6 +98,33 @@ const quizTopic = (over: Record<string, unknown> = {}) => ({
 
 const tocOf = (...topics: unknown[]) => ({
   Modules: [{ ModuleId: 1, Title: "Unit 1", Modules: [], Topics: topics }],
+});
+
+/** A course with nothing in it; spread overrides on top. */
+const base = (over: Routes = {}): Routes => ({
+  [`${LE}/dropbox/folders/`]: [],
+  [`${LE}/quizzes/`]: { Objects: [] },
+  [`${LE}/grades/`]: [],
+  [TOC_ALL_DATES]: tocOf(),
+  ...over,
+});
+
+const plainUrl = `/d2l/common/dialogs/quickLink/quickLink.d2l?ou=${COURSE.Id}&rcode=ABC`;
+
+/** A topic that names no quiz id anywhere (D2L sometimes sends it so). */
+const idlessTopic = (over: Record<string, unknown> = {}) =>
+  quizTopic({ ToolId: null, ToolItemId: null, ...over });
+
+/**
+ * A gradebook column as D2L documents it: GradeType is a string and there is no
+ * GradeObjectTypeId (GradeObject block, grade.html).
+ */
+const gcol = (over: Record<string, unknown> = {}) => ({
+  Id: 900,
+  Name: "Quiz 2",
+  GradeType: "Numeric",
+  AssociatedTool: { ToolId: 2000, ToolItemId: 1408550 },
+  ...over,
 });
 
 describe("get_assignments quiz discovery: date-restricted content", () => {
@@ -440,5 +469,624 @@ describe("get_assignments quiz discovery: gradebook columns", () => {
     const result = await call({ courseId: COURSE.Id });
 
     expect(result.assignments.map((a: any) => [a.type, a.id])).toEqual([["quiz", 1408600]]);
+  });
+});
+
+describe("get_assignments quiz discovery: how quiz topics are recognized", () => {
+  it.each([
+    ["TypeIdentifier alone", { TypeIdentifier: "Quiz", ActivityType: 0, Url: plainUrl }],
+    ["ActivityType 4 alone", { TypeIdentifier: "Link", ActivityType: 4, Url: plainUrl }],
+    ["quickLink type=quiz alone", { TypeIdentifier: "Link", ActivityType: 2, Url: `${plainUrl}&type=quiz` }],
+    [
+      "entity-encoded &amp;type=quiz alone",
+      { TypeIdentifier: "Link", ActivityType: 2, Url: `/d2l/common/dialogs/quickLink/quickLink.d2l?ou=${COURSE.Id}&amp;type=quiz&amp;rcode=ABC` },
+    ],
+    [
+      "quiz_* Url alone (ToolItemId set)",
+      { TypeIdentifier: "Link", ActivityType: 2, Url: `/d2l/lms/quizzing/user/quiz_summary.d2l?qi=1408600&ou=${COURSE.Id}` },
+    ],
+  ])("recognizes a quiz topic by %s", async (_label, over) => {
+    const { call } = setupTool(base({
+      [TOC_ALL_DATES]: tocOf(quizTopic(over)),
+      [`${LE}/quizzes/1408600`]: { QuizId: 1408600, Name: "Quiz 3", IsActive: true },
+    }));
+
+    expect(quizzesOf(await call({ courseId: COURSE.Id })).map((q: any) => q.id)).toEqual([1408600]);
+  });
+
+  it("does not take an ordinary link topic for a quiz", async () => {
+    const { call } = setupTool(base({
+      [TOC_ALL_DATES]: tocOf(quizTopic({ TypeIdentifier: "Link", ActivityType: 2, Url: plainUrl })),
+      [`${LE}/quizzes/1408600`]: { QuizId: 1408600, Name: "Quiz 3", IsActive: true },
+    }));
+
+    expect(quizzesOf(await call({ courseId: COURSE.Id }))).toEqual([]);
+  });
+
+  it("reads the quiz id from ActivityId when ToolItemId and the Url carry none", async () => {
+    const { call } = setupTool(base({
+      [TOC_ALL_DATES]: tocOf(quizTopic({ ToolItemId: null, ActivityId: "1408600", Url: `${plainUrl}&type=quiz` })),
+      [`${LE}/quizzes/1408600`]: { QuizId: 1408600, Name: "Quiz 3", IsActive: true },
+    }));
+
+    expect(quizzesOf(await call({ courseId: COURSE.Id })).map((q: any) => q.id)).toEqual([1408600]);
+  });
+
+  it("labels a content quiz fetched by id with source courseContent", async () => {
+    const { call } = setupTool(base({
+      [TOC_ALL_DATES]: tocOf(quizTopic()),
+      [`${LE}/quizzes/1408600`]: { QuizId: 1408600, Name: "Quiz 3", IsActive: true },
+    }));
+
+    expect(quizzesOf(await call({ courseId: COURSE.Id }))[0].source).toBe("courseContent");
+  });
+
+  it("lists a quiz once when two modules link to it", async () => {
+    const { call } = setupTool(base({
+      [TOC_ALL_DATES]: { Modules: [
+        { ModuleId: 1, Title: "A", Modules: [], Topics: [quizTopic()] },
+        { ModuleId: 2, Title: "B", Modules: [], Topics: [quizTopic({ TopicId: 5099 })] },
+      ] },
+      [`${LE}/quizzes/1408600`]: { QuizId: 1408600, Name: "Quiz 3", IsActive: true },
+    }));
+
+    expect(quizzesOf(await call({ courseId: COURSE.Id })).map((q: any) => q.id)).toEqual([1408600]);
+  });
+
+  it("returns only the documented keys per course when listing every course", async () => {
+    const { call } = setupTool(base());
+
+    const { courses } = await call({});
+
+    expect(Object.keys(courses[0]).sort()).toEqual(["assignments", "courseId", "courseName", "quizCoverage"]);
+  });
+});
+
+describe("get_assignments quiz discovery: id-less content quizzes", () => {
+  it("lists two different id-less quiz topics separately", async () => {
+    const { call } = setupTool(base({
+      [TOC_ALL_DATES]: tocOf(
+        idlessTopic({ TopicId: 5001, Title: "Quiz A", Url: `${plainUrl}&type=quiz&a=1` }),
+        idlessTopic({ TopicId: 5002, Title: "Quiz B", Url: `${plainUrl}&type=quiz&a=2` })
+      ),
+    }));
+
+    expect(quizzesOf(await call({ courseId: COURSE.Id })).map((q: any) => [q.topicId, q.name]))
+      .toEqual([[5001, "Quiz A"], [5002, "Quiz B"]]);
+  });
+
+  it("lists an id-less quiz linked from two modules once", async () => {
+    const link = `${plainUrl}&type=quiz&rcode=SHARED`;
+    const { call } = setupTool(base({
+      [TOC_ALL_DATES]: { Modules: [
+        { ModuleId: 1, Title: "Unit 1", Modules: [], Topics: [idlessTopic({ TopicId: 5001, Title: "Quiz 3", Url: link })] },
+        { ModuleId: 2, Title: "Review", Modules: [], Topics: [idlessTopic({ TopicId: 5099, Title: " QUIZ  3 ", Url: link })] },
+      ] },
+    }));
+
+    expect(quizzesOf(await call({ courseId: COURSE.Id }))).toHaveLength(1);
+  });
+
+  it("keeps two id-less topics apart when only their titles match", async () => {
+    const { call } = setupTool(base({
+      [TOC_ALL_DATES]: tocOf(
+        idlessTopic({ TopicId: 5001, Title: "Quiz", Url: `${plainUrl}&type=quiz&rcode=ONE` }),
+        idlessTopic({ TopicId: 5002, Title: "Quiz", Url: `${plainUrl}&type=quiz&rcode=TWO` })
+      ),
+    }));
+
+    expect(quizzesOf(await call({ courseId: COURSE.Id })).map((q: any) => q.topicId)).toEqual([5001, 5002]);
+  });
+
+  it("adopts the quiz id of the gradebook column a topic's GradeItemId names, and lists the quiz once", async () => {
+    const { call, requested } = setupTool(base({
+      [`${LE}/grades/`]: [gcol()],
+      [TOC_ALL_DATES]: tocOf(idlessTopic({ GradeItemId: 900 })),
+      [`${LE}/quizzes/1408550`]: { QuizId: 1408550, Name: "Quiz 3", IsActive: true, GradeItemId: 900 },
+    }));
+
+    const result = await call({ courseId: COURSE.Id });
+
+    expect(result.assignments.map((a: any) => [a.type, a.id, a.source])).toEqual([["quiz", 1408550, "courseContent"]]);
+    expect(requested.filter((p) => p.endsWith("/quizzes/1408550"))).toHaveLength(1);
+  });
+
+  it("lists one row, not a duplicate gradeOnly row, when the adopted quiz cannot be read", async () => {
+    const { call } = setupTool(base({
+      [`${LE}/grades/`]: [gcol()],
+      [TOC_ALL_DATES]: tocOf(idlessTopic({ GradeItemId: 900 })),
+      [`${LE}/quizzes/1408550`]: () => { throw forbidden(); },
+    }));
+
+    const result = await call({ courseId: COURSE.Id });
+
+    expect(result.assignments.map((a: any) => [a.type, a.id, a.name])).toEqual([["quiz", 1408550, "Quiz 3"]]);
+    expect(result.assignments[0].detailsStatus).toBe("unavailable");
+  });
+
+  it("adds nothing when the adopted quiz id is already in the quiz list", async () => {
+    const { call } = setupTool(base({
+      [`${LE}/quizzes/`]: { Objects: [{ QuizId: 1408550, Name: "Quiz 3", IsActive: true }] },
+      [`${LE}/grades/`]: [gcol()],
+      [TOC_ALL_DATES]: tocOf(idlessTopic({ GradeItemId: 900 })),
+    }));
+
+    const result = await call({ courseId: COURSE.Id });
+
+    expect(result.assignments.map((a: any) => [a.type, a.id, a.source])).toEqual([["quiz", 1408550, "quizList"]]);
+  });
+
+  it("does not adopt a column that belongs to a different tool than the topic", async () => {
+    const { call } = setupTool(base({
+      [`${LE}/grades/`]: [gcol({ AssociatedTool: { ToolId: 3000, ToolItemId: 77 } })],
+      [TOC_ALL_DATES]: tocOf(idlessTopic({ ToolId: 2000, GradeItemId: 900 })),
+    }));
+
+    const [quiz] = quizzesOf(await call({ courseId: COURSE.Id }));
+
+    expect(quiz.id).toBeNull();
+  });
+
+  it("does not list a second row for a gradebook column named like an id-less content quiz", async () => {
+    const { call, requested } = setupTool(base({
+      [`${LE}/grades/`]: [gcol({ Name: "  quiz   3" })],
+      [TOC_ALL_DATES]: tocOf(idlessTopic()),
+      [`${LE}/quizzes/1408550`]: { QuizId: 1408550, Name: "Quiz 3", IsActive: true, GradeItemId: 900 },
+    }));
+
+    const result = await call({ courseId: COURSE.Id });
+
+    expect(result.assignments.map((a: any) => [a.type, a.id])).toEqual([["quiz", null]]);
+    expect(requested.filter((p) => p.endsWith("/quizzes/1408550"))).toEqual([]);
+  });
+
+  it("still lists a gradebook column whose name matches no id-less content quiz", async () => {
+    const { call } = setupTool(base({
+      [`${LE}/grades/`]: [gcol({ Name: "Midterm" })],
+      [TOC_ALL_DATES]: tocOf(idlessTopic()),
+    }));
+
+    const result = await call({ courseId: COURSE.Id });
+
+    expect(result.assignments.map((a: any) => [a.type, a.name])).toEqual([["quiz", "Quiz 3"], ["gradeOnly", "Midterm"]]);
+  });
+});
+
+describe("get_assignments quiz discovery: gradebook column types", () => {
+  it("recognizes a student-scored column by the documented GradeType, with no GradeObjectTypeId", async () => {
+    const { call } = setupTool(base({
+      [`${LE}/grades/`]: [gcol()],
+      [`${LE}/quizzes/1408550`]: { QuizId: 1408550, Name: "Quiz 2", IsActive: true, GradeItemId: 900 },
+    }));
+
+    const result = await call({ courseId: COURSE.Id });
+
+    expect(result.assignments.map((a: any) => [a.type, a.id, a.source])).toEqual([["quiz", 1408550, "gradebook"]]);
+  });
+
+  it.each(["Numeric", "PassFail", "SelectBox", "Text"])(
+    "lists a %s column as a gradeOnly row when nothing else covers it",
+    async (GradeType) => {
+      const { call } = setupTool(base({
+        [`${LE}/grades/`]: [gcol({ GradeType, AssociatedTool: null, Name: "Midterm" })],
+      }));
+
+      const result = await call({ courseId: COURSE.Id });
+
+      expect(result.assignments.map((a: any) => [a.type, a.name])).toEqual([["gradeOnly", "Midterm"]]);
+    }
+  );
+
+  it.each(["Calculated", "Formula", "Category", "FinalCalculated"])(
+    "ignores a %s column even when it carries a tool link",
+    async (GradeType) => {
+      const { call, requested } = setupTool(base({
+        [`${LE}/grades/`]: [gcol({ GradeType })],
+      }));
+
+      const result = await call({ courseId: COURSE.Id });
+
+      expect(result.assignments).toEqual([]);
+      expect(requested.filter((p) => p.endsWith("/quizzes/1408550"))).toEqual([]);
+    }
+  );
+
+  it("ignores a column that carries neither GradeType nor a student-scored GradeObjectTypeId", async () => {
+    const { call } = setupTool(base({
+      [`${LE}/grades/`]: [{ Id: 900, Name: "Mystery", AssociatedTool: null }],
+    }));
+
+    expect((await call({ courseId: COURSE.Id })).assignments).toEqual([]);
+  });
+
+  it("still accepts a column that carries only the numeric GradeObjectTypeId", async () => {
+    const { call } = setupTool(base({
+      [`${LE}/grades/`]: [{ Id: 900, Name: "Midterm", GradeObjectTypeId: 1, AssociatedTool: null }],
+    }));
+
+    const result = await call({ courseId: COURSE.Id });
+
+    expect(result.assignments.map((a: any) => [a.type, a.name])).toEqual([["gradeOnly", "Midterm"]]);
+  });
+});
+
+describe("get_assignments quiz discovery: gradebook probe volume", () => {
+  const listedQuizOnTool2000 = {
+    [`${LE}/quizzes/`]: { Objects: [{ QuizId: 66, Name: "Quiz 1", IsActive: true }] },
+  };
+  const known = gcol({ Id: 899, Name: "Quiz 1", AssociatedTool: { ToolId: 2000, ToolItemId: 66 } });
+  const many = (count: number, tool: number) =>
+    Array.from({ length: count }, (_, i) => gcol({ Id: 800 + i, Name: `Q${i}`, AssociatedTool: { ToolId: tool, ToolItemId: 3000 + i } }));
+  const probesOf = (requested: string[]) => requested.filter((p) => /\/quizzes\/30\d\d$/.test(p));
+
+  it("probes at most 20 columns when the quiz tool is known", async () => {
+    const { call, requested } = setupTool(base({
+      ...listedQuizOnTool2000,
+      [`${LE}/grades/`]: [known, ...many(25, 2000)],
+    }));
+
+    await call({ courseId: COURSE.Id });
+
+    expect(probesOf(requested)).toHaveLength(20);
+  });
+
+  it("probes at most 5 columns when no quiz tool is known", async () => {
+    const { call, requested } = setupTool(base({
+      [`${LE}/grades/`]: many(25, 2000),
+    }));
+
+    await call({ courseId: COURSE.Id });
+
+    expect(probesOf(requested)).toHaveLength(5);
+  });
+
+  it("probes a column of the quiz tool but not a column of a different tool once a quiz tool is known", async () => {
+    const { call, requested } = setupTool(base({
+      ...listedQuizOnTool2000,
+      [`${LE}/grades/`]: [
+        known,
+        gcol({ Id: 901, Name: "Quiz 2", AssociatedTool: { ToolId: 2000, ToolItemId: 88 } }),
+        gcol({ Id: 902, Name: "Discussion", AssociatedTool: { ToolId: 3000, ToolItemId: 77 } }),
+      ],
+    }));
+
+    await call({ courseId: COURSE.Id });
+
+    expect(requested).toContain(`${LE}/quizzes/88`);
+    expect(requested.filter((p) => p.endsWith("/quizzes/77"))).toEqual([]);
+  });
+
+  it("learns the quiz tool from a content quiz topic's ToolId", async () => {
+    const { call, requested } = setupTool(base({
+      [TOC_ALL_DATES]: tocOf(quizTopic({ ToolId: 2000, ToolItemId: 1408600 })),
+      [`${LE}/quizzes/1408600`]: { QuizId: 1408600, Name: "Quiz 3", IsActive: true },
+      [`${LE}/grades/`]: [
+        gcol({ Id: 901, Name: "Quiz 2", AssociatedTool: { ToolId: 2000, ToolItemId: 88 } }),
+        gcol({ Id: 902, Name: "Discussion", AssociatedTool: { ToolId: 3000, ToolItemId: 77 } }),
+      ],
+    }));
+
+    await call({ courseId: COURSE.Id });
+
+    expect(requested).toContain(`${LE}/quizzes/88`);
+    expect(requested.filter((p) => p.endsWith("/quizzes/77"))).toEqual([]);
+  });
+
+  it("learns the quiz tool from a content quiz topic even when the quiz list already has that quiz", async () => {
+    const { call, requested } = setupTool(base({
+      [`${LE}/quizzes/`]: { Objects: [{ QuizId: 1408600, Name: "Quiz 3", IsActive: true }] },
+      [TOC_ALL_DATES]: tocOf(quizTopic({ ToolId: 2000, ToolItemId: 1408600 })),
+      [`${LE}/grades/`]: [
+        gcol({ Id: 901, Name: "Quiz 2", AssociatedTool: { ToolId: 2000, ToolItemId: 88 } }),
+        gcol({ Id: 902, Name: "Discussion", AssociatedTool: { ToolId: 3000, ToolItemId: 77 } }),
+      ],
+    }));
+
+    await call({ courseId: COURSE.Id });
+
+    expect(requested).toContain(`${LE}/quizzes/88`);
+    expect(requested.filter((p) => p.endsWith("/quizzes/77"))).toEqual([]);
+  });
+
+  it("rejects a probed quiz whose own id differs from the column's tool item", async () => {
+    const { call } = setupTool(base({
+      [`${LE}/grades/`]: [gcol()],
+      [`${LE}/quizzes/1408550`]: { QuizId: 999, Name: "Other", IsActive: true, GradeItemId: 900 },
+    }));
+
+    expect((await call({ courseId: COURSE.Id })).assignments.map((a: any) => a.type)).toEqual(["gradeOnly"]);
+  });
+
+  it("still finds a gradebook-only quiz when content already recovered another quiz", async () => {
+    const { call } = setupTool(base({
+      [TOC_ALL_DATES]: tocOf(quizTopic()),
+      [`${LE}/quizzes/1408600`]: { QuizId: 1408600, Name: "Quiz 3", IsActive: true },
+      [`${LE}/grades/`]: [gcol()],
+      [`${LE}/quizzes/1408550`]: { QuizId: 1408550, Name: "Quiz 2", IsActive: true, GradeItemId: 900 },
+    }));
+
+    expect(quizzesOf(await call({ courseId: COURSE.Id })).map((q: any) => q.source)).toEqual(["courseContent", "gradebook"]);
+  });
+
+  describe("negative cache", () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+    const probesOf1408550 = (requested: string[]) => requested.filter((p) => p.endsWith("/quizzes/1408550"));
+    const refusing = (error: () => Error) => base({
+      [`${LE}/grades/`]: [gcol()],
+      [`${LE}/quizzes/1408550`]: () => { throw error(); },
+    });
+
+    it.each([["404", notFound], ["403", forbidden]])(
+      "does not probe a quiz again within ten minutes of a %s",
+      async (_status, error) => {
+        vi.useFakeTimers({ toFake: ["Date"] });
+        const { call, requested } = setupTool(refusing(error));
+
+        await call({ courseId: COURSE.Id });
+        vi.setSystemTime(Date.now() + 9 * 60_000);
+        const second = await call({ courseId: COURSE.Id });
+
+        expect(probesOf1408550(requested)).toHaveLength(1);
+        expect(second.assignments.map((a: any) => a.type)).toEqual(["gradeOnly"]);
+      }
+    );
+
+    it("probes again once the ten minutes have passed", async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      const { call, requested } = setupTool(refusing(forbidden));
+
+      await call({ courseId: COURSE.Id });
+      vi.setSystemTime(Date.now() + 11 * 60_000);
+      await call({ courseId: COURSE.Id });
+
+      expect(probesOf1408550(requested)).toHaveLength(2);
+    });
+
+    it("does not remember a server error", async () => {
+      const { call, requested } = setupTool(refusing(serverError));
+
+      await call({ courseId: COURSE.Id });
+      await call({ courseId: COURSE.Id });
+
+      expect(probesOf1408550(requested)).toHaveLength(2);
+    });
+
+    it("does not remember a refusal across separate clients", async () => {
+      const first = setupTool(refusing(forbidden));
+      await first.call({ courseId: COURSE.Id });
+      const second = setupTool(base({
+        [`${LE}/grades/`]: [gcol()],
+        [`${LE}/quizzes/1408550`]: { QuizId: 1408550, Name: "Quiz 2", IsActive: true, GradeItemId: 900 },
+      }));
+
+      expect(quizzesOf(await second.call({ courseId: COURSE.Id }))).toHaveLength(1);
+    });
+  });
+});
+
+describe("get_assignments quiz discovery: the content table of contents fallback", () => {
+  const withDatedTocFailing = (error: () => Error) => base({
+    [TOC_ALL_DATES]: () => { throw error(); },
+    [TOC_PLAIN]: tocOf(quizTopic()),
+    [`${LE}/quizzes/1408600`]: { QuizId: 1408600, Name: "Quiz 3", IsActive: true },
+  });
+
+  it.each([["400", badRequest], ["403", forbidden], ["404", notFound]])(
+    "falls back to the plain table of contents on a %s and marks coverage incomplete",
+    async (_status, error) => {
+      const { call, requested } = setupTool(withDatedTocFailing(error));
+
+      const result = await call({ courseId: COURSE.Id });
+
+      expect(requested).toContain(TOC_PLAIN);
+      expect(quizzesOf(result).map((q: any) => q.name)).toEqual(["Quiz 3"]);
+      expect(result.quizCoverage).toBe("incomplete");
+    }
+  );
+
+  it.each([
+    ["429", () => Object.assign(new Error("Too Many Requests"), { status: 429 })],
+    ["500", serverError],
+    ["502", () => Object.assign(new Error("Bad Gateway"), { status: 502 })],
+    ["a network failure", () => new Error("fetch failed")],
+    ["a timeout", () => Object.assign(new Error("timed out"), { name: "TimeoutError" })],
+  ])("does not ask for the plain table of contents after %s", async (_what, error) => {
+    const { call, requested } = setupTool(withDatedTocFailing(error));
+
+    const result = await call({ courseId: COURSE.Id });
+
+    expect(requested).not.toContain(TOC_PLAIN);
+    expect(result.quizCoverage).toBe("incomplete");
+    expect(result.quizCoverageNote).toMatch(/^Brightspace did not return the course content \(/);
+  });
+
+  it("reports sign-in pending, not a plain-TOC fallback, when the date-inclusive TOC says 401", async () => {
+    const { call, requested } = setupTool(base({
+      [TOC_ALL_DATES]: () => { throw new ApiError(401, TOC_ALL_DATES, "expired"); },
+      [TOC_PLAIN]: tocOf(),
+    }));
+
+    expect((await call({ courseId: COURSE.Id })).authPending).toBe(true);
+    expect(requested).not.toContain(TOC_PLAIN);
+  });
+
+  it("reports sign-in pending when a gradebook probe says 401", async () => {
+    const { call } = setupTool(base({
+      [`${LE}/grades/`]: [gcol()],
+      [`${LE}/quizzes/1408550`]: () => { throw new ApiError(401, "x", "expired"); },
+    }));
+
+    expect((await call({ courseId: COURSE.Id })).authPending).toBe(true);
+  });
+
+  it("reports sign-in pending when a content quiz read says 401", async () => {
+    const { call } = setupTool(base({
+      [TOC_ALL_DATES]: tocOf(quizTopic()),
+      [`${LE}/quizzes/1408600`]: () => { throw new ApiError(401, "x", "expired"); },
+    }));
+
+    expect((await call({ courseId: COURSE.Id })).authPending).toBe(true);
+  });
+});
+
+describe("get_assignments quiz discovery: what a row says about itself", () => {
+  const NOW = new Date("2026-10-13T12:00:00.000Z");
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const listed = (over: Record<string, unknown>) =>
+    base({ [`${LE}/quizzes/`]: { Objects: [{ QuizId: 7, Name: "Quiz 7", IsActive: true, ...over }] } });
+  const availabilityOf = async (over: Record<string, unknown>) => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+    const { call } = setupTool(listed(over));
+    return quizzesOf(await call({ courseId: COURSE.Id }))[0].availability;
+  };
+
+  it("marks a quiz whose start date is ahead as notYetOpen", async () => {
+    expect(await availabilityOf({ StartDate: "2026-10-20T00:00:00.000Z", EndDate: "2026-10-27T00:00:00.000Z" })).toBe("notYetOpen");
+  });
+
+  it("marks a quiz inside its window as open", async () => {
+    expect(await availabilityOf({ StartDate: "2026-10-10T00:00:00.000Z", EndDate: "2026-10-20T00:00:00.000Z" })).toBe("open");
+  });
+
+  it("marks a quiz past its end date as closed", async () => {
+    expect(await availabilityOf({ StartDate: "2026-10-01T00:00:00.000Z", EndDate: "2026-10-05T00:00:00.000Z" })).toBe("closed");
+  });
+
+  it("marks a quiz with only an end date in the past as closed", async () => {
+    expect(await availabilityOf({ EndDate: "2026-10-05T00:00:00.000Z" })).toBe("closed");
+  });
+
+  it("marks a quiz with only a start date in the past as open", async () => {
+    expect(await availabilityOf({ StartDate: "2026-10-05T00:00:00.000Z" })).toBe("open");
+  });
+
+  it("omits availability when the quiz has no start or end date", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+    const { call } = setupTool(listed({ DueDate: "2026-10-05T00:00:00.000Z" }));
+
+    expect(quizzesOf(await call({ courseId: COURSE.Id }))[0]).not.toHaveProperty("availability");
+  });
+
+  it("omits availability when the dates cannot be parsed", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+    const { call } = setupTool(listed({ StartDate: "soon", EndDate: "later" }));
+
+    expect(quizzesOf(await call({ courseId: COURSE.Id }))[0]).not.toHaveProperty("availability");
+  });
+
+  it("marks a quiz built from content metadata only as details unavailable, with a note", async () => {
+    const { call } = setupTool(base({
+      [TOC_ALL_DATES]: tocOf(quizTopic()),
+      [`${LE}/quizzes/1408600`]: () => { throw forbidden(); },
+    }));
+
+    const [quiz] = quizzesOf(await call({ courseId: COURSE.Id }));
+
+    expect(quiz.detailsStatus).toBe("unavailable");
+    expect(quiz.detailsStatusNote).toMatch(/^Brightspace showed this quiz in the course content but would not return its details to you;/);
+    expect(quiz.detailsStatusNote).toMatch(/Open the link to check\.$/);
+  });
+
+  it("marks an id-less content quiz as details unavailable", async () => {
+    const { call } = setupTool(base({ [TOC_ALL_DATES]: tocOf(idlessTopic()) }));
+
+    expect(quizzesOf(await call({ courseId: COURSE.Id }))[0].detailsStatus).toBe("unavailable");
+  });
+
+  it("does not emit detailsStatus on a listed quiz or a content quiz that was read", async () => {
+    const { call } = setupTool(base({
+      [`${LE}/quizzes/`]: { Objects: [{ QuizId: 7, Name: "Quiz 7", IsActive: true }] },
+      [TOC_ALL_DATES]: tocOf(quizTopic()),
+      [`${LE}/quizzes/1408600`]: { QuizId: 1408600, Name: "Quiz 3", IsActive: true },
+    }));
+
+    const quizzes = quizzesOf(await call({ courseId: COURSE.Id }));
+
+    expect(quizzes).toHaveLength(2);
+    for (const quiz of quizzes) {
+      expect(quiz).not.toHaveProperty("detailsStatus");
+      expect(quiz).not.toHaveProperty("detailsStatusNote");
+    }
+  });
+
+  it("flags a quiz topic exempt from the activity as exempt, and still lists it", async () => {
+    const { call } = setupTool(base({
+      [TOC_ALL_DATES]: tocOf(quizTopic({ IsExempt: true })),
+      [`${LE}/quizzes/1408600`]: { QuizId: 1408600, Name: "Practice Quiz", IsActive: true },
+    }));
+
+    expect(quizzesOf(await call({ courseId: COURSE.Id }))[0]).toMatchObject({ name: "Practice Quiz", exempt: true });
+  });
+
+  it("flags an exempt topic that fell back to content metadata", async () => {
+    const { call } = setupTool(base({ [TOC_ALL_DATES]: tocOf(idlessTopic({ IsExempt: true })) }));
+
+    expect(quizzesOf(await call({ courseId: COURSE.Id }))[0].exempt).toBe(true);
+  });
+
+  it("does not emit exempt on an ordinary quiz", async () => {
+    const { call } = setupTool(base({
+      [TOC_ALL_DATES]: tocOf(quizTopic()),
+      [`${LE}/quizzes/1408600`]: { QuizId: 1408600, Name: "Quiz 3", IsActive: true },
+    }));
+
+    expect(quizzesOf(await call({ courseId: COURSE.Id }))[0]).not.toHaveProperty("exempt");
+  });
+});
+
+describe("get_assignments quiz discovery: attempts for quizzes the list did not return", () => {
+  it("reads a 404 from a listed quiz's attempts as zero attempts", async () => {
+    const { call } = setupTool(base({
+      [`${LE}/quizzes/`]: { Objects: [{ QuizId: 7, Name: "Quiz 7", IsActive: true }] },
+    }));
+
+    expect(quizzesOf(await call({ courseId: COURSE.Id }))[0]).toMatchObject({
+      attemptStatus: "known",
+      attemptsUsed: 0,
+    });
+  });
+
+  it("reads a 404 from a content-found quiz's attempts as unknown", async () => {
+    const { call } = setupTool(base({
+      [TOC_ALL_DATES]: tocOf(quizTopic()),
+      [`${LE}/quizzes/1408600`]: { QuizId: 1408600, Name: "Quiz 3", IsActive: true },
+    }));
+
+    expect(quizzesOf(await call({ courseId: COURSE.Id }))[0]).toMatchObject({
+      attemptStatus: "unknown",
+      attemptsUsed: null,
+      attemptsAvailable: false,
+    });
+  });
+
+  it("reads a 404 from a gradebook-found quiz's attempts as unknown", async () => {
+    const { call } = setupTool(base({
+      [`${LE}/grades/`]: [gcol()],
+      [`${LE}/quizzes/1408550`]: { QuizId: 1408550, Name: "Quiz 2", IsActive: true, GradeItemId: 900 },
+    }));
+
+    expect(quizzesOf(await call({ courseId: COURSE.Id }))[0].attemptStatus).toBe("unknown");
+  });
+
+  it("keeps real attempts for a content-found quiz when the attempts route answers", async () => {
+    const { call } = setupTool(base({
+      [TOC_ALL_DATES]: tocOf(quizTopic()),
+      [`${LE}/quizzes/1408600`]: { QuizId: 1408600, Name: "Quiz 3", IsActive: true },
+      [`${LE}/quizzes/1408600/attempts/`]: [{ AttemptId: 1, AttemptNumber: 1, Score: 8, IsCompleted: true, CompletedDate: null }],
+    }));
+
+    expect(quizzesOf(await call({ courseId: COURSE.Id }))[0]).toMatchObject({
+      attemptStatus: "known",
+      attemptsUsed: 1,
+      bestScore: 8,
+    });
   });
 });

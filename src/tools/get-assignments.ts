@@ -159,7 +159,16 @@ interface EnrollmentItem {
 interface GradeObject {
   Id: number;
   Name: string;
-  GradeObjectTypeId: number;
+  /**
+   * What D2L documents on a GradeObject (grade.html, Grade.GradeObject): a
+   * string, "Numeric", "PassFail", "SelectBox" or "Text".
+   */
+  GradeType?: string;
+  /**
+   * The numeric GRADEOBJ_T. D2L documents it on grade values, not on grade
+   * objects, so it is only a fallback for a tenant that sends it anyway.
+   */
+  GradeObjectTypeId?: number;
   AssociatedTool: { ToolId: number; ToolItemId: number } | null;
 }
 
@@ -169,7 +178,11 @@ interface ContentQuizTopic {
   TypeIdentifier?: string;
   Url?: string;
   ActivityId?: string | null;
+  /** The tool the topic's activity belongs to; for a quiz topic, the quiz tool. */
+  ToolId?: number | null;
   ToolItemId?: number | null;
+  /** The grade column the topic's activity writes to. */
+  GradeItemId?: number | null;
   ActivityType?: number;
   IsHidden?: boolean;
   IsBroken?: boolean;
@@ -192,11 +205,29 @@ interface ContentTableOfContents {
 }
 
 /**
- * The grade object types a student is actually scored on: 1 numeric,
- * 2 passfail, 3 selectbox, 4 text. The rest (category, calculated, formula,
- * final) are the gradebook's own arithmetic, not work anybody owes.
+ * The grade types a student is actually scored on. D2L documents exactly four
+ * GradeObject shapes, told apart by a string GradeType; anything else a
+ * gradebook lists (category, calculated, formula, final grade) is the
+ * gradebook's own arithmetic, not work anybody owes. Those are not documented
+ * as GradeType values, so a column is excluded when its GradeType is some
+ * other string, and a calculated column also carries no AssociatedTool.
  */
+const STUDENT_SCORED_TYPES = new Set(["numeric", "passfail", "selectbox", "text"]);
+
+/** The numeric GRADEOBJ_T values for the same four types: 1 numeric, 2 passfail, 3 selectbox, 4 text. */
 const STUDENT_SCORED = new Set([1, 2, 3, 4]);
+
+function isStudentScored(column: GradeObject | null | undefined): column is GradeObject {
+  if (!column || typeof column !== "object") return false;
+  if (typeof column.GradeType === "string" && STUDENT_SCORED_TYPES.has(column.GradeType.toLowerCase())) return true;
+  return STUDENT_SCORED.has(column.GradeObjectTypeId as number);
+}
+
+/** The columns a student is scored on, from whatever the grades route returned. */
+function studentScoredColumns(gradebook: unknown): GradeObject[] {
+  if (!Array.isArray(gradebook)) return [];
+  return (gradebook as GradeObject[]).filter((c) => isStudentScored(c) && typeof c.Id === "number");
+}
 
 /** Which route a quiz was found through, reported on every quiz row. */
 type QuizSource = "quizList" | "courseContent" | "gradebook";
@@ -207,6 +238,8 @@ interface FoundQuiz {
   source: QuizSource;
   /** The content topic behind a quiz recovered from course content. */
   topicId?: number;
+  /** The content topic marks the user exempt from this quiz (IsExempt). */
+  exempt?: boolean;
 }
 
 /** The quiz id a content topic points at, or null when it carries none. */
@@ -229,19 +262,11 @@ function normalizedTitle(title: unknown): string {
   return typeof title === "string" ? title.trim().replace(/\s+/g, " ").toLowerCase() : "";
 }
 
-/**
- * Quiz topics visible in course content but absent from the quiz listing.
- * Topics are returned once each. Those that name a quiz are keyed by id; one
- * that names none is kept only if no listed quiz carries its title.
- */
-function missingContentQuizTopics(
-  raw: unknown,
-  listedIds: Set<number>,
-  listedTitles: Set<string>
-): Array<{ topic: ContentQuizTopic; quizId: number | null }> {
+/** Every quiz topic in a table of contents, depth first, hidden or broken ones included. */
+function quizTopicsOf(raw: unknown): ContentQuizTopic[] {
   if (!raw || typeof raw !== "object") return [];
 
-  const found = new Map<string, { topic: ContentQuizTopic; quizId: number | null }>();
+  const found: ContentQuizTopic[] = [];
   const visit = (modules: ContentModule[] | undefined, depth: number): void => {
     if (!Array.isArray(modules) || depth > 50) return;
     for (const module of modules) {
@@ -250,25 +275,79 @@ function missingContentQuizTopics(
           || topic.TypeIdentifier?.toLowerCase() === "quiz"
           || /(?:[?&]|&amp;)type=quiz(?:[&#]|$)/i.test(topic.Url ?? "")
           || /\/lms\/quizzing\/user\/quiz_/i.test(topic.Url ?? "");
-        // A hidden or broken topic is not something the student can open. An
-        // exempt one (IsExempt: exempt from grading, per the content docs)
-        // still can be, so it is kept.
-        if (!isQuiz || topic.IsHidden || topic.IsBroken) continue;
-
-        const quizId = contentQuizId(topic);
-        if (quizId !== null) {
-          if (listedIds.has(quizId)) continue;
-        } else if (listedTitles.has(normalizedTitle(topic.Title))) {
-          continue;
-        }
-        const key = quizId !== null ? `quiz:${quizId}` : `topic:${topic.TopicId}`;
-        if (!found.has(key)) found.set(key, { topic, quizId });
+        if (isQuiz) found.push(topic);
       }
       visit(module.Modules, depth + 1);
     }
   };
 
   visit((raw as ContentTableOfContents).Modules, 0);
+  return found;
+}
+
+/**
+ * The quiz tool's id as content quiz topics report it (ToolId, documented on
+ * every ToC topic). Tells the gradebook probe which columns belong to quizzes.
+ */
+function contentQuizToolIds(raw: unknown): Set<number> {
+  return new Set(
+    quizTopicsOf(raw)
+      .map((topic) => topic.ToolId)
+      .filter((id): id is number => typeof id === "number" && Number.isSafeInteger(id) && id > 0)
+  );
+}
+
+/**
+ * The quiz id behind a topic that names none, when the grade column the topic
+ * writes to (GradeItemId, documented on ToC topics) is linked to a tool item.
+ * A column of a different tool than the topic's is not the topic's quiz.
+ */
+function quizIdFromGradeColumn(
+  topic: ContentQuizTopic,
+  columnsById: Map<number, GradeObject>
+): number | null {
+  if (typeof topic.GradeItemId !== "number") return null;
+  const tool = columnsById.get(topic.GradeItemId)?.AssociatedTool;
+  const itemId = tool?.ToolItemId;
+  if (typeof itemId !== "number" || !Number.isSafeInteger(itemId) || itemId <= 0) return null;
+  if (typeof topic.ToolId === "number" && typeof tool?.ToolId === "number" && topic.ToolId !== tool.ToolId) {
+    return null;
+  }
+  return itemId;
+}
+
+/**
+ * Quiz topics visible in course content but absent from the quiz listing.
+ * Topics are returned once each. Those that name a quiz (directly, or through
+ * their grade column) are keyed by id; one that names none is kept only if no
+ * listed quiz carries its title, and one linked from several modules is kept
+ * once, recognized by its title and link.
+ */
+function missingContentQuizTopics(
+  raw: unknown,
+  listedIds: Set<number>,
+  listedTitles: Set<string>,
+  columnsById: Map<number, GradeObject>
+): Array<{ topic: ContentQuizTopic; quizId: number | null }> {
+  const found = new Map<string, { topic: ContentQuizTopic; quizId: number | null }>();
+  for (const topic of quizTopicsOf(raw)) {
+    // A hidden or broken topic is not something the student can open. An
+    // exempt one (IsExempt: the user is exempt from the topic, per the
+    // content docs) is still listed, and flagged as exempt on its row.
+    if (topic.IsHidden || topic.IsBroken) continue;
+
+    const quizId = contentQuizId(topic) ?? quizIdFromGradeColumn(topic, columnsById);
+    if (quizId !== null) {
+      if (listedIds.has(quizId)) continue;
+    } else if (listedTitles.has(normalizedTitle(topic.Title))) {
+      continue;
+    }
+    const url = (topic.Url ?? "").trim();
+    const key = quizId !== null
+      ? `quiz:${quizId}`
+      : url !== "" ? `link:${normalizedTitle(topic.Title)}|${url}` : `topic:${topic.TopicId}`;
+    if (!found.has(key)) found.set(key, { topic, quizId });
+  }
   return [...found.values()];
 }
 
@@ -283,15 +362,18 @@ async function recoverContentQuizzes(
   courseId: number,
   toc: unknown,
   listedIds: Set<number>,
-  listedTitles: Set<string>
+  listedTitles: Set<string>,
+  columnsById: Map<number, GradeObject>
 ): Promise<FoundQuiz[]> {
-  return Promise.all(missingContentQuizTopics(toc, listedIds, listedTitles).map(async ({ topic, quizId }): Promise<FoundQuiz> => {
+  const topics = missingContentQuizTopics(toc, listedIds, listedTitles, columnsById);
+  return Promise.all(topics.map(async ({ topic, quizId }): Promise<FoundQuiz> => {
+    const exempt = topic.IsExempt === true ? { exempt: true } : {};
     if (quizId !== null) {
       try {
         const quiz = await apiClient.get<QuizReadData>(apiClient.le(courseId, `/quizzes/${quizId}`), {
           ttl: DEFAULT_CACHE_TTLS.assignments,
         });
-        return { quiz, source: "courseContent", topicId: topic.TopicId };
+        return { quiz, source: "courseContent", topicId: topic.TopicId, ...exempt };
       } catch (error) {
         if (isAuthUnavailable(error)) throw error;
         log("DEBUG", `Failed to fetch content-linked quiz ${quizId}: using content metadata`, error);
@@ -312,6 +394,7 @@ async function recoverContentQuizzes(
     return {
       source: "courseContent",
       topicId: topic.TopicId,
+      ...exempt,
       quiz: {
         QuizId: quizId,
         Name: detail.Title || topic.Title,
@@ -328,6 +411,41 @@ async function recoverContentQuizzes(
 }
 
 /**
+ * Probes per course. A course whose quiz tool is known (a listed or content
+ * quiz sits on it) is asked about that tool's other columns, up to 20. With no
+ * known quiz tool every non-dropbox column is a candidate, so far fewer are
+ * asked: most of them are discussions, surveys or manual items.
+ */
+const MAX_GRADEBOOK_QUIZ_PROBES = 20;
+const MAX_UNTARGETED_GRADEBOOK_QUIZ_PROBES = 5;
+
+/**
+ * A quiz read that answered 404 or 403 will answer the same again soon, so it
+ * is not repeated for ten minutes. Kept per client (so per signed-in account)
+ * and only for those two answers: a 401 is a sign-in matter and a 5xx or a
+ * network failure may pass.
+ */
+const PROBE_REFUSAL_TTL_MS = 10 * 60 * 1000;
+const refusedProbes = new WeakMap<object, Map<string, number>>();
+
+function probeRecentlyRefused(apiClient: object, path: string, now: number): boolean {
+  const until = refusedProbes.get(apiClient)?.get(path);
+  if (until === undefined) return false;
+  if (until > now) return true;
+  refusedProbes.get(apiClient)!.delete(path);
+  return false;
+}
+
+function rememberRefusedProbe(apiClient: object, path: string, now: number): void {
+  let paths = refusedProbes.get(apiClient);
+  if (!paths) {
+    paths = new Map();
+    refusedProbes.set(apiClient, paths);
+  }
+  paths.set(path, now + PROBE_REFUSAL_TTL_MS);
+}
+
+/**
  * Quizzes behind gradebook columns that nothing else accounted for. A column
  * linked to a tool item (AssociatedTool) the quiz list and content both omit
  * may still be a quiz the student can read by id, so it is asked for once.
@@ -335,52 +453,51 @@ async function recoverContentQuizzes(
  * GradeItemId: a discussion or survey that happens to share the id answers
  * 404 or names a different column, and stays a bare gradebook row.
  *
- * Tools already seen on a dropbox folder are not asked; once one column has
- * matched a known quiz, only that quiz tool's other columns are.
+ * Tools already seen on a dropbox folder are not asked; once a quiz tool is
+ * known (from a listed or content quiz), only that tool's other columns are.
+ * A column named like an id-less content quiz is that quiz, not a new one.
  */
-const MAX_GRADEBOOK_QUIZ_PROBES = 20;
-
 async function recoverGradebookQuizzes(
   apiClient: D2LApiClient,
   courseId: number,
-  gradebook: unknown,
+  columns: GradeObject[],
   folderIds: Set<number>,
-  quizIds: Set<number>
+  quizIds: Set<number>,
+  contentQuizTools: Set<number>,
+  idlessQuizTitles: Set<string>
 ): Promise<FoundQuiz[]> {
-  if (!Array.isArray(gradebook)) return [];
-
-  const columns = (gradebook as GradeObject[]).filter((c) =>
-    STUDENT_SCORED.has(c?.GradeObjectTypeId as number) && typeof c.Id === "number"
-  );
   const toolIdsOf = (ids: Set<number>): Set<number> => new Set(
     columns
       .filter((c) => ids.has(c.AssociatedTool?.ToolItemId as number))
       .map((c) => c.AssociatedTool!.ToolId)
   );
-  const quizTools = toolIdsOf(quizIds);
+  const quizTools = new Set([...toolIdsOf(quizIds), ...contentQuizTools]);
   const folderTools = toolIdsOf(folderIds);
+  const now = Date.now();
 
   const candidates = columns
     .filter((c) => {
       const itemId = c.AssociatedTool?.ToolItemId;
       if (typeof itemId !== "number" || !Number.isSafeInteger(itemId) || itemId <= 0) return false;
       if (quizIds.has(itemId) || folderIds.has(itemId)) return false;
+      if (idlessQuizTitles.has(normalizedTitle(c.Name))) return false;
+      if (probeRecentlyRefused(apiClient, apiClient.le(courseId, `/quizzes/${itemId}`), now)) return false;
       if (quizTools.size > 0) return quizTools.has(c.AssociatedTool!.ToolId);
       return !folderTools.has(c.AssociatedTool!.ToolId);
     })
-    .slice(0, MAX_GRADEBOOK_QUIZ_PROBES);
+    .slice(0, quizTools.size > 0 ? MAX_GRADEBOOK_QUIZ_PROBES : MAX_UNTARGETED_GRADEBOOK_QUIZ_PROBES);
 
   const found = await Promise.all(candidates.map(async (column): Promise<FoundQuiz | null> => {
     const itemId = column.AssociatedTool!.ToolItemId;
+    const path = apiClient.le(courseId, `/quizzes/${itemId}`);
     try {
-      const quiz = await apiClient.get<QuizReadData>(apiClient.le(courseId, `/quizzes/${itemId}`), {
-        ttl: DEFAULT_CACHE_TTLS.assignments,
-      });
+      const quiz = await apiClient.get<QuizReadData>(path, { ttl: DEFAULT_CACHE_TTLS.assignments });
       if (quiz?.QuizId === itemId && quiz.GradeItemId === column.Id) {
         return { quiz, source: "gradebook" };
       }
-    } catch (error) {
+    } catch (error: any) {
       if (isAuthUnavailable(error)) throw error;
+      if (error?.status === 404 || error?.status === 403) rememberRefusedProbe(apiClient, path, now);
       log("DEBUG", `Gradebook column ${column.Id} is not a readable quiz (${itemId})`, error);
     }
     return null;
@@ -392,8 +509,12 @@ async function recoverGradebookQuizzes(
  * The content table of contents with date-restricted items included. D2L's
  * default view omits modules and topics outside their date window, which is
  * exactly where a closed (or not yet opened) quiz sits; ignoreDateRestrictions
- * is documented to be open to students. A tenant that refuses the parameter
- * still gets the default view, reported as such so coverage is not overstated.
+ * is documented to be open to students, and supported from LE 1.67, which the
+ * client's latest version covers. D2L documents that unsupported parameters
+ * are ignored, so the plain view is only a fallback for a request the tenant
+ * rejects outright (400, 403, 404), reported as such so coverage is not
+ * overstated. Anything else (429, a 5xx, a dropped connection) says nothing
+ * about the parameter, so it is not retried here: the content counts as unread.
  */
 async function fetchContentToc(
   apiClient: D2LApiClient,
@@ -405,14 +526,38 @@ async function fetchContentToc(
       { ttl: DEFAULT_CACHE_TTLS.courseContent }
     );
     return { toc, datesIncluded: true };
-  } catch (error) {
+  } catch (error: any) {
     if (isAuthUnavailable(error)) throw error;
-    log("DEBUG", `Content table of contents with date restrictions ignored failed for course ${courseId}: using the default view`, error);
+    const status = error?.status;
+    if (status !== 400 && status !== 403 && status !== 404) throw error;
+    log("DEBUG", `Content table of contents with date restrictions ignored was refused (${status}) for course ${courseId}: using the default view`, error);
   }
   const toc = await apiClient.get<ContentTableOfContents>(apiClient.le(courseId, "/content/toc"), {
     ttl: DEFAULT_CACHE_TTLS.courseContent,
   });
   return { toc, datesIncluded: false };
+}
+
+const DETAILS_UNAVAILABLE_NOTE =
+  "Brightspace showed this quiz in the course content but would not return its details to you; " +
+  "it may be closed, not yet open, or limited to certain students. Open the link to check.";
+
+/**
+ * Whether a quiz is open, from its own start and end dates alone: before the
+ * start it is not yet open, after the end it is closed. With neither date
+ * (or none that parses) nothing is said, and a due date never closes a quiz.
+ */
+function availabilityField(
+  startDate: string | null | undefined,
+  endDate: string | null | undefined,
+  now: number = Date.now()
+): { availability?: "notYetOpen" | "open" | "closed" } {
+  const start = startDate ? new Date(startDate).getTime() : NaN;
+  const end = endDate ? new Date(endDate).getTime() : NaN;
+  if (!Number.isFinite(start) && !Number.isFinite(end)) return {};
+  if (Number.isFinite(start) && now < start) return { availability: "notYetOpen" };
+  if (Number.isFinite(end) && now > end) return { availability: "closed" };
+  return { availability: "open" };
 }
 
 /** Whether a course's quiz list can be read as the whole of its quizzes. */
@@ -688,13 +833,18 @@ async function fetchCourseInventory(
   );
   const knownQuizTitles = () => new Set(quizzes.map((found) => normalizedTitle(found.quiz.Name)));
 
+  const gradebookColumns = gradebookResult.status === "fulfilled"
+    ? studentScoredColumns(gradebookResult.value)
+    : [];
+
   if (contentResult.status === "fulfilled") {
     quizzes.push(...await recoverContentQuizzes(
       apiClient,
       courseId,
       contentResult.value.toc,
       knownQuizIds(),
-      knownQuizTitles()
+      knownQuizTitles(),
+      new Map(gradebookColumns.map((column) => [column.Id, column]))
     ));
   } else {
     log("DEBUG", `Failed to fetch course content for quiz discovery in course ${courseId}`, contentResult.reason);
@@ -707,9 +857,13 @@ async function fetchCourseInventory(
     quizzes.push(...await recoverGradebookQuizzes(
       apiClient,
       courseId,
-      gradebookResult.value,
+      gradebookColumns,
       folderIds,
-      knownQuizIds()
+      knownQuizIds(),
+      contentResult.status === "fulfilled" ? contentQuizToolIds(contentResult.value.toc) : new Set<number>(),
+      new Set(
+        quizzes.filter((found) => found.quiz.QuizId === null).map((found) => normalizedTitle(found.quiz.Name))
+      )
     ));
   }
 
@@ -718,7 +872,7 @@ async function fetchCourseInventory(
     // the answer would be the same 403, at one wasted request each.
     let attemptsForbidden = false;
 
-    for (const { quiz, source, topicId } of quizzes) {
+    for (const { quiz, source, topicId, exempt } of quizzes) {
       // Skip quizzes the instructor marked inactive. A row that does not say
       // is not inactive: only an explicit false hides a quiz.
       if (quiz.IsActive === false) continue;
@@ -737,8 +891,12 @@ async function fetchCourseInventory(
         } catch (error: any) {
           if (isAuthUnavailable(error)) throw error;
           if (error?.status === 404) {
-            // 404 means no attempts yet, which is a measurement of zero
-            attempts = [];
+            // For a quiz the course's quiz list returned, 404 means no
+            // attempts yet: a measurement of zero. A quiz that list did not
+            // return is one the quiz API is already hiding from this student,
+            // so the same 404 may be that, and says nothing about attempts.
+            if (source === "quizList") attempts = [];
+            else log("DEBUG", `Attempts for quiz ${quiz.QuizId} answered 404 and it is not a listed quiz: leaving them unknown`);
           } else if (error?.status === 403) {
             attemptsForbidden = true;
             log("DEBUG", `Attempts are forbidden for course ${courseId}: not asking again`);
@@ -820,6 +978,18 @@ async function fetchCourseInventory(
           : null,
         gracePeriodMinutes: quiz.SubmissionGracePeriod ?? null,
         hasPassword: Boolean(quiz.Password),
+        // Additive fields, each emitted only when it has something to say.
+        // availability is computed from the quiz's own start and end dates.
+        ...availabilityField(quiz.StartDate, quiz.EndDate),
+        // A row built from the table of contents alone: the quiz's own record
+        // was refused, or the topic names no quiz id to ask for.
+        ...(quiz.ContentMetadataOnly ? {
+          detailsStatus: "unavailable" as const,
+          detailsStatusNote: DETAILS_UNAVAILABLE_NOTE,
+        } : {}),
+        // The topic's IsExempt: the user is exempt from the topic. Kept
+        // listed, since exempt does not mean it cannot be opened.
+        ...(exempt ? { exempt: true as const } : {}),
       };
 
       assignments.push(quizAssignment);
@@ -837,7 +1007,8 @@ async function fetchCourseInventory(
   return {
     assignments,
     ...quizCoverage({
-      quizList: quizResult.status === "fulfilled",
+      // A 404 on the list means the course has no quiz tool: answered, and empty.
+      quizList: quizResult.status === "fulfilled" || (quizResult.reason as any)?.status === 404,
       content: contentResult.status !== "fulfilled"
         ? "failed"
         : contentResult.value.datesIncluded ? "full" : "dateRestricted",
@@ -870,12 +1041,20 @@ function gradebookHeadsUp(
   const covered = new Set(
     fetched.map((item) => item.id).filter((id) => typeof id === "number")
   );
+  // A content quiz that names no id cannot be matched to its column by id, so
+  // a column carrying the same title is taken to be that quiz.
+  const idlessQuizTitles = new Set(
+    fetched
+      .filter((item) => item.type === "quiz" && item.id === null)
+      .map((item) => normalizedTitle(item.name))
+  );
 
   const rows: any[] = [];
   for (const column of raw as GradeObject[]) {
-    if (!STUDENT_SCORED.has(column?.GradeObjectTypeId as number)) continue;
+    if (!isStudentScored(column)) continue;
     if (covered.has(column.AssociatedTool?.ToolItemId as number)) continue;
     if (typeof column.Id !== "number" || typeof column.Name !== "string") continue;
+    if (idlessQuizTitles.has(normalizedTitle(column.Name))) continue;
 
     rows.push({
       type: "gradeOnly",
@@ -907,8 +1086,12 @@ export function registerGetAssignments(
       description:
         "Fetch assignments and quizzes for a specific course or all enrolled courses. Shows dropbox submissions and quizzes with due dates, status, and rubric info. Use this when the user asks about assignments, homework, what to submit, quizzes, or assignment details and rubrics. " +
         "Read submissionStatus/attemptStatus, not just submission/attemptsUsed, to decide whether something was turned in: some tenants deny students access to submission or attempt data, in which case the status is \"unknown\" even though submission is null or attemptsUsed is 0. Never report an \"unknown\" item as missing, unsubmitted, or not attempted - say it could not be verified and point the user to Brightspace. " +
-        "Quizzes come from the quiz list, the course content, and the gradebook; each quiz row says which in source. A quiz with id null was found only as a content topic. "+
-        "Each course also carries quizCoverage: when it is \"incomplete\", a quiz source could not be read, so the course may have quizzes not listed - never present the listed quizzes as all of them.",
+        "Quizzes come from the quiz list, the course content, and the gradebook; each quiz row says which in source. A quiz with id null was found only as a content topic. " +
+        "A quiz row with detailsStatus \"unavailable\" was shown in the course content but Brightspace would not return its details (it may be closed, not yet open, or limited to certain students), so its dates and attempts may be missing: point the user to its link. " +
+        "availability (notYetOpen, open, closed) is worked out from the quiz's own start and end dates and is left out when it has none. exempt: true means Brightspace marks the user exempt from that quiz's topic; the quiz is still listed. " +
+        "Each course also carries quizCoverage. \"complete\" means every quiz source answered, not that every quiz is guaranteed to be listed; \"incomplete\" means a quiz source could not be read, so the course may have quizzes not listed. " +
+        "Never conclude that a quiz was missed or not taken because it is absent, and never present the listed quizzes as all of them. " +
+        "A gradeOnly row named like a quiz is a quiz whose details could not be read.",
       inputSchema: GetAssignmentsSchema,
     },
     async (args: any) => {
