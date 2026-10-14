@@ -170,6 +170,8 @@ interface GradeObject {
    */
   GradeObjectTypeId?: number;
   AssociatedTool: { ToolId: number; ToolItemId: number } | null;
+  /** Documented on GradeObject (grade.html): the instructor hid the column from students. */
+  IsHidden?: boolean;
 }
 
 interface ContentQuizTopic {
@@ -364,11 +366,16 @@ async function recoverContentQuizzes(
   listedIds: Set<number>,
   listedTitles: Set<string>,
   columnsById: Map<number, GradeObject>
-): Promise<FoundQuiz[]> {
+): Promise<{ found: FoundQuiz[]; considered: number; read: number }> {
   const topics = missingContentQuizTopics(toc, listedIds, listedTitles, columnsById);
-  return Promise.all(topics.map(async ({ topic, quizId }): Promise<FoundQuiz> => {
+  // Only the first topics are asked for their details; the rest are listed
+  // from the table of contents alone, so a huge course costs a bounded number
+  // of requests and no quiz is dropped.
+  const readable = Math.min(topics.length, MAX_CONTENT_QUIZ_RECOVERIES);
+  const found = await Promise.all(topics.map(async ({ topic, quizId }, index): Promise<FoundQuiz> => {
     const exempt = topic.IsExempt === true ? { exempt: true } : {};
-    if (quizId !== null) {
+    const mayRead = index < MAX_CONTENT_QUIZ_RECOVERIES;
+    if (mayRead && quizId !== null) {
       try {
         const quiz = await apiClient.get<QuizReadData>(apiClient.le(courseId, `/quizzes/${quizId}`), {
           ttl: DEFAULT_CACHE_TTLS.assignments,
@@ -381,14 +388,16 @@ async function recoverContentQuizzes(
     }
 
     let detail = topic;
-    try {
-      detail = await apiClient.get<ContentQuizTopic>(
-        apiClient.le(courseId, `/content/topics/${topic.TopicId}`),
-        { ttl: DEFAULT_CACHE_TTLS.courseContent }
-      );
-    } catch (error) {
-      if (isAuthUnavailable(error)) throw error;
-      log("DEBUG", `Failed to fetch content topic ${topic.TopicId}: using table-of-contents metadata`, error);
+    if (mayRead) {
+      try {
+        detail = await apiClient.get<ContentQuizTopic>(
+          apiClient.le(courseId, `/content/topics/${topic.TopicId}`),
+          { ttl: DEFAULT_CACHE_TTLS.courseContent }
+        );
+      } catch (error) {
+        if (isAuthUnavailable(error)) throw error;
+        log("DEBUG", `Failed to fetch content topic ${topic.TopicId}: using table-of-contents metadata`, error);
+      }
     }
 
     return {
@@ -408,7 +417,16 @@ async function recoverContentQuizzes(
       },
     };
   }));
+  return { found, considered: topics.length, read: readable };
 }
+
+/**
+ * Content quizzes per course whose own record (and, failing that, content
+ * topic) is read. Each may cost two requests, so a course costs at most 60.
+ * Past the cap a quiz is still listed, from the table of contents alone, and
+ * the course's quizCoverage says the cap applied.
+ */
+const MAX_CONTENT_QUIZ_RECOVERIES = 30;
 
 /**
  * Probes per course. A course whose quiz tool is known (a listed or content
@@ -453,6 +471,8 @@ function rememberRefusedProbe(apiClient: object, path: string, now: number): voi
  * GradeItemId: a discussion or survey that happens to share the id answers
  * 404 or names a different column, and stays a bare gradebook row.
  *
+ * A column the instructor hid from students is not asked. The folder ids
+ * include hidden folders, whose columns are never asked either.
  * Tools already seen on a dropbox folder are not asked; once a quiz tool is
  * known (from a listed or content quiz), only that tool's other columns are.
  * A column named like an id-less content quiz is that quiz, not a new one.
@@ -479,6 +499,7 @@ async function recoverGradebookQuizzes(
     .filter((c) => {
       const itemId = c.AssociatedTool?.ToolItemId;
       if (typeof itemId !== "number" || !Number.isSafeInteger(itemId) || itemId <= 0) return false;
+      if (c.IsHidden === true) return false;
       if (quizIds.has(itemId) || folderIds.has(itemId)) return false;
       if (idlessQuizTitles.has(normalizedTitle(c.Name))) return false;
       if (probeRecentlyRefused(apiClient, apiClient.le(courseId, `/quizzes/${itemId}`), now)) return false;
@@ -575,6 +596,8 @@ function quizCoverage(answered: {
   /** "full" read with date restrictions ignored; "dateRestricted" only the default view. */
   content: "full" | "dateRestricted" | "failed";
   gradebook: boolean;
+  /** Content quizzes found, and how many of them had their details read. */
+  contentRecovery?: { considered: number; read: number };
 }): QuizCoverage {
   const unread = [
     answered.quizList ? null : "the course's quiz list",
@@ -584,11 +607,19 @@ function quizCoverage(answered: {
         : "the course content (checked for quizzes the quiz list omits)",
     answered.gradebook ? null : "the gradebook (checked for graded work the quiz list omits)",
   ].filter((source): source is string => source !== null);
-  if (unread.length === 0) return { quizCoverage: "complete" };
+  const recovery = answered.contentRecovery;
+  const truncated = recovery !== undefined && recovery.read < recovery.considered;
+  if (unread.length === 0 && !truncated) return { quizCoverage: "complete" };
   return {
     quizCoverage: "incomplete",
     quizCoverageNote:
-      `Brightspace did not return ${unread.join(", or ")}, so this course may have quizzes not listed here. ` +
+      (unread.length > 0
+        ? `Brightspace did not return ${unread.join(", or ")}, so this course may have quizzes not listed here. `
+        : "") +
+      (truncated
+        ? `Brightspace read the details of only the first ${recovery.read} of ${recovery.considered} quizzes found in the course content; ` +
+          "the rest are listed from the course content alone, without their details or attempts. "
+        : "") +
       "Do not treat the listed quizzes as all of them, and do not report an unlisted quiz as missing or not taken - " +
       "tell the user to check Brightspace directly.",
   };
@@ -641,6 +672,10 @@ async function fetchCourseInventory(
     if (result.status === "rejected" && isAuthUnavailable(result.reason)) throw result.reason;
   }
 
+  // Ids of folders and quizzes the instructor hid or inactivated and that are
+  // therefore left out on purpose; their grade columns are not "uncovered".
+  const skippedIds = new Set<number>();
+
   // Process Dropbox folders
   if (dropboxResult.status === "fulfilled") {
     // D2L dropbox endpoint may return paged { Objects: [...] } or flat array
@@ -648,8 +683,12 @@ async function fetchCourseInventory(
     const folders: DropboxFolder[] = Array.isArray(dropboxRaw) ? dropboxRaw : (dropboxRaw as any).Objects ?? [];
 
     for (const folder of folders) {
-      // Skip hidden folders
-      if (folder.IsHidden) continue;
+      // Skip hidden folders. Their ids are remembered: the instructor hid the
+      // work, so its grade column must not resurface as a gradebook row.
+      if (folder.IsHidden) {
+        skippedIds.add(folder.Id);
+        continue;
+      }
 
       // Fetch submissions for this folder. Some tenants deny students access
       // to mysubmissions outright (403), in which case an empty list would be
@@ -837,23 +876,27 @@ async function fetchCourseInventory(
     ? studentScoredColumns(gradebookResult.value)
     : [];
 
+  let contentRecovery: { considered: number; read: number } | undefined;
   if (contentResult.status === "fulfilled") {
-    quizzes.push(...await recoverContentQuizzes(
+    const recovered = await recoverContentQuizzes(
       apiClient,
       courseId,
       contentResult.value.toc,
       knownQuizIds(),
       knownQuizTitles(),
       new Map(gradebookColumns.map((column) => [column.Id, column]))
-    ));
+    );
+    quizzes.push(...recovered.found);
+    contentRecovery = { considered: recovered.considered, read: recovered.read };
   } else {
     log("DEBUG", `Failed to fetch course content for quiz discovery in course ${courseId}`, contentResult.reason);
   }
 
   if (gradebookResult.status === "fulfilled") {
-    const folderIds = new Set(
-      assignments.map((item) => item.id).filter((id): id is number => typeof id === "number")
-    );
+    const folderIds = new Set([
+      ...assignments.map((item) => item.id).filter((id): id is number => typeof id === "number"),
+      ...skippedIds,
+    ]);
     quizzes.push(...await recoverGradebookQuizzes(
       apiClient,
       courseId,
@@ -875,7 +918,10 @@ async function fetchCourseInventory(
     for (const { quiz, source, topicId, exempt } of quizzes) {
       // Skip quizzes the instructor marked inactive. A row that does not say
       // is not inactive: only an explicit false hides a quiz.
-      if (quiz.IsActive === false) continue;
+      if (quiz.IsActive === false) {
+        if (typeof quiz.QuizId === "number") skippedIds.add(quiz.QuizId);
+        continue;
+      }
 
       // Fetch quiz attempts. null means "not measured", which is different
       // from an empty list, and the output says which one it was.
@@ -998,7 +1044,7 @@ async function fetchCourseInventory(
   // Process the gradebook last, once the fetched items are known.
   if (gradebookResult.status === "fulfilled") {
     assignments.push(
-      ...gradebookHeadsUp(gradebookResult.value, assignments, courseId, baseUrl)
+      ...gradebookHeadsUp(gradebookResult.value, assignments, courseId, baseUrl, skippedIds)
     );
   } else {
     log("DEBUG", `Failed to fetch the gradebook for course ${courseId}`, gradebookResult.reason);
@@ -1013,6 +1059,7 @@ async function fetchCourseInventory(
         ? "failed"
         : contentResult.value.datesIncluded ? "full" : "dateRestricted",
       gradebook: gradebookResult.status === "fulfilled",
+      contentRecovery,
     }),
   };
 }
@@ -1034,13 +1081,17 @@ function gradebookHeadsUp(
   raw: unknown,
   fetched: any[],
   courseId: number,
-  baseUrl?: string
+  baseUrl?: string,
+  skippedIds: Set<number> = new Set()
 ): any[] {
   if (!Array.isArray(raw)) return [];
 
-  const covered = new Set(
-    fetched.map((item) => item.id).filter((id) => typeof id === "number")
-  );
+  // Fetched items, plus the hidden folders and inactive quizzes that were left
+  // out on purpose: a column of one of those is not work the tool missed.
+  const covered = new Set([
+    ...fetched.map((item) => item.id).filter((id) => typeof id === "number"),
+    ...skippedIds,
+  ]);
   // A content quiz that names no id cannot be matched to its column by id, so
   // a column carrying the same title is taken to be that quiz.
   const idlessQuizTitles = new Set(
@@ -1052,6 +1103,7 @@ function gradebookHeadsUp(
   const rows: any[] = [];
   for (const column of raw as GradeObject[]) {
     if (!isStudentScored(column)) continue;
+    if (column.IsHidden === true) continue;
     if (covered.has(column.AssociatedTool?.ToolItemId as number)) continue;
     if (typeof column.Id !== "number" || typeof column.Name !== "string") continue;
     if (idlessQuizTitles.has(normalizedTitle(column.Name))) continue;

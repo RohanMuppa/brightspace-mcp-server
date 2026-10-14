@@ -1090,3 +1090,116 @@ describe("get_assignments quiz discovery: attempts for quizzes the list did not 
     });
   });
 });
+
+describe("get_assignments quiz discovery: items that are deliberately not shown", () => {
+  const typesOf = (result: any) => result.assignments.map((a: any) => [a.type, a.name]);
+
+  it("lists no gradeOnly row for the column of a listed quiz the instructor marked inactive", async () => {
+    const { call, requested } = setupTool(base({
+      [`${LE}/quizzes/`]: { Objects: [{ QuizId: 66, Name: "Retired Quiz", IsActive: false }] },
+      [`${LE}/grades/`]: [gcol({ Id: 899, Name: "Retired Quiz", AssociatedTool: { ToolId: 2000, ToolItemId: 66 } })],
+    }));
+
+    const result = await call({ courseId: COURSE.Id });
+
+    expect(result.assignments).toEqual([]);
+    expect(requested.filter((p) => p.includes("/quizzes/66"))).toEqual([]);
+  });
+
+  it("lists no gradeOnly row for an inactive quiz that content recovery found", async () => {
+    const { call } = setupTool(base({
+      [TOC_ALL_DATES]: tocOf(quizTopic()),
+      [`${LE}/quizzes/1408600`]: { QuizId: 1408600, Name: "Quiz 3", IsActive: false, GradeItemId: 900 },
+      [`${LE}/grades/`]: [gcol({ Id: 900, Name: "Quiz 3", AssociatedTool: { ToolId: 2000, ToolItemId: 1408600 } })],
+    }));
+
+    expect((await call({ courseId: COURSE.Id })).assignments).toEqual([]);
+  });
+
+  it("lists no gradeOnly row for an inactive quiz that a gradebook probe found", async () => {
+    const { call, requested } = setupTool(base({
+      [`${LE}/grades/`]: [gcol()],
+      [`${LE}/quizzes/1408550`]: { QuizId: 1408550, Name: "Quiz 2", IsActive: false, GradeItemId: 900 },
+    }));
+
+    const result = await call({ courseId: COURSE.Id });
+
+    expect(requested).toContain(`${LE}/quizzes/1408550`);
+    expect(result.assignments).toEqual([]);
+  });
+
+  it("lists no gradeOnly row for the column of a hidden dropbox folder, and does not probe it", async () => {
+    const { call, requested } = setupTool(base({
+      [`${LE}/dropbox/folders/`]: [{ Id: 55, Name: "Hidden HW", DueDate: null, IsHidden: true, GroupTypeId: null }],
+      [`${LE}/grades/`]: [gcol({ Id: 901, Name: "Hidden HW", AssociatedTool: { ToolId: 1000, ToolItemId: 55 } })],
+    }));
+
+    const result = await call({ courseId: COURSE.Id });
+
+    expect(result.assignments).toEqual([]);
+    expect(requested.filter((p) => p.endsWith("/quizzes/55"))).toEqual([]);
+  });
+
+  it("ignores a hidden grade column in both gradebook paths and keeps its visible sibling", async () => {
+    const { call, requested } = setupTool(base({
+      [`${LE}/grades/`]: [
+        gcol({ Id: 900, Name: "Secret Exam", IsHidden: true, AssociatedTool: null }),
+        gcol({ Id: 901, Name: "Secret Quiz", IsHidden: true, AssociatedTool: { ToolId: 2000, ToolItemId: 1408551 } }),
+        gcol({ Id: 902, Name: "Midterm", IsHidden: false, AssociatedTool: null }),
+      ],
+    }));
+
+    const result = await call({ courseId: COURSE.Id });
+
+    expect(typesOf(result)).toEqual([["gradeOnly", "Midterm"]]);
+    expect(requested.filter((p) => p.endsWith("/quizzes/1408551"))).toEqual([]);
+  });
+});
+
+describe("get_assignments quiz discovery: content recovery volume", () => {
+  const topics = (count: number) => Array.from({ length: count }, (_, i) => quizTopic({
+    TopicId: 6000 + i,
+    Title: `Quiz ${i}`,
+    Url: `/d2l/common/dialogs/quickLink/quickLink.d2l?ou=${COURSE.Id}&type=quiz&rcode=ABC-${7000 + i}`,
+    ToolItemId: 7000 + i,
+  }));
+  const quizRoutes = (count: number): Routes => Object.fromEntries(
+    Array.from({ length: count }, (_, i) => [
+      `${LE}/quizzes/${7000 + i}`,
+      { QuizId: 7000 + i, Name: `Quiz ${i}`, IsActive: true },
+    ])
+  );
+  const readsOf = (requested: string[]) => requested.filter((p) => /\/quizzes\/7\d{3}$/.test(p));
+
+  it("reads exactly 30 content quizzes, lists the rest from the table of contents, and says so", async () => {
+    const { call, requested } = setupTool(base({ [TOC_ALL_DATES]: tocOf(...topics(35)), ...quizRoutes(35) }));
+
+    const result = await call({ courseId: COURSE.Id });
+
+    expect(readsOf(requested)).toHaveLength(30);
+    expect(quizzesOf(result)).toHaveLength(35);
+    expect(quizzesOf(result).filter((q: any) => q.detailsStatus === "unavailable")).toHaveLength(5);
+    expect(result.quizCoverage).toBe("incomplete");
+    expect(result.quizCoverageNote).toMatch(/^Brightspace read the details of only the first 30 of 35 quizzes found in the course content/);
+  });
+
+  it("reads all 30 and stays complete when the course has exactly 30 content quizzes", async () => {
+    const { call, requested } = setupTool(base({ [TOC_ALL_DATES]: tocOf(...topics(30)), ...quizRoutes(30) }));
+
+    const result = await call({ courseId: COURSE.Id });
+
+    expect(readsOf(requested)).toHaveLength(30);
+    expect(quizzesOf(result)).toHaveLength(30);
+    expect(result.quizCoverage).toBe("complete");
+  });
+
+  it("caps the topic-detail reads of unreadable content quizzes at 30 as well", async () => {
+    const { call, requested } = setupTool(base({ [TOC_ALL_DATES]: tocOf(...topics(35).map((t) => ({ ...t, ToolItemId: null, Url: "" }))) }));
+
+    const result = await call({ courseId: COURSE.Id });
+
+    expect(requested.filter((p) => /\/content\/topics\/\d+$/.test(p))).toHaveLength(30);
+    expect(quizzesOf(result)).toHaveLength(35);
+    expect(result.quizCoverage).toBe("incomplete");
+  });
+});
