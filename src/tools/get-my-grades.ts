@@ -284,7 +284,20 @@ export function registerGetMyGrades(
                 authError: error,
               };
             }
-            throw error; // Re-throw other errors
+            // Anything else (a 404, a 5xx, a dropped connection) still must
+            // not make the course vanish: the caller would read the result
+            // as every course's grades, with one silently missing (#245).
+            log(
+              "DEBUG",
+              `get_my_grades: grades unavailable for course ${item.OrgUnit.Id} (${item.OrgUnit.Name})`,
+              error
+            );
+            return {
+              failed: true as const,
+              courseId: item.OrgUnit.Id,
+              courseName: item.OrgUnit.Name,
+              gradeUrl: gradebookUrl(config.baseUrl, item.OrgUnit.Id),
+            };
           }
         });
 
@@ -297,15 +310,19 @@ export function registerGetMyGrades(
         const restrictedCourses = settled
           .filter((c) => c.restricted)
           .map(({ restricted: _restricted, ...rest }) => rest);
+        const failedCourses = settled
+          .filter((c) => c.failed)
+          .map(({ failed: _failed, ...rest }) => rest);
         const courses = settled
-          .filter((c) => !c.authPending && !c.restricted)
+          .filter((c) => !c.authPending && !c.restricted && !c.failed)
           .map(({ courseId, courseName, grades }) => ({ courseId, courseName, grades }));
 
         log(
           "INFO",
           `get_my_grades: Retrieved grades for ${courses.length} courses, ` +
           `${restrictedCourses.length} restricted (out of ${enrollmentItems.length} enrolled` +
-          `${pending.length > 0 ? `, ${pending.length} pending sign-in` : ""})`
+          `${pending.length > 0 ? `, ${pending.length} pending sign-in` : ""}` +
+          `${failedCourses.length > 0 ? `, ${failedCourses.length} failed` : ""})`
         );
 
         // Pending courses keep `grades: []` so callers that read
@@ -324,15 +341,29 @@ export function registerGetMyGrades(
           ],
           restrictedCourses,
         };
+        const notices: string[] = [];
         if (pending.length > 0) {
           response.authPending = true;
           response.unavailableCourseIds = pending.map((c) => c.courseId);
-          response.notice =
+          notices.push(
             "Sign-in to Brightspace is still in progress, so grades for " +
             `${pending.length} course(s) (${pending.map((c) => c.courseId).join(", ")}) could not be ` +
             `fetched yet. ${authPendingNotice(pending[0].authError)} Call get_my_grades again once ` +
-            "sign-in finishes.";
+            "sign-in finishes."
+          );
         }
+        // Only present when something failed, so the usual response shape
+        // is unchanged; `courses` never includes these.
+        if (failedCourses.length > 0) {
+          response.failedCourses = failedCourses;
+          notices.push(
+            `Grades for ${failedCourses.length} course(s) ` +
+            `(${failedCourses.map((c) => c.courseId).join(", ")}) could not be read from Brightspace, ` +
+            "so they are listed in failedCourses instead of courses. Do not report these courses as " +
+            "having no grades: open each gradeUrl, or call get_my_grades again for that courseId."
+          );
+        }
+        if (notices.length > 0) response.notice = notices.join(" ");
         return toolResponse(response);
       } catch (error) {
         return sanitizeError(error);

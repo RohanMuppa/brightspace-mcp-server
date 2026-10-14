@@ -296,6 +296,96 @@ describe("get_my_grades grade-restricted courses", () => {
 });
 
 /**
+ * A failure other than 403 or a pending sign-in (a 404, a 5xx, a dropped
+ * connection) used to be rethrown inside the per-course promise and filtered
+ * out by allSettled, so the course disappeared with nothing saying so (#245).
+ */
+describe("get_my_grades courses whose grades fail to load", () => {
+  const twoCourses = (failure: () => never) =>
+    setup((path) => {
+      if (path.includes("/enrollments/")) {
+        return { Items: [enrollmentPage(COURSE_A, true).Items[0], enrollmentPage(COURSE_B, true).Items[0]] };
+      }
+      if (path.includes(`/${COURSE_B.Id}/grades/`)) failure();
+      if (path.includes("/grades/")) return [grade("Exam 1")];
+      return [];
+    });
+
+  it("lists a course whose grades answer 500 in failedCourses instead of dropping it", async () => {
+    const { call } = twoCourses(() => {
+      throw new ApiError(500, "/grades/", "Internal Server Error");
+    });
+
+    const result = await call({});
+
+    expect(result.isError).toBeUndefined();
+    const payload = parse(result);
+    expect(payload.courses.map((c: any) => c.courseId)).toEqual([COURSE_A.Id]);
+    expect(payload.restrictedCourses).toEqual([]);
+    expect(payload.failedCourses).toEqual([
+      {
+        courseId: COURSE_B.Id,
+        courseName: COURSE_B.Name,
+        gradeUrl: "https://brightspace.example.edu/d2l/lms/grades/my_grades/main.d2l?ou=202",
+      },
+    ]);
+    expect(payload.notice).toContain(String(COURSE_B.Id));
+    expect(payload.authPending).toBeUndefined();
+  });
+
+  it("keeps a course whose grade request dies on the network", async () => {
+    const { call } = twoCourses(() => {
+      throw new TypeError("fetch failed");
+    });
+
+    const payload = parse(await call({}));
+
+    expect(payload.failedCourses.map((c: any) => c.courseId)).toEqual([COURSE_B.Id]);
+  });
+
+  it("leaves failedCourses and notice out when every course answered", async () => {
+    const { call } = setup((path) => {
+      if (path.includes("/enrollments/")) return enrollmentPage(COURSE_A, true);
+      if (path.includes(`/${COURSE_A.Id}/grades/`)) return [grade("Exam 1")];
+      return [];
+    });
+
+    const payload = parse(await call({}));
+
+    expect(payload).not.toHaveProperty("failedCourses");
+    expect(payload).not.toHaveProperty("notice");
+  });
+
+  it("carries both notices when one course is pending sign-in and another failed", async () => {
+    const COURSE_C = { Id: 303, Name: "PHYS 172", Code: "phys172" };
+    const { call } = setup((path) => {
+      if (path.includes("/enrollments/")) {
+        return {
+          Items: [
+            enrollmentPage(COURSE_A, true).Items[0],
+            enrollmentPage(COURSE_B, true).Items[0],
+            enrollmentPage(COURSE_C, true).Items[0],
+          ],
+        };
+      }
+      if (path.includes(`/${COURSE_B.Id}/grades/`)) throw mfaPending();
+      if (path.includes(`/${COURSE_C.Id}/grades/`)) throw new ApiError(404, path, "Not Found");
+      if (path.includes("/grades/")) return [grade("Exam 1")];
+      return [];
+    });
+
+    const payload = parse(await call({}));
+
+    expect(payload.authPending).toBe(true);
+    expect(payload.unavailableCourseIds).toEqual([COURSE_B.Id]);
+    expect(payload.failedCourses.map((c: any) => c.courseId)).toEqual([COURSE_C.Id]);
+    expect(payload.notice).toContain("Sign-in to Brightspace is still in progress");
+    expect(payload.notice).toContain("failedCourses");
+    expect(payload.courses.map((c: any) => c.courseId)).toEqual([COURSE_A.Id, COURSE_B.Id]);
+  });
+});
+
+/**
  * A grade row linked to a quiz can carry feedback the gradebook does not: the
  * quiz's own submissions page may hold it, sometimes behind a restricted viewer
  * such as Respondus LockDown Browser. The student API cannot read that
