@@ -9,6 +9,7 @@ import { acquireProcessLock } from "../../src/auth/auth-lock.js";
 import { authLockPath } from "../../src/auth/mfa-challenge.js";
 import { RemoveError } from "../../src/auth/logout.js";
 import { registerSignOut } from "../../src/tools/sign-out.js";
+import { acceptOmittedArguments } from "../../src/tools/omitted-arguments.js";
 import type { AppConfig } from "../../src/types/index.js";
 
 /**
@@ -53,6 +54,7 @@ type Clear = Parameters<typeof registerSignOut>[5];
 
 async function connect(appConfig: AppConfig, clear?: Clear, authRunner?: { busy(): boolean }) {
   const server = new McpServer({ name: "sign-out-test", version: "1" });
+  acceptOmittedArguments(server); // as src/index.ts does: this test calls sign_out without an arguments field
   registerSignOut(server, appConfig, { clearCache } as any, { forgetSession }, authRunner, clear);
   const client = new Client({ name: "sign-out-test", version: "1" });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();

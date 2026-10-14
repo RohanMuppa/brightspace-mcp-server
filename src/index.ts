@@ -46,6 +46,7 @@ import {
   registerGetDropboxFeedback,
   registerGetRubricsForObject,
   registerDownloadDropboxSubmissionFile,
+  acceptOmittedArguments,
   relayMfaChallenges,
   currentMfaAnnouncer,
 } from "./tools/index.js";
@@ -166,6 +167,10 @@ if (subcommand === 'setup') {
           activeOnly: config.courseFilter.activeOnly,
         });
       }
+
+      // A client may leave `arguments` off a call to a tool that takes none;
+      // SDK 1.26-1.31 reject that. Must run before the first registration.
+      acceptOmittedArguments(server);
 
       // Register MCP tools. Each one, when its client sends a progress token,
       // shows an MFA challenge mid-call and waits for the approval instead of

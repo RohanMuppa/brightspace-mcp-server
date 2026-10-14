@@ -37,4 +37,5 @@ export { registerDownloadDropboxSubmissionFile } from "./download-dropbox-submis
 // Re-export shared helpers and schemas for convenience
 export { toolResponse, errorResponse, sanitizeError } from "./tool-helpers.js";
 export { relayMfaChallenges, currentMfaAnnouncer } from "./mfa-relay.js";
+export { acceptOmittedArguments } from "./omitted-arguments.js";
 export * from "./schemas.js";
