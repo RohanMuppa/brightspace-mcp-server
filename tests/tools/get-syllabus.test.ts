@@ -1,4 +1,7 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { registerGetSyllabus } from "../../src/tools/get-syllabus.js";
 import { ApiError } from "../../src/api/index.js";
 
@@ -15,6 +18,7 @@ interface Routes {
   overview?: unknown;
   toc?: unknown;
   ltiLinks?: unknown;
+  attachment?: () => Response;
 }
 
 function setup(routes: Routes) {
@@ -33,6 +37,7 @@ function setup(routes: Routes) {
       throw new ApiError(404, path, "Not Found");
     }),
     getRaw: vi.fn(async () => {
+      if (routes.attachment) return routes.attachment();
       throw new ApiError(404, "/overview/attachment", "Not Found");
     }),
   };
@@ -44,8 +49,8 @@ function setup(routes: Routes) {
     },
   };
   registerGetSyllabus(server as any, apiClient as any);
-  return async () => {
-    const res = await handler!({ courseId: COURSE_ID });
+  return async (extraArgs: Record<string, unknown> = {}) => {
+    const res = await handler!({ courseId: COURSE_ID, ...extraArgs });
     return JSON.parse(res.content[0].text);
   };
 }
@@ -356,5 +361,48 @@ describe("get_syllabus external discovery outcome (#188)", () => {
     expect(result.externalSyllabusDiscovery.unavailable).toEqual([
       { lookup: "lti-links", reason: "permission-denied", status: 403 },
     ]);
+  });
+});
+
+describe("get_syllabus attachment filename (#247)", () => {
+  let dir: string;
+
+  beforeEach(async () => {
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), "syllabus-"));
+  });
+
+  afterEach(async () => {
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  function attachmentWith(disposition: string) {
+    return () =>
+      new Response("plain syllabus text", {
+        status: 200,
+        headers: { "Content-Disposition": disposition },
+      });
+  }
+
+  async function savedName(disposition: string) {
+    const run = setup({ overview: EMPTY_OVERVIEW, attachment: attachmentWith(disposition) });
+    const out = await run({ downloadPath: dir });
+    expect(out.download?.success).toBe(true);
+    return path.basename(out.download.filePath);
+  }
+
+  it("decodes an RFC 5987 filename* into the name saved on disk", async () => {
+    expect(await savedName("attachment; filename*=UTF-8''Course%20Syllabus.txt")).toBe(
+      "Course Syllabus.txt"
+    );
+  });
+
+  it("decodes a percent-encoded non-ASCII filename*", async () => {
+    expect(await savedName("attachment; filename*=UTF-8''%E6%95%99%E5%AD%A6.txt")).toBe(
+      "教学.txt"
+    );
+  });
+
+  it("keeps a plain quoted filename as given", async () => {
+    expect(await savedName('attachment; filename="Fall Syllabus.txt"')).toBe("Fall Syllabus.txt");
   });
 });

@@ -14,6 +14,7 @@ import { secureDownload, readBodyCapped } from "../utils/download-helpers.js";
 import { DownloadError } from "../utils/download-errors.js";
 import { MAX_FILE_SIZE } from "../utils/file-validator.js";
 import { extractPdfText } from "../utils/pdf-extractor.js";
+import { parseContentDispositionFilename } from "./download-file.js";
 import { log } from "../utils/logger.js";
 import path from "node:path";
 import fs from "node:fs/promises";
@@ -268,10 +269,8 @@ export function registerGetSyllabus(
 
             // Get filename from Content-Disposition header
             const disposition = response.headers.get("Content-Disposition") ?? "";
-            const match = disposition.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/);
-            if (match?.[1]) {
-              attachmentFilename = match[1].replace(/['"]/g, "");
-            }
+            attachmentFilename =
+              parseContentDispositionFilename(disposition) || attachmentFilename;
 
             // Download body as buffer
             // Capped read: Content-Length can be missing or understated.
