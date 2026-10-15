@@ -358,3 +358,55 @@ describe("get_syllabus external discovery outcome (#188)", () => {
     ]);
   });
 });
+
+describe("get_syllabus attachment filename", () => {
+  async function downloadWith(disposition: string) {
+    const fsp = await import("node:fs/promises");
+    const os = await import("node:os");
+    const nodePath = await import("node:path");
+    const dir = await fsp.mkdtemp(nodePath.join(os.tmpdir(), "syllabus-"));
+    const apiClient = {
+      le: (orgUnitId: number, p: string) => `/d2l/api/le/1.0/${orgUnitId}${p}`,
+      leGlobal: (p: string) => `/d2l/api/le/1.0${p}`,
+      get: vi.fn(async (path: string) => {
+        if (path.endsWith(`/${COURSE_ID}/overview`)) return EMPTY_OVERVIEW;
+        throw new ApiError(404, path, "Not Found");
+      }),
+      getRaw: vi.fn(
+        async () =>
+          new Response(Buffer.from("%PDF-1.4\n%%EOF\n"), {
+            headers: { "Content-Disposition": disposition },
+          })
+      ),
+    };
+    let handler: (args: unknown) => Promise<any>;
+    const server = {
+      registerTool: (_n: string, _m: unknown, fn: (args: unknown) => Promise<any>) => {
+        handler = fn;
+      },
+    };
+    registerGetSyllabus(server as any, apiClient as any);
+    try {
+      const res = await handler!({ courseId: COURSE_ID, downloadPath: dir });
+      const result = JSON.parse(res.content[0].text);
+      return { result, files: await fsp.readdir(dir) };
+    } finally {
+      await fsp.rm(dir, { recursive: true, force: true });
+    }
+  }
+
+  it("decodes an RFC 5987 filename* instead of saving it as UTF-8Course%20Syllabus.pdf", async () => {
+    const { result, files } = await downloadWith(
+      "attachment; filename*=UTF-8''Course%20Syllabus.pdf"
+    );
+
+    expect(result.download.success).toBe(true);
+    expect(files).toEqual(["Course Syllabus.pdf"]);
+  });
+
+  it("keeps a plain quoted filename", async () => {
+    const { files } = await downloadWith('attachment; filename="Syllabus Fall.pdf"');
+
+    expect(files).toEqual(["Syllabus Fall.pdf"]);
+  });
+});
