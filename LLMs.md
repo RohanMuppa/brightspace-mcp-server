@@ -345,6 +345,32 @@ src/
 | `npm run test` | Run Vitest suite |
 | `npm run test:run` | Run Vitest once |
 
+## Environment variables
+
+Every setting the server reads from the environment. All are optional; `setup` writes the usual ones to `~/.brightspace-mcp/config.json`, and an environment value overrides the saved one (env > `config.json` > default, resolved in `src/utils/config.ts`). A `.env` file in the working directory is loaded too. Boolean settings accept `true`/`false`, `1`/`0`, `yes`/`no`, `on`/`off`; anything else is ignored with a `[config]` warning and the next source wins. `tests/release/env-docs.test.ts` fails if `src/` reads a `D2L_*` variable this table does not name.
+
+| Variable | Default | What it does |
+|----------|---------|--------------|
+| `D2L_BASE_URL` | `https://purdue.brightspace.com` | The school's Brightspace URL. Must be HTTPS with no embedded credentials; only the origin is kept |
+| `D2L_USERNAME` | from `config.json` | Sign-in username. Also selects the account's session directory (`accounts/<account-hash>/`) |
+| `D2L_PASSWORD` | none | Sign-in password. Copied into the OS credential store for the account on startup, never to a file. Ignored when passwordless sign-in is on |
+| `D2L_SESSION_DIR` | `~/.d2l-session` | Root of the per-account session directories. `~` is expanded |
+| `D2L_TOKEN_TTL` | `3600` | Seconds an access token is used before it is re-minted. Must be a whole positive number; anything else is ignored with a warning |
+| `D2L_HEADLESS` | `true` | `false` shows the browser during sign-in, for MFA methods that need a click. Automatic recovery stays headless unless this is set explicitly |
+| `D2L_REMEMBER_MFA` | `false` | Tick Microsoft Entra's "Don't ask again" box (see [Re-auth](#re-auth)) |
+| `D2L_PASSWORDLESS` | `false` | Microsoft Entra passwordless phone approval; no password is read or saved (see [Re-auth](#re-auth)) |
+| `D2L_TOTP_SECRET` | none | Authenticator setup key or `otpauth://` link for Entra code challenges. For CI and containers only; weaker than the keychain entry `setup` saves |
+| `D2L_DUO_PASSCODE` | unset | Any non-empty value makes Duo type a Duo Mobile passcode instead of waiting for a push |
+| `D2L_CAMPUS` | from `config.json` | Campus on a shared multi-campus instance (SUNY). `setup --suny` asks for it |
+| `D2L_ACCESS_TOKEN` | none | Pre-issued Bearer token; skips the browser (see [Browser-free sign-in](#browser-free-sign-in-d2l_session_cookie--d2l_access_token)) |
+| `D2L_SESSION_COOKIE` | none | Pasted `d2lSessionVal`/`d2lSecureSessionVal` cookies; skips the browser (same section) |
+| `D2L_INCLUDE_COURSES` | all | Comma-separated course (org unit) ids to keep. Applies to multi-course tools; an explicit `courseId` argument bypasses it |
+| `D2L_EXCLUDE_COURSES` | none | Comma-separated course ids to hide |
+| `D2L_ACTIVE_ONLY` | `true` | Hide inactive enrollments and courses D2L reports as closed (`CanAccess: false`) |
+| `D2L_CURRENT_ONLY` | `false` | Keep only courses whose `Access.StartDate`–`Access.EndDate` window contains now, like Brightspace's "Current Courses" widget. Courses with neither date are dropped |
+| `D2L_NO_UPDATE_CHECK` | unset | Any non-empty value turns off the npm new-version notice and the auth CLI's self-update re-exec |
+| `D2L_DEV_MODE` | unset | Exactly `true` writes a local, content-free activity log ([docs/dev-mode.md](docs/dev-mode.md)) |
+
 ## Storage locations
 
 | Path | Contents | Permissions |

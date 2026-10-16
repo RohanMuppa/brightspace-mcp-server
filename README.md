@@ -104,6 +104,7 @@ All optional, set in your AI app's MCP `env` config or your shell. The full list
 | `D2L_SESSION_COOKIE` / `D2L_ACCESS_TOKEN` | Skip the browser entirely with a pasted cookie or token ([how](docs/sign-in.md#no-browser-paste-a-session-cookie-or-token)) |
 | `D2L_INCLUDE_COURSES` / `D2L_EXCLUDE_COURSES` | Limit which courses the AI sees, by course id |
 | `D2L_ACTIVE_ONLY=false` | Include courses whose enrollment has ended |
+| `D2L_CURRENT_ONLY=true` | Only show courses in their current enrollment window, like Brightspace's "Current Courses" widget |
 | `D2L_NO_UPDATE_CHECK=1` | Turn off the new-version notice |
 | `D2L_DEV_MODE=true` | Write a local, content-free log of tool calls and sign-in events, for debugging session problems ([how](docs/dev-mode.md)) |
 
