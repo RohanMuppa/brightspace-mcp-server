@@ -142,6 +142,14 @@ Visible mode applies to the manual `auth` command, whose window remains open for
 npx -y brightspace-mcp-server@latest auth
 ```
 
+### Fewer 2FA prompts (the two opt-in shortcuts)
+
+There are two opt-in ways to be asked for 2FA less often: **remember this device** (`rememberMfa` / `D2L_REMEMBER_MFA`, ticks Microsoft's "Don't ask again" box) and a **saved authenticator key** (OS keychain, or `D2L_TOTP_SECRET`; the server types the 6-digit code itself). Both are off by default and not for shared computers. They are explained side by side, with the steps for getting the key from https://mysignins.microsoft.com, in one place: [docs/sign-in.md#fewer-2fa-prompts](docs/sign-in.md#fewer-2fa-prompts). Send users there rather than re-explaining. Turn on or off by rerunning `setup`. Wording shared by `setup`, the MFA tip, and `doctor` lives in `src/utils/two-factor-shortcuts.ts`:
+
+- `setup` prints a three-line how-to for the key above the authenticator prompt (Enter skips, or keeps a saved key) and a one-line note under the remember-this-device question saying how it differs.
+- A pending MFA approval message (`mfaPending` in `src/tools/tool-helpers.ts`) ends with one "Tip for the user: to be asked less often, rerun `setup`" line carrying the docs link, only when both options are off. It is never added when either is on, to a duplicate in the same batch, or to any other failure kind. `src/index.ts` records the state at startup with `setActiveShortcuts`; until then no tip is shown.
+- `doctor` prints one `2FA shortcuts: remember this device on/off, authenticator key saved/not saved` line after its checks (informational: it never changes the exit code), plus the docs link when both are off. It only checks that a key exists and never reads the key into any output; if the credential store cannot be read it says "not checked".
+
 ## Sign out early (`sign_out` / `auth --logout`)
 
 When the user wants to end the saved session before it lapses (a shared computer, handing the machine on, forcing a fresh sign-in), either call the `sign_out` tool (only when they explicitly ask; it runs the same deletion in-process) or have them run:
@@ -321,6 +329,7 @@ src/
     pdf-extractor.ts        PDF text extraction via unpdf
     logger.ts               Structured logging
     update-checker.ts       npm version comparison
+    two-factor-shortcuts.ts Wording and state for the two opt-in "fewer 2FA prompts" options (setup, MFA tip, doctor)
     errors.ts               User-facing error taxonomy
   types/                    Shared TypeScript types
 ```
@@ -338,7 +347,7 @@ src/
 | `npx -y brightspace-mcp-server@latest setup --javeriana` | Setup with Javeriana Cali preset |
 | `npx -y brightspace-mcp-server@latest auth` | Manual reauth |
 | `npx -y brightspace-mcp-server@latest auth --logout` | Delete this computer's saved session so the next call does a full sign-in. Keeps the password, `config.json`, and credential-store entries. Local only |
-| `npx -y brightspace-mcp-server@latest doctor` | Diagnose a broken setup — Node version, saved config, credential store, Brightspace reachability, saved sign-in, a real course-list call, and installed version, each as a ✓/✗ line with one plain-English next step |
+| `npx -y brightspace-mcp-server@latest doctor` | Diagnose a broken setup — Node version, saved config, credential store, Brightspace reachability, saved sign-in, a real course-list call, and installed version, each as a ✓/✗ line with one plain-English next step, then one informational line on the 2FA shortcuts (remember this device, saved authenticator key) |
 | `npx -y brightspace-mcp-server@latest` | Run the MCP server (registered in AI client config) |
 | `npm run build` | Compile TypeScript to `build/` |
 | `npm run dev` | Watch-mode TypeScript compile |

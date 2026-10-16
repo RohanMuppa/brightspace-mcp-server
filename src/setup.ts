@@ -20,6 +20,7 @@ import {
 } from "./utils/config-store.js";
 import { saveSecureConfig } from "./utils/secure-config.js";
 import { normalizeTotpEnrollment } from "./auth/totp.js";
+import { KEY_HOWTO_LINES, KEY_PROMPT, REMEMBER_DEVICE_DIFFERENCE } from "./utils/two-factor-shortcuts.js";
 import { writeFileAtomicSync } from "./utils/atomic-write.js";
 import type { ConfigStoreData } from "./utils/config-store.js";
 import { AUTH_COMMAND, DOCTOR_COMMAND } from "./utils/commands.js";
@@ -660,10 +661,11 @@ async function main(): Promise<void> {
   console.log(dim("  for you, so automatic sign-ins need nothing from your phone. Paste the SETUP KEY (or otpauth:// link) you"));
   console.log(dim("  got when enrolling the app — a code showing on screen right now will not work."));
   console.log(dim("  The tradeoff: the key is stored beside your password, so on THIS computer the two factors become one."));
-  console.log(dim("  It still stops anyone who only has your password. Press Enter to skip, or to keep a key you saved before."));
+  console.log(dim("  It still stops anyone who only has your password."));
+  for (const line of KEY_HOWTO_LINES) console.log(dim(line));
   let totpUri: string | undefined;
   while (true) {
-    const input = await askPassword("  Authenticator setup key or otpauth:// link (optional): ");
+    const input = await askPassword(KEY_PROMPT);
     if (!input) break;
     try {
       totpUri = normalizeTotpEnrollment(input, username);
@@ -718,6 +720,7 @@ async function main(): Promise<void> {
   console.log("");
 
   // Opt-in only: a shared computer must never skip MFA unless asked to.
+  console.log(dim(REMEMBER_DEVICE_DIFFERENCE));
   const defaultRemember = savedRememberMfa === true ? "yes" : "no";
   let rememberAnswer = "";
   while (!/^(y(es)?|no?)$/i.test(rememberAnswer)) {

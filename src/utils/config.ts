@@ -213,7 +213,7 @@ function positiveSeconds(value: string | number | undefined, source: string): nu
  * value counts as unset, and anything unrecognized is ignored with a warning
  * so config.json or the default applies, as positiveSeconds does.
  */
-function envBoolean(value: string | undefined, source: string): boolean | undefined {
+export function envBoolean(value: string | undefined, source: string): boolean | undefined {
   const text = value?.trim().toLowerCase();
   if (!text) return undefined;
   if (["true", "1", "yes", "on"].includes(text)) return true;

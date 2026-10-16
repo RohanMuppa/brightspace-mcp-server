@@ -25,6 +25,7 @@ function deps(overrides: Partial<DoctorDeps> = {}): Partial<DoctorDeps> {
     configStoreExists: () => true,
     loadConfigStore: () => ({ ...STORE }),
     getStoredPassword: async () => "a-password",
+    getStoredTotpUri: async () => null,
     discoverVersions: async () => ({ lp: "1.50", le: "1.90" }),
     getSessionToken: async () => ({ accessToken: "tok", capturedAt: 0, expiresAt: 0, source: "cache" as const }),
     countCourses: async () => ({ count: 4, hasMore: false }),
@@ -331,6 +332,70 @@ describe("doctor: (g) version check", () => {
       })
     );
     expect(idOf(result, "version").ok).toBe(true);
+  });
+});
+
+describe("doctor: 2FA shortcuts line", () => {
+  const URL = "https://github.com/RohanMuppa/brightspace-mcp-server/blob/main/docs/sign-in.md#fewer-2fa-prompts";
+
+  it("reports both off, with the docs link, and does not change allOk or the check list", async () => {
+    const result = await runDoctorChecks(deps({ getStoredTotpUri: async () => null }));
+    expect(result.notes).toEqual([
+      `2FA shortcuts: remember this device off, authenticator key not saved. Want fewer prompts? See ${URL}`,
+    ]);
+    expect(result.allOk).toBe(true);
+    expect(result.checks.map((c) => c.id)).toEqual([
+      "node", "config", "credential", "network", "session", "courses", "version",
+    ]);
+  });
+
+  it("reports a saved key and remember-device from config.json, without the link", async () => {
+    const result = await runDoctorChecks(deps({
+      loadConfigStore: () => ({ ...STORE, rememberMfa: true }),
+      getStoredTotpUri: async () => "otpauth://totp/x?secret=JBSWY3DPEHPK3PXP",
+    }));
+    expect(result.notes).toEqual(["2FA shortcuts: remember this device on, authenticator key saved."]);
+  });
+
+  it("lets D2L_REMEMBER_MFA override config.json", async () => {
+    const result = await runDoctorChecks(deps({
+      env: { D2L_REMEMBER_MFA: "true" },
+      getStoredTotpUri: async () => null,
+    }));
+    expect(result.notes[0]).toContain("remember this device on");
+    const off = await runDoctorChecks(deps({
+      env: { D2L_REMEMBER_MFA: "false" },
+      loadConfigStore: () => ({ ...STORE, rememberMfa: true }),
+      getStoredTotpUri: async () => null,
+    }));
+    expect(off.notes[0]).toContain("remember this device off");
+  });
+
+  it("counts D2L_TOTP_SECRET as a saved key without reading the keychain", async () => {
+    const getStoredTotpUri = vi.fn(async () => null);
+    const result = await runDoctorChecks(deps({ env: { D2L_TOTP_SECRET: "JBSWY3DPEHPK3PXP" }, getStoredTotpUri }));
+    expect(result.notes[0]).toContain("authenticator key saved");
+    expect(getStoredTotpUri).not.toHaveBeenCalled();
+  });
+
+  it("says the key was not checked when the credential store cannot be read", async () => {
+    const result = await runDoctorChecks(deps({ getStoredTotpUri: async () => { throw new Error("locked"); } }));
+    expect(result.notes).toEqual(["2FA shortcuts: remember this device off, authenticator key not checked."]);
+  });
+
+  it("is omitted when setup is missing (nothing to report)", async () => {
+    const result = await runDoctorChecks(deps({ configStoreExists: () => false }));
+    expect(result.notes).toEqual([]);
+  });
+
+  it("never prints the key or anything derived from it", async () => {
+    const secret = "otpauth://totp/Purdue:student42?secret=JBSWY3DPEHPK3PXP&issuer=Purdue";
+    const result = await runDoctorChecks(deps({ getStoredTotpUri: async () => secret }));
+    const all = [...result.checks.map((c) => c.line), ...result.notes].join("\n");
+    expect(all).not.toContain("JBSWY3DPEHPK3PXP");
+    expect(all).not.toContain("otpauth");
+    const viaEnv = await runDoctorChecks(deps({ env: { D2L_TOTP_SECRET: "JBSWY3DPEHPK3PXP" } }));
+    expect([...viaEnv.checks.map((c) => c.line), ...viaEnv.notes].join("\n")).not.toContain("JBSWY3DPEHPK3PXP");
   });
 });
 

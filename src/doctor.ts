@@ -28,8 +28,9 @@ import {
   loadConfigStore,
   type ConfigStoreData,
 } from "./utils/config-store.js";
-import { accountSessionDirectory, expandTilde, readEnvSecret, parseSessionCookieEnv } from "./utils/config.js";
-import { getStoredPassword } from "./auth/credential-store.js";
+import { accountSessionDirectory, envBoolean, expandTilde, readEnvSecret, parseSessionCookieEnv } from "./utils/config.js";
+import { getStoredPassword, getStoredTotpUri } from "./auth/credential-store.js";
+import { describeShortcuts } from "./utils/two-factor-shortcuts.js";
 import { discoverVersions } from "./api/version-discovery.js";
 import { TokenManager, type TokenManagerOptions } from "./auth/token-manager.js";
 import { SessionStore } from "./auth/session-store.js";
@@ -104,6 +105,8 @@ export interface CheckResult {
 export interface DoctorResult {
   checks: CheckResult[];
   allOk: boolean;
+  /** Informational lines printed after the checks. They never affect allOk. */
+  notes: string[];
 }
 
 /**
@@ -119,6 +122,8 @@ export interface DoctorDeps {
   configStoreExists: () => boolean;
   loadConfigStore: () => ConfigStoreData;
   getStoredPassword: (baseUrl: string, username: string) => Promise<string | null>;
+  /** Only ever tested for existence; the value is never read into any output. */
+  getStoredTotpUri: (baseUrl: string, username: string) => Promise<string | null>;
   discoverVersions: (baseUrl: string) => Promise<unknown>;
   /**
    * Reuses TokenManager — disk (read-only) and, at most, one HTTP mint. Never
@@ -145,6 +150,7 @@ function defaultDoctorDeps(): DoctorDeps {
     configStoreExists,
     loadConfigStore,
     getStoredPassword,
+    getStoredTotpUri: (baseUrl, username) => getStoredTotpUri(baseUrl, username),
     discoverVersions,
     getSessionToken: (baseUrl, sessionDir, envAccessToken, envSessionCookie) =>
       readOnlyTokenManager(baseUrl, sessionDir, envAccessToken, envSessionCookie).getToken(),
@@ -293,6 +299,40 @@ async function checkCredential(
   }
 }
 
+/**
+ * The two opt-in ways to be asked for 2FA less often, as one informational
+ * line. Reports only whether each is on: the key itself is never read into
+ * the output, and a credential store that cannot be read says "not checked"
+ * rather than guessing.
+ */
+async function describeTwoFactorShortcuts(
+  deps: DoctorDeps,
+  baseUrl: string,
+  username: string | undefined
+): Promise<string> {
+  let store: ConfigStoreData | null = null;
+  try {
+    if (deps.configStoreExists()) store = deps.loadConfigStore();
+  } catch {
+    store = null;
+  }
+  const rememberMfa = envBoolean(deps.env.D2L_REMEMBER_MFA, "D2L_REMEMBER_MFA") ?? store?.rememberMfa === true;
+
+  let keySaved: boolean | "unknown";
+  if (deps.env.D2L_TOTP_SECRET) {
+    keySaved = true;
+  } else if (!username) {
+    keySaved = false;
+  } else {
+    try {
+      keySaved = Boolean(await deps.getStoredTotpUri(baseUrl, username));
+    } catch {
+      keySaved = "unknown";
+    }
+  }
+  return describeShortcuts({ rememberMfa, keySaved });
+}
+
 async function checkNetwork(deps: DoctorDeps, baseUrl: string): Promise<CheckResult> {
   try {
     await deps.discoverVersions(baseUrl);
@@ -417,6 +457,7 @@ function skip(id: CheckId, reason: string): CheckResult {
 export async function runDoctorChecks(overrides: Partial<DoctorDeps> = {}): Promise<DoctorResult> {
   const deps: DoctorDeps = { ...defaultDoctorDeps(), ...overrides };
   const checks: CheckResult[] = [];
+  const notes: string[] = [];
 
   checks.push(checkNode(deps));
 
@@ -430,6 +471,7 @@ export async function runDoctorChecks(overrides: Partial<DoctorDeps> = {}): Prom
     checks.push(skip("courses", SKIPPED_SETUP));
   } else {
     checks.push(await checkCredential(deps, config.baseUrl, config.username, config.envAccessToken, config.envSessionCookie));
+    notes.push(await describeTwoFactorShortcuts(deps, config.baseUrl, config.username));
     checks.push(await checkNetwork(deps, config.baseUrl));
 
     const session = await checkSession(deps, config.baseUrl, config.sessionDir, config.envAccessToken, config.envSessionCookie);
@@ -444,7 +486,7 @@ export async function runDoctorChecks(overrides: Partial<DoctorDeps> = {}): Prom
 
   checks.push(await checkVersion(deps));
 
-  return { checks, allOk: checks.every((c) => c.ok) };
+  return { checks, allOk: checks.every((c) => c.ok), notes };
 }
 
 // ── CLI entry point ──────────────────────────────────────────────────
@@ -456,6 +498,7 @@ async function main(): Promise<void> {
   console.log("Brightspace MCP Server — doctor");
   console.log("");
   for (const check of result.checks) console.log(`  ${check.line}`);
+  for (const note of result.notes) console.log(`  ${note}`);
   console.log("");
   console.log(
     result.allOk

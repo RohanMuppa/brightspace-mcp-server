@@ -12,6 +12,7 @@ import { AuthProcessError, type AuthFailureKind } from "../auth/auth-runner.js";
 import { log } from "../utils/logger.js";
 import { AUTH_COMMAND } from "../utils/commands.js";
 import { getUpdateNotice } from "../utils/update-checker.js";
+import { mfaShortcutTip } from "../utils/two-factor-shortcuts.js";
 import {
   DownloadError,
   isSafeDetail,
@@ -166,7 +167,20 @@ function authFailureMessage(error: AuthProcessError): string {
   // unreadable; one short line is enough for this call.
   if (error.kind === "mfaPending" && error.duplicate) return MFA_ALREADY_REPORTED;
   if (error.kind === "automaticPending" && error.duplicate) return AUTOMATIC_ALREADY_REPORTED;
-  if (error.kind === "mfaPending" && error.numberMatch) {
+  if (error.kind === "mfaPending") {
+    return withShortcutTip(mfaPendingMessage(error));
+  }
+  return AUTH_FAILURE_GUIDANCE[error.kind];
+}
+
+/** Appends the one-line "ask for 2FA less often" tip, when it applies (see two-factor-shortcuts.ts). */
+function withShortcutTip(message: string): string {
+  const tip = mfaShortcutTip();
+  return tip ? `${message} ${tip}` : message;
+}
+
+function mfaPendingMessage(error: AuthProcessError): string {
+  if (error.numberMatch) {
     return `Open Microsoft Authenticator and enter ${error.numberMatch} within 5 minutes. ` +
       "Show the user that number now, as text in your reply, before you make any other tool call: " +
       "they can't see tool results, and some apps show nothing until you write it. Then call this " +
