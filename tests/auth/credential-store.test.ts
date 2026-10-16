@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as os from "node:os";
-import { assertNativeCredentialStoreAvailable, deleteStoredPassword, getSessionEncryptionKey, getStoredPassword, getStoredTotpUri, hasSessionEncryptionKey, setStoredPassword, setStoredTotpUri, NativeCredentialStoreError, nativeCredentialBackend } from "../../src/auth/credential-store.js";
+import { assertNativeCredentialStoreAvailable, deleteStoredPassword, deleteStoredTotpUri, getSessionEncryptionKey, getStoredPassword, getStoredTotpUri, hasSessionEncryptionKey, setStoredPassword, setStoredTotpUri, NativeCredentialStoreError, nativeCredentialBackend } from "../../src/auth/credential-store.js";
 import { MemoryCredentialBackend } from "./secure-store-fixtures.js";
 
 describe("Credential store", () => {
@@ -64,6 +64,27 @@ describe("Credential store", () => {
     expect(await getStoredPassword("https://school.example", "alice", backend)).toBeNull();
     expect(await getStoredTotpUri("https://other.example", "alice", backend)).toBeNull();
     expect(await getStoredTotpUri("https://school.example", "bob", backend)).toBeNull();
+  });
+
+  it("removes only the named account's enrollment, and treats a missing one as done", async () => {
+    const backend = new MemoryCredentialBackend();
+    const uri = "otpauth://totp/Test?secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
+    await setStoredTotpUri("https://school.example", "alice", uri, backend);
+    await setStoredTotpUri("https://school.example", "bob", uri, backend);
+    await setStoredPassword("https://school.example", "alice", "dummy-password", backend);
+    await deleteStoredTotpUri("https://school.example/", "alice", backend);
+    expect(await getStoredTotpUri("https://school.example", "alice", backend)).toBeNull();
+    expect(await getStoredTotpUri("https://school.example", "bob", backend)).toBe(uri);
+    expect(await getStoredPassword("https://school.example", "alice", backend)).toBe("dummy-password");
+    backend.deletePassword = async () => { throw new Error("no such entry"); };
+    await expect(deleteStoredTotpUri("https://school.example", "alice", backend)).resolves.toBeUndefined();
+  });
+
+  it("fails when the native store keeps an enrollment it was asked to delete", async () => {
+    const backend = new MemoryCredentialBackend();
+    await setStoredTotpUri("https://school.example", "alice", "otpauth://totp/Test?secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ", backend);
+    backend.deletePassword = async () => {};
+    await expect(deleteStoredTotpUri("https://school.example", "alice", backend)).rejects.toBeInstanceOf(NativeCredentialStoreError);
   });
 
   it("fails verification when the native store does not retain an enrollment", async () => {

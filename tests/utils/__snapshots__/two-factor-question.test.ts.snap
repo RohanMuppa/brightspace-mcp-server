@@ -1,0 +1,31 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`the one 2FA question: transcripts > first run, choosing 3 with a key 1`] = `
+"  How often do you want to approve sign-ins on your phone?
+    1. Every time Microsoft asks (default, safest)
+    2. Less often: Microsoft remembers this computer for a while (your school decides how long)
+    3. Almost never: this computer answers Microsoft's code requests itself (needs a key from Microsoft, about 2 minutes)
+  Option 2 ticks Microsoft's "Don't ask again" box, so you still approve now and then.
+  Option 3 stores a key next to your password, so on this computer the two factors become one. It still stops anyone who only has your password.
+  It helps only when Microsoft asks for a 6-digit code. If your school only sends a number to approve, sign-in falls back to your phone.
+  Options 2 and 3 are not for shared computers. Details: https://github.com/RohanMuppa/brightspace-mcp-server/blob/main/docs/sign-in.md#fewer-2fa-prompts
+  Choose 1, 2 or 3 [1]: 3
+  How to get the key: open https://mysignins.microsoft.com > Security info > Add sign-in method > Authenticator app,
+  choose "I want to use a different authenticator app", then "Can't scan image?" and copy the secret key.
+  Authenticator setup key or otpauth:// link (Enter = none): ********************************
+  This computer will answer Microsoft's code requests itself."
+`;
+
+exports[`the one 2FA question: transcripts > rerun with option 2 on, pressing Enter 1`] = `
+"  How often do you want to approve sign-ins on your phone?
+    1. Every time Microsoft asks (safest)
+    2. Less often: Microsoft remembers this computer for a while (your school decides how long)
+    3. Almost never: this computer answers Microsoft's code requests itself (needs a key from Microsoft, about 2 minutes)
+  Option 2 ticks Microsoft's "Don't ask again" box, so you still approve now and then.
+  Option 3 stores a key next to your password, so on this computer the two factors become one. It still stops anyone who only has your password.
+  It helps only when Microsoft asks for a 6-digit code. If your school only sends a number to approve, sign-in falls back to your phone.
+  Options 2 and 3 are not for shared computers. Details: https://github.com/RohanMuppa/brightspace-mcp-server/blob/main/docs/sign-in.md#fewer-2fa-prompts
+  Currently: 2 — remember this computer
+  Choose 1, 2 or 3 [2]: 
+  Later sign-ins will ask Microsoft not to repeat the second factor on this device."
+`;

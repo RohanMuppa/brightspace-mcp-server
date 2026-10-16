@@ -24,20 +24,22 @@ The tradeoff: **every sign-in needs your phone**, because there is no password f
 
 ## Fewer 2FA prompts
 
-Two opt-in settings cut down how often you approve a sign-in. Both are **off by default**, both are for Microsoft Entra sign-in, and neither is for a shared computer. They work on their own or together.
+`setup` asks one question: **How often do you want to approve sign-ins on your phone?** The default is the safest answer. The other two are opt-in, and neither is for a shared computer.
 
-| | Remember this device | Saved authenticator key |
-|---|---|---|
-| What it does | Ticks Microsoft's **"Don't ask again"** box when your school offers it. | Types the 6-digit code for you when Microsoft asks for one. |
-| What you'll notice | Fewer prompts. How long it lasts is your school's setting, so you still approve now and then. | Automatic sign-ins finish with nothing from your phone. |
-| Needs | One yes/no answer in `setup`. | The authenticator **setup key** (steps below). |
-| Where it lives | `rememberMfa` in `config.json` (`D2L_REMEMBER_MFA` overrides it). | Your operating system's credential store, next to your password (`D2L_TOTP_SECRET` for CI and containers with none). |
+| | 1. Every time | 2. Remember this computer | 3. This computer answers code requests |
+|---|---|---|---|
+| What it does | Nothing is skipped. | Ticks Microsoft's **"Don't ask again"** box when your school offers it. | Types the 6-digit code for you when Microsoft asks for one. |
+| What you'll notice | You approve every sign-in Microsoft asks about. | Fewer prompts. How long it lasts is your school's setting, so you still approve now and then. | Automatic sign-ins finish with nothing from your phone. |
+| Needs | Nothing (default). | Nothing extra. | The authenticator **setup key** (steps below), about 2 minutes. |
+| Where it lives | | `rememberMfa` in `config.json` (`D2L_REMEMBER_MFA` overrides it). | Your operating system's credential store, next to your password (`D2L_TOTP_SECRET` for CI and containers with none). |
 
-**Turn on:** run `npx -y brightspace-mcp-server@latest setup` again and answer the "Remember this device" question, and/or paste the key at the authenticator prompt.
+Option 3 also turns option 2 on, so you get both. It only helps when Microsoft asks for a 6-digit code: if your school only sends a number to approve and offers no code option, sign-in falls back to your phone exactly as it does today. If you pick 3 and press Enter without pasting a key, `setup` says so and saves option 2.
 
-**Turn off:** run `setup` again and answer **no** to remember-this-device. To remove a saved key, delete the `brightspace-mcp-server` entries from your computer's password store (Keychain Access on a Mac, Credential Manager on Windows); pressing Enter at the key prompt keeps a saved key. Check what is on any time with `npx -y brightspace-mcp-server@latest doctor`.
+**Turn on:** run `npx -y brightspace-mcp-server@latest setup` again and pick 2 or 3. `setup` shows what is on now ("Currently: 2 — remember this computer") and Enter keeps it.
 
-**Shared computer:** leave both off. Remember-this-device lets anyone using your account here skip the second factor, and a saved key puts your password and second factor on the same machine.
+**Turn off:** run `setup` again and pick **1**. If an authenticator key is saved, `setup` then asks whether to remove it from this computer's credential store (default yes); answering no keeps the key, which means Microsoft's code requests are still answered automatically. Check what is on any time with `npx -y brightspace-mcp-server@latest doctor`.
+
+**Shared computer:** pick 1. Option 2 lets anyone using your account here skip the second factor, and option 3 puts your password and second factor on the same machine.
 
 ### Getting the setup key
 
@@ -47,7 +49,7 @@ Microsoft calls it a *software OATH token*. Only the **setup key** works; a code
 2. Choose **I want to use a different authenticator app**, then **Next**.
 3. On the QR page, click **Can't scan image?** Microsoft shows a **secret key**. Copy it.
 4. Finish enrollment in whatever app you normally use, so you still have the factor on your phone.
-5. Run `setup` and paste the key (or the whole `otpauth://` link) at the authenticator prompt.
+5. Run `setup`, pick option 3, and paste the key (or the whole `otpauth://` link) at the authenticator prompt.
 
 Purdue allows this and documents it in its own knowledge base (KB 2219). Other schools may not, so check your own IT policy first.
 

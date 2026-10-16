@@ -186,6 +186,17 @@ export async function setStoredTotpUri(baseUrl: string, username: string, uri: s
   }
 }
 
+/** Remove an account's saved authenticator enrollment. Safe when none was saved. */
+export async function deleteStoredTotpUri(baseUrl: string, username: string, backend: CredentialBackend = nativeCredentialBackend): Promise<void> {
+  const account = totpAccount(baseUrl, username);
+  // Some native stores raise on deleting an entry that does not exist.
+  if (await backend.getPassword(SERVICE, account) === null) return;
+  await backend.deletePassword(SERVICE, account);
+  if (await backend.getPassword(SERVICE, account) !== null) {
+    throw new NativeCredentialStoreError("The saved authenticator enrollment could not be removed from the native credential store.");
+  }
+}
+
 export async function getStoredPassword(baseUrl: string, username: string, backend: CredentialBackend = nativeCredentialBackend): Promise<string | null> {
   return backend.getPassword(SERVICE, passwordAccount(baseUrl, username));
 }

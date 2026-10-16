@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   KEY_HOWTO_LINES,
   KEY_PROMPT,
-  REMEMBER_DEVICE_DIFFERENCE,
+  KEY_PROMPT_KEEP,
   SHORTCUTS_DOCS_URL,
   describeShortcuts,
   mfaShortcutTip,
@@ -35,8 +35,8 @@ describe("2FA shortcuts: the docs section", () => {
 });
 
 describe("2FA shortcuts: setup wizard text", () => {
-  it("tells the user how to get the key in three lines plus the docs link", () => {
-    expect(KEY_HOWTO_LINES).toHaveLength(3);
+  it("tells the user how to get the key in two lines", () => {
+    expect(KEY_HOWTO_LINES).toHaveLength(2);
     const text = KEY_HOWTO_LINES.join("\n");
     expect(text).toContain("https://mysignins.microsoft.com");
     expect(text).toContain("Security info");
@@ -45,23 +45,19 @@ describe("2FA shortcuts: setup wizard text", () => {
     expect(text).toContain("I want to use a different authenticator app");
     expect(text).toContain("Can't scan image?");
     expect(text).toContain("secret key");
-    expect(text).toContain(SHORTCUTS_DOCS_URL);
   });
 
-  it("says Enter skips the prompt or keeps the saved key", () => {
-    expect(KEY_PROMPT).toContain("Enter = skip, or keep the one already saved");
+  it("says Enter means none, or keeps the saved key", () => {
+    expect(KEY_PROMPT).toContain("Enter = none");
+    expect(KEY_PROMPT_KEEP).toContain("Enter to keep it");
   });
 
-  it("explains how remember-this-device differs from the key", () => {
-    expect(REMEMBER_DEVICE_DIFFERENCE).toContain("Don't ask again");
-    expect(REMEMBER_DEVICE_DIFFERENCE).toContain("still approve now and then");
-  });
-
-  it("is wired into setup.ts rather than duplicated there", () => {
+  it("asks the one question through setup.ts, and the old two prompts are gone", () => {
     const setup = read("src/setup.ts");
-    expect(setup).toContain("KEY_HOWTO_LINES");
-    expect(setup).toContain("KEY_PROMPT");
-    expect(setup).toContain("REMEMBER_DEVICE_DIFFERENCE");
+    expect(setup).toContain("askShortcutQuestion");
+    expect(setup).not.toContain("Remember this device so later sign-ins");
+    expect(setup).not.toContain("Authenticator setup key or otpauth:// link (optional)");
+    expect(setup).not.toContain("Step 3b");
   });
 });
 
