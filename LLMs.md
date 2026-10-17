@@ -24,7 +24,31 @@ node --version
 
 If Node is missing or below v20, tell the user to install the LTS from https://nodejs.org/ and stop. Require macOS Keychain, Windows Credential Manager, or an unlocked Linux Secret Service with `secret-tool` (`libsecret-tools` on Debian/Ubuntu). Linux uses libsecret directly; secrets pass through stdin, and temporary kernel-key storage is never used. v2 has no plaintext credential fallback.
 
-### 2. Run the setup wizard
+### 2. Prepare everything yourself, then hand sign-in to the user
+
+Ask the user two non-secret things: their school (a preset flag below, or the Brightspace address) and their Brightspace username. **Never ask for their password or any 2FA code or key**, and never put one on a command line. Then run:
+
+```bash
+npx -y brightspace-mcp-server@latest setup --agent --purdue --username <their username>
+npx -y brightspace-mcp-server@latest setup --agent --url <brightspace address> --username <their username>
+npx -y brightspace-mcp-server@latest setup --agent --suny --username <their username> --campus "<their campus>"
+```
+
+`setup --agent` never prompts, never reads or saves a password, and never opens a browser. It saves the school and username to `~/.brightspace-mcp/config.json`, registers the server in every detected client that has no `brightspace` entry (Claude Desktop, Cursor, Antigravity, Codex, Claude Code), leaves an entry that points somewhere else unchanged and prints it, and ends with the handoff. It refuses `--password` and any unknown flag (exit code 2) without echoing the value. It is safe to rerun; a rerun for the same school keeps the user's saved sign-in choices.
+
+Then hand off, in this order:
+
+1. Tell the user to run this in a terminal themselves. It asks only what needs them (password, saved only in the OS credential store; how they approve 2FA; the 2FA shortcut question), then signs in, with MFA if their school asks:
+   ```bash
+   npx -y brightspace-mcp-server@latest setup --sign-in
+   ```
+   If it is interrupted, they run the same command again. If only the sign-in failed, their answers are saved and `npx -y brightspace-mcp-server@latest auth` retries just the sign-in.
+2. When they say it finished, run `npx -y brightspace-mcp-server@latest doctor`. It makes one real Brightspace request (the course list). Exit code 0 means ready; otherwise report the ✗ line's next step.
+3. Continue with step 3 below for any client `setup --agent` did not configure, then step 4.
+
+### 2b. Or: the interactive setup wizard
+
+If the user would rather answer everything in one go, they run the wizard themselves:
 
 ```bash
 npx -y brightspace-mcp-server@latest setup
@@ -274,7 +298,7 @@ While a sign-in is still being worked on in the background, `get_assignments`, `
 ```
 src/
   index.ts                  MCP server entrypoint, registers tools
-  setup.ts                  Setup wizard (CLI subcommand `setup`)
+  setup.ts                  Setup wizard (CLI subcommand `setup`; `--agent` and `--sign-in` split it for agent-led installs)
   auth-cli.ts               Manual reauth (CLI subcommand `auth`; `auth --logout` ends the saved session)
   doctor.ts                 Beginner diagnostic (CLI subcommand `doctor`)
   update.ts                 Self-update checker
@@ -339,6 +363,8 @@ src/
 | Command | What it does |
 |---------|--------------|
 | `npx -y brightspace-mcp-server@latest setup` | Interactive setup wizard |
+| `npx -y brightspace-mcp-server@latest setup --agent --username <name> (--url <address> \| --<school>) [--campus <campus>]` | Non-interactive setup for an AI agent: saves the school and username and registers detected clients; never asks for or saves a password |
+| `npx -y brightspace-mcp-server@latest setup --sign-in` | The user's step after `setup --agent`: password and 2FA questions, then sign-in |
 | `npx -y brightspace-mcp-server@latest setup --purdue` | Setup with Purdue preset |
 | `npx -y brightspace-mcp-server@latest setup --suny` | Setup with SUNY preset (also asks for campus) |
 | `npx -y brightspace-mcp-server@latest setup --cuny` | Setup with CUNY preset |

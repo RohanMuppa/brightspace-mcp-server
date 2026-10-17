@@ -34,3 +34,6 @@ export const GLOBAL_INSTALL_COMMAND = `npm install -g ${PACKAGE_NAME}@latest`;
 
 /** Drop cached npx copies so the next `@latest` genuinely refetches. */
 export const CLEAR_NPX_CACHE_COMMAND = "npx clear-npx-cache";
+
+/** The person's own sign-in step after an agent has run `setup --agent`. Always runs the current published release. */
+export const SIGN_IN_COMMAND = `npx -y ${PACKAGE_NAME}@latest setup --sign-in`;

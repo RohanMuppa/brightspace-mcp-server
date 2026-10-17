@@ -40,6 +40,8 @@ https://github.com/RohanMuppa/brightspace-mcp-server/blob/main/LLMs.md
 (use --purdue at Purdue, --suny at SUNY, --tudelft at TU Delft, --cuny at CUNY, --leiden at Leiden, --mcgill at McGill, --ngeeann at Ngee Ann Polytechnic, or --javeriana at Javeriana Cali).
 ```
 
+The AI does every step that needs no person (`setup --agent`: it saves your school and username and connects your apps, without ever asking for your password), then hands you one command, `npx -y brightspace-mcp-server@latest setup --sign-in`, where you type your password and approve the sign-in. Afterwards it runs `doctor` to confirm a real Brightspace request works.
+
 Using a different AI app? Add the command `npx -y brightspace-mcp-server@latest` to its MCP settings (on Windows: `cmd /c npx -y brightspace-mcp-server@latest`). Exact steps for each app: [docs/troubleshooting.md](docs/troubleshooting.md).
 
 ## Does my school work?
