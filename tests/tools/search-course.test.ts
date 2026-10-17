@@ -140,7 +140,7 @@ function setup(options: {
   moduleStructures?: Record<number, unknown[]>;
   news?: unknown[];
   forums?: unknown[] | (() => unknown[]);
-  forumTopics?: Record<number, unknown[]>;
+  forumTopics?: Record<number, unknown[] | (() => unknown[])>;
 } = {}): Harness {
   const {
     rootModules = [ROOT_MODULE],
@@ -168,7 +168,8 @@ function setup(options: {
       const topicsMatch = path.match(/\/discussions\/forums\/(\d+)\/topics\/$/);
       if (topicsMatch) {
         const id = Number(topicsMatch[1]);
-        return forumTopics[id] ?? [];
+        const topics = forumTopics[id] ?? [];
+        return typeof topics === "function" ? topics() : topics;
       }
       throw new Error(`Unexpected request: ${path}`);
     }),
@@ -272,6 +273,27 @@ describe("search_course partial source failure", () => {
     expect(body.results.some((r: any) => r.kind === "topic")).toBe(true);
     expect(body.results.some((r: any) => r.kind === "announcement")).toBe(true);
     expect(body.results.some((r: any) => r.kind === "discussion")).toBe(false);
+  });
+
+  it("names a forum whose topics fail to load in `note` while still searching the other forums", async () => {
+    const LOCKED_FORUM_ID = 31;
+    const { call } = setup({
+      forums: [...FORUMS, { ...FORUMS[0], ForumId: LOCKED_FORUM_ID, Name: "Week 3 Q&A" }],
+      forumTopics: {
+        [FORUM_ID]: FORUM_TOPICS,
+        [LOCKED_FORUM_ID]: () => {
+          throw new ApiError(403, `/discussions/forums/${LOCKED_FORUM_ID}/topics/`, "Forbidden");
+        },
+      },
+    });
+
+    const result = await call({ courseId: COURSE_ID, query: "midterm review", limit: 50 });
+    expect(result.isError).toBeUndefined();
+    const body = JSON.parse(result.content[0].text);
+
+    expect(body.note).toBe('Could not search: discussions: topics in "Week 3 Q&A" no access (403)');
+    // The readable forum's topic is still found.
+    expect(body.results.some((r: any) => r.kind === "discussion" && r.id === 401)).toBe(true);
   });
 
   it("omits `note` entirely when every source succeeds", async () => {
