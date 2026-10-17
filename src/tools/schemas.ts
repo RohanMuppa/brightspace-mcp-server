@@ -82,6 +82,8 @@ export const DownloadFileSchema = z.object({
     .describe("Course ID the file belongs to."),
   topicId: z.coerce.number().int().positive().optional()
     .describe("Content topic ID to download (for course content files)."),
+  coursePath: z.string().min(1).max(1024).optional()
+    .describe("A file in the course's file store, for files an instructor linked inside a module or page description instead of adding as a content topic (get_course_content lists them as courseFiles on the module). Pass one of those paths (e.g. 'Notes/Lecture 1.pdf') or the whole quickLink URL. Not combined with topicId, folderId, or newsId."),
   folderId: z.coerce.number().int().positive().optional()
     .describe("Dropbox folder ID. Downloads your submission by default; set source to assignmentAttachment for an instructor-provided handout."),
   fileId: z.coerce.number().int().positive().optional()
