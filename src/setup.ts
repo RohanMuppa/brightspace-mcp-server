@@ -23,7 +23,7 @@ import { deleteStoredTotpUri, getStoredTotpUri } from "./auth/credential-store.j
 import { askShortcutQuestion, type ShortcutIO } from "./utils/two-factor-shortcuts.js";
 import { writeFileAtomicSync } from "./utils/atomic-write.js";
 import type { ConfigStoreData } from "./utils/config-store.js";
-import { AUTH_COMMAND, DOCTOR_COMMAND } from "./utils/commands.js";
+import { AUTH_COMMAND, DOCTOR_COMMAND, SETUP_COMMAND, SIGN_IN_COMMAND } from "./utils/commands.js";
 import {
   classifyRegistration,
   cliMcpClients,
@@ -128,9 +128,27 @@ export const SCHOOL_PRESETS: Record<string, SchoolPreset> = {
  * wizard an object with no `baseUrl`.
  */
 export function presetForArgv(argv: string[] = process.argv): SchoolPreset | undefined {
-  const flag = argv.find((a) => a.startsWith("--"))?.replace(/^--/, "").toLowerCase();
-  if (!flag || !Object.prototype.hasOwnProperty.call(SCHOOL_PRESETS, flag)) return undefined;
-  return SCHOOL_PRESETS[flag];
+  const flag = argv
+    .filter((a) => a.startsWith("--"))
+    .map((a) => a.replace(/^--/, "").toLowerCase())
+    .find(isPresetFlag);
+  return flag ? SCHOOL_PRESETS[flag] : undefined;
+}
+
+function isPresetFlag(flag: string): boolean {
+  return Object.prototype.hasOwnProperty.call(SCHOOL_PRESETS, flag);
+}
+
+/**
+ * `--agent` is the non-interactive half an AI agent runs; `--sign-in` is the
+ * one step left for the person. Plain `setup` is the full wizard.
+ */
+export type SetupMode = "wizard" | "agent" | "sign-in";
+
+export function setupMode(argv: string[] = process.argv): SetupMode {
+  if (argv.includes("--agent")) return "agent";
+  if (argv.includes("--sign-in")) return "sign-in";
+  return "wizard";
 }
 
 const preset = presetForArgv();
@@ -510,6 +528,159 @@ async function registerWithClient(
   return false;
 }
 
+// ── Agent setup (non-interactive) ──────────────────────────────────
+
+/** One detected MCP client, as agent setup sees it. */
+export interface AgentClient {
+  displayName: string;
+  inspect: () => Registration;
+  write: () => boolean;
+}
+
+export interface AgentSetupDeps {
+  readExisting: () => ConfigStoreData | null;
+  save: (config: ConfigStoreData) => Promise<void>;
+  /** Only the clients installed on this computer. */
+  clients: () => AgentClient[];
+}
+
+interface AgentPlan {
+  baseUrl: string;
+  username: string;
+  campus?: string;
+}
+
+const AGENT_USAGE = "Usage: setup --agent (--url <brightspace address> | --<school>) --username <username> [--campus <campus>]";
+
+/**
+ * Reads `setup --agent` flags. Anything else is refused, and only by flag
+ * name: a stray `--password hunter2` must stop setup without the value ever
+ * reaching the agent's transcript. The password is the person's to type.
+ */
+function parseAgentArgs(argv: string[]): AgentPlan | { error: string } {
+  const values: Record<string, string> = {};
+  const tokens = argv.slice(2);
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i];
+    if (token === "setup" && i === 0) continue;
+    if (!token.startsWith("--")) return { error: "Unexpected argument." };
+    const flag = token.replace(/^--/, "").replace(/=.*$/s, "").toLowerCase();
+    if (flag === "agent" || isPresetFlag(flag)) continue;
+    if (flag !== "url" && flag !== "username" && flag !== "campus") {
+      return {
+        error: flag === "password"
+          ? "setup --agent never takes a password. The person types it at the sign-in step."
+          : `Unknown option --${flag}.`,
+      };
+    }
+    const value = tokens[i + 1];
+    if (value === undefined || value.startsWith("--") || token.includes("=")) {
+      return { error: `--${flag} needs a value, written as --${flag} <value>.` };
+    }
+    values[flag] = value.trim();
+    i++;
+  }
+
+  const school = presetForArgv(argv);
+  const baseUrl = school?.baseUrl ?? normalizeUrl(values.url ?? "");
+  if (!values.url && !school) return { error: "Give the school with --url <brightspace address> or a school flag such as --purdue." };
+  if (!isValidUrl(baseUrl)) return { error: "--url must be a Brightspace web address, like purdue.brightspace.com." };
+  if (!values.username) return { error: "--username is required." };
+  if (school?.campusPrompt && !values.campus) return { error: `--campus is required for ${school.name}.` };
+  return { baseUrl, username: values.username, ...(values.campus ? { campus: values.campus } : {}) };
+}
+
+/**
+ * The agent's half of setup: every step that needs no person. It saves the
+ * school and username, registers Brightspace in each installed client that
+ * has no entry, and ends with the handoff to the person's sign-in step. It
+ * never prompts, never reads or saves a password, and never opens a browser,
+ * so it is safe to rerun. An entry pointing somewhere else is reported and
+ * left alone, since replacing it is the person's call.
+ */
+export async function runAgentSetup(
+  argv: string[],
+  deps: AgentSetupDeps = defaultAgentSetupDeps(),
+): Promise<{ exitCode: number; lines: string[] }> {
+  const plan = parseAgentArgs(argv);
+  if ("error" in plan) return { exitCode: 2, lines: [plan.error, AGENT_USAGE] };
+
+  const existing = deps.readExisting();
+  const kept = existing && sameSchool(existing.baseUrl, plan.baseUrl) ? existing : null;
+  await deps.save(buildConfigToSave(existing, {
+    ...plan,
+    // Left to the person's sign-in step, which asks; a rerun keeps their answer.
+    headless: kept?.headless ?? true,
+  }));
+
+  const lines = [`Saved ${plan.baseUrl} for ${plan.username} to ${getConfigStorePath()}. No password was asked for or saved.`];
+  for (const client of deps.clients()) {
+    const registration = client.inspect();
+    if (registration.state === "current") {
+      lines.push(`${client.displayName}: already configured.`);
+    } else if (registration.state === "different") {
+      lines.push(`${client.displayName}: left unchanged. Its "brightspace" entry runs ${registration.current}. To replace it, the person can run ${SETUP_COMMAND}.`);
+    } else {
+      let ok = false;
+      try {
+        ok = client.write();
+      } catch {
+        // Reported below like any other failed write.
+      }
+      lines.push(ok ? `${client.displayName}: configured.` : `${client.displayName}: could not be configured. See README.md for the manual command.`);
+    }
+  }
+
+  lines.push(
+    "",
+    "Everything that needs no person is done. Hand off to the person:",
+    `  1. In a terminal, run: ${SIGN_IN_COMMAND}`,
+    "     It asks for their password (saved only in the operating system's credential store) and how they approve",
+    "     two-factor prompts, then signs in. If it is interrupted, running the same command again picks up from there.",
+    `  2. When they say it finished, run: ${DOCTOR_COMMAND}`,
+    "     It makes a real Brightspace request; exit code 0 means ready. Otherwise it names the step to fix.",
+    "  3. Restart the AI client so it loads the server.",
+  );
+  return { exitCode: 0, lines };
+}
+
+function defaultAgentSetupDeps(): AgentSetupDeps {
+  return {
+    readExisting: readExistingConfig,
+    save: saveSecureConfig,
+    clients: () => {
+      const clients: AgentClient[] = [];
+      const jsonClient = (displayName: string, configPath: string | null) => {
+        if (configPath && fs.existsSync(path.dirname(configPath))) {
+          clients.push({ displayName, inspect: () => inspectMcpClient(configPath), write: () => configureMcpClient(configPath) });
+        }
+      };
+      jsonClient("Claude Desktop", getClaudeDesktopConfigPath());
+      jsonClient("Cursor", getCursorConfigPath());
+      jsonClient("Antigravity", getAntigravityConfigPath());
+      for (const client of cliMcpClients()) {
+        if (!isCliAvailable(client)) continue;
+        clients.push({
+          displayName: client.displayName,
+          inspect: () => inspectCliMcpClient(client),
+          write: () => registerCliMcpClient(client, { replace: false }),
+        });
+      }
+      return clients;
+    },
+  };
+}
+
+/** What the person's sign-in step signs in to, or null when setup has not saved it yet. */
+export function signInTarget(existing: ConfigStoreData | null): AgentPlan | null {
+  if (!existing?.baseUrl || !existing.username) return null;
+  return {
+    baseUrl: existing.baseUrl,
+    username: existing.username,
+    ...(existing.campus ? { campus: existing.campus } : {}),
+  };
+}
+
 function runAuth(): Promise<boolean> {
   const scriptPath = path.resolve(thisDir, "auth-cli.js");
 
@@ -527,88 +698,20 @@ function runAuth(): Promise<boolean> {
   });
 }
 
-// ── Main wizard ────────────────────────────────────────────────────
+// ── Sign-in details (asked by the wizard and by --sign-in) ──────────
 
-async function main(): Promise<void> {
-  // Handle Ctrl+C gracefully
-  process.on("SIGINT", () => {
-    console.log("\n\nSetup cancelled.");
-    process.exit(0);
-  });
-
-  console.log("");
-  if (preset) {
-    console.log(bold(`Brightspace MCP Server — ${preset.name} Setup`));
-    console.log("=".repeat(`Brightspace MCP Server — ${preset.name} Setup`.length));
-  } else {
-    console.log(bold("Brightspace MCP Server — Setup Wizard"));
-    console.log("======================================");
-  }
-  console.log(dim("  By Rohan Muppa — github.com/rohanmuppa/brightspace-mcp-server"));
-  console.log("");
-
+/**
+ * Steps 3-5 of the wizard: the questions only the person can answer
+ * (password, how they approve two-factor prompts, the 2FA shortcut), then the
+ * save. Owns its own readline, so none is left open across the hidden
+ * password prompt.
+ */
+async function askAndSaveSignInDetails(target: AgentPlan): Promise<void> {
+  const { baseUrl, username, campus } = target;
   const rl = readline.createInterface({
     input: process.stdin,
     output: process.stdout,
   });
-
-  // ── Step 1: Brightspace URL ──────────────────────────────────────
-  let baseUrl = "";
-  if (preset) {
-    baseUrl = preset.baseUrl;
-    console.log(dim(`  Brightspace URL: ${baseUrl}`));
-    console.log("");
-  } else {
-    console.log(dim("  Your school's Brightspace address — the web address you open to see your courses."));
-    while (!baseUrl) {
-      const raw = await ask(
-        rl,
-        "What is your Brightspace address? (e.g., purdue.brightspace.com): ",
-      );
-      const normalized = normalizeUrl(raw);
-      if (!raw || !isValidUrl(normalized)) {
-        console.log(yellow("  Please enter a valid address, like purdue.brightspace.com"));
-        continue;
-      }
-      baseUrl = normalized;
-    }
-    console.log(dim(`  → ${baseUrl}`));
-    console.log("");
-  }
-
-  // ── Campus (shared multi-campus instances only) ──────────────────
-  let campus = "";
-  if (preset?.campusPrompt) {
-    console.log(dim("  Several campuses share this Brightspace site."));
-    while (!campus) {
-      campus = await ask(rl, `${preset.campusPrompt} `);
-      if (!campus) console.log(yellow("  Campus is required for automatic sign-in."));
-    }
-    console.log(
-      campus
-        ? dim(`  → ${campus}`)
-        : dim("  Set your campus before authenticating."),
-    );
-    console.log("");
-  }
-
-  // ── Step 2: Username ─────────────────────────────────────────────
-  const usernamePrompt = preset
-    ? `What is your ${preset.usernameLabel}? `
-    : "What username do you use to sign in to Brightspace? ";
-  if (preset?.usernameHint) {
-    console.log(dim(`  ${preset.usernameHint}`));
-  } else {
-    console.log(dim("  The same username you type on your school's Brightspace sign-in page."));
-  }
-  let username = "";
-  while (!username) {
-    username = await ask(rl, usernamePrompt);
-    if (!username) {
-      console.log(yellow("  Username is required."));
-    }
-  }
-  console.log("");
 
   // ── Step 3: Password (hidden) ────────────────────────────────────
   // Opt-in only, asked the way remember-MFA is: passwordless trades a saved
@@ -658,7 +761,6 @@ async function main(): Promise<void> {
     input: process.stdin,
     output: process.stdout,
   });
-  const configuredClients: string[] = [];
 
   // ── Step 4: MFA info ─────────────────────────────────────────────
   console.log(dim("  Your school may ask you to approve the sign-in a second way — on your phone, with a code, or something else."));
@@ -757,6 +859,100 @@ async function main(): Promise<void> {
   }
   console.log(green("  Config saved to: " + getConfigStorePath()));
   console.log("");
+  rl2.close();
+}
+
+// ── Main wizard ────────────────────────────────────────────────────
+
+async function main(): Promise<void> {
+  // Handle Ctrl+C gracefully
+  process.on("SIGINT", () => {
+    console.log("\n\nSetup cancelled.");
+    process.exit(0);
+  });
+
+  console.log("");
+  if (preset) {
+    console.log(bold(`Brightspace MCP Server — ${preset.name} Setup`));
+    console.log("=".repeat(`Brightspace MCP Server — ${preset.name} Setup`.length));
+  } else {
+    console.log(bold("Brightspace MCP Server — Setup Wizard"));
+    console.log("======================================");
+  }
+  console.log(dim("  By Rohan Muppa — github.com/rohanmuppa/brightspace-mcp-server"));
+  console.log("");
+
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
+
+  // ── Step 1: Brightspace URL ──────────────────────────────────────
+  let baseUrl = "";
+  if (preset) {
+    baseUrl = preset.baseUrl;
+    console.log(dim(`  Brightspace URL: ${baseUrl}`));
+    console.log("");
+  } else {
+    console.log(dim("  Your school's Brightspace address — the web address you open to see your courses."));
+    while (!baseUrl) {
+      const raw = await ask(
+        rl,
+        "What is your Brightspace address? (e.g., purdue.brightspace.com): ",
+      );
+      const normalized = normalizeUrl(raw);
+      if (!raw || !isValidUrl(normalized)) {
+        console.log(yellow("  Please enter a valid address, like purdue.brightspace.com"));
+        continue;
+      }
+      baseUrl = normalized;
+    }
+    console.log(dim(`  → ${baseUrl}`));
+    console.log("");
+  }
+
+  // ── Campus (shared multi-campus instances only) ──────────────────
+  let campus = "";
+  if (preset?.campusPrompt) {
+    console.log(dim("  Several campuses share this Brightspace site."));
+    while (!campus) {
+      campus = await ask(rl, `${preset.campusPrompt} `);
+      if (!campus) console.log(yellow("  Campus is required for automatic sign-in."));
+    }
+    console.log(
+      campus
+        ? dim(`  → ${campus}`)
+        : dim("  Set your campus before authenticating."),
+    );
+    console.log("");
+  }
+
+  // ── Step 2: Username ─────────────────────────────────────────────
+  const usernamePrompt = preset
+    ? `What is your ${preset.usernameLabel}? `
+    : "What username do you use to sign in to Brightspace? ";
+  if (preset?.usernameHint) {
+    console.log(dim(`  ${preset.usernameHint}`));
+  } else {
+    console.log(dim("  The same username you type on your school's Brightspace sign-in page."));
+  }
+  let username = "";
+  while (!username) {
+    username = await ask(rl, usernamePrompt);
+    if (!username) {
+      console.log(yellow("  Username is required."));
+    }
+  }
+  console.log("");
+
+  rl.close();
+  await askAndSaveSignInDetails({ baseUrl, username, campus: campus || undefined });
+
+  let rl2 = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
+  const configuredClients: string[] = [];
 
   // ── Step 6: Authenticate now? ────────────────────────────────────
   const authNow = await ask(rl2, "Sign in now, so everything is ready to go? (yes/no): ");
@@ -883,12 +1079,59 @@ async function main(): Promise<void> {
   console.log("");
 }
 
+// ── Agent and sign-in entry points ─────────────────────────────────
+
+async function agentSetup(): Promise<void> {
+  const result = await runAgentSetup(process.argv);
+  for (const line of result.lines) console.log(line);
+  process.exitCode = result.exitCode;
+}
+
+/** The person's step after `setup --agent`: their password and 2FA answers, then the sign-in itself. */
+async function signIn(): Promise<void> {
+  process.on("SIGINT", () => {
+    console.log("\n\nSign-in cancelled. Run the same command again to pick up from here.");
+    process.exit(0);
+  });
+
+  console.log("");
+  console.log(bold("Brightspace MCP Server — Sign-in"));
+  console.log("================================");
+  console.log("");
+
+  const target = signInTarget(readExistingConfig());
+  if (!target) {
+    console.log(yellow(`  No school is saved yet. Run ${SETUP_COMMAND} instead; it asks for everything.`));
+    console.log("");
+    process.exitCode = 1;
+    return;
+  }
+  console.log(dim(`  Signing in ${target.username} at ${target.baseUrl}.`));
+  console.log("");
+
+  await askAndSaveSignInDetails(target);
+
+  console.log(dim("  Signing you in..."));
+  console.log("");
+  if (await runAuth()) {
+    console.log(green("\n  Signed in!"));
+    console.log(`  Tell your AI assistant you're done; it checks everything with: ${DOCTOR_COMMAND}`);
+  } else {
+    console.log(yellow("\n  Sign-in didn't finish. Your answers are saved, so you can retry just the sign-in with:"));
+    console.log(`    ${AUTH_COMMAND}`);
+    console.log(dim(`  To change your password or 2FA answers, run ${SIGN_IN_COMMAND} again.`));
+    process.exitCode = 1;
+  }
+  console.log("");
+}
+
 // Both entry points — the `brightspace-setup` bin and `brightspace-mcp-server
 // setup`, which imports this module — start the wizard here. VITEST is set
 // only by the test runner, which imports the module for the helpers above and
 // must not open prompts on stdin; no user environment sets it.
 if (!process.env.VITEST) {
-  main().catch((err) => {
+  const run = { wizard: main, agent: agentSetup, "sign-in": signIn }[setupMode()];
+  run().catch((err) => {
     console.error("Setup failed:", err instanceof Error ? err.message : String(err));
     process.exit(1);
   });
