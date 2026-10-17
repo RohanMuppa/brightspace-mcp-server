@@ -363,19 +363,28 @@ export class D2LApiClient {
    * read by a read-only tool is not worth an MFA prompt.
    */
   async getPage(path: string): Promise<string | null> {
+    const response = await this.getPageRaw(path);
+    return response ? await response.text() : null;
+  }
+
+  /**
+   * Like getPage, but returns the response itself so a binary body (a course
+   * file reached through a quickLink or /content/enforced path) is not decoded
+   * as text. Same cookie, same origin check, same null on a dead session.
+   */
+  async getPageRaw(path: string): Promise<Response | null> {
     // The cookie belongs to this Brightspace alone. A path that would make
     // `${baseUrl}${path}` name another host (`@evil.example/`, `.evil.example/`,
     // `//evil.example/`) is refused before the cookie is ever read.
     if (!this.isSameOriginPath(path)) {
-      log("WARN", "getPage refused a path outside the Brightspace origin");
+      log("WARN", "getPageRaw refused a path outside the Brightspace origin");
       return null;
     }
     const token = await this.tokenManager.getToken();
     if (!token?.cookieHeader) return null;
     const cookieToken: TokenData = { ...token, accessToken: `cookie:${token.cookieHeader}` };
     try {
-      const response = await this.retrying(() => this.throttled(() => this.makeRawRequest(path, cookieToken)));
-      return await response.text();
+      return await this.retrying(() => this.throttled(() => this.makeRawRequest(path, cookieToken)));
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) return null;
       throw error;

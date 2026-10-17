@@ -23,6 +23,8 @@ import {
 } from "../utils/file-validator.js";
 import { secureStreamDownload, readBodyCapped } from "../utils/download-helpers.js";
 import { DownloadError } from "../utils/download-errors.js";
+import { AUTH_COMMAND } from "../utils/commands.js";
+import { parseCoursePath, QUICKLINK_PATH } from "../utils/course-files.js";
 import { extractPdfText } from "../utils/pdf-extractor.js";
 import { officeDocumentText } from "../utils/zip-extract.js";
 import fs from "node:fs/promises";
@@ -298,7 +300,7 @@ export function registerDownloadFile(
     {
       title: "Download File",
       description:
-        "Download a file from course content, instructor assignment attachments (source: assignmentAttachment with folderId + fileId), assignment submissions, or an announcement's attachments. Use this when the user wants a file from Brightspace course content, dropbox submissions, or an announcement (newsId + fileId, from get_announcements). Two response modes: (1) INLINE (default — omit downloadPath): the file comes back directly in the tool response — extracted text for PDFs and Office documents, an image block for jpeg/png/gif/webp, or a short description for anything else — so it can be read immediately without touching any filesystem. This is the right choice in clients like Claude Desktop, whose analysis/sandbox tools cannot see a file the MCP server writes to its own host filesystem. (2) DISK (set downloadPath to an absolute path on the HOST filesystem the MCP server runs on): the file is saved there. Ask the user where to save it before using disk mode — never guess a directory. After identifying the file, suggest a clean readable filename (e.g., 'Lecture 7 - Memory Management.pdf' instead of 'L07_CS251_2026SP_v2.pdf') and pass it as customFilename, or omit it to keep the original. If a content-topic download fails because the file isn't released yet, the response explains why when Brightspace's module/topic metadata supports it (not yet open, ended, locked, or hidden).",
+        "Download a file from course content, files linked by path inside a module description (coursePath, from get_course_content's quickLink URLs with type=coursefile), instructor assignment attachments (source: assignmentAttachment with folderId + fileId), assignment submissions, or an announcement's attachments. Use this when the user wants a file from Brightspace course content, dropbox submissions, or an announcement (newsId + fileId, from get_announcements). Two response modes: (1) INLINE (default — omit downloadPath): the file comes back directly in the tool response — extracted text for PDFs and Office documents, an image block for jpeg/png/gif/webp, or a short description for anything else — so it can be read immediately without touching any filesystem. This is the right choice in clients like Claude Desktop, whose analysis/sandbox tools cannot see a file the MCP server writes to its own host filesystem. (2) DISK (set downloadPath to an absolute path on the HOST filesystem the MCP server runs on): the file is saved there. Ask the user where to save it before using disk mode — never guess a directory. After identifying the file, suggest a clean readable filename (e.g., 'Lecture 7 - Memory Management.pdf' instead of 'L07_CS251_2026SP_v2.pdf') and pass it as customFilename, or omit it to keep the original. If a content-topic download fails because the file isn't released yet, the response explains why when Brightspace's module/topic metadata supports it (not yet open, ended, locked, or hidden).",
       inputSchema: DownloadFileSchema,
     },
     async (args: any) => {
@@ -306,8 +308,12 @@ export function registerDownloadFile(
         log("DEBUG", "download_file tool called", { args });
 
         // Parse and validate input
-        const { courseId, topicId, folderId, newsId, fileId, downloadPath, customFilename, source } =
+        const { courseId, topicId, coursePath, folderId, newsId, fileId, downloadPath, customFilename, source } =
           DownloadFileSchema.parse(args);
+
+        if (coursePath !== undefined && (topicId !== undefined || folderId !== undefined || newsId !== undefined || fileId !== undefined || source !== undefined)) {
+          return errorResponse("coursePath cannot be combined with topicId, folderId, newsId, fileId, or source.");
+        }
 
         if (source !== undefined && (topicId !== undefined || newsId !== undefined || folderId === undefined || fileId === undefined)) {
           return errorResponse("source requires folderId and fileId and cannot be combined with topicId or newsId.");
@@ -346,7 +352,11 @@ export function registerDownloadFile(
         }
 
         // Determine download source
-        if (topicId !== undefined) {
+        if (coursePath !== undefined) {
+          const filePath = parseCoursePath(coursePath, courseId);
+          if (typeof filePath !== "string") return errorResponse(filePath.error);
+          return await downloadCourseFile(apiClient, courseId, filePath, downloadPath, customFilename);
+        } else if (topicId !== undefined) {
           // Content file download
           validateContentId(topicId);
           return await downloadContentFile(
@@ -390,6 +400,35 @@ export function registerDownloadFile(
       }
     }
   );
+}
+
+/**
+ * Download a file from the course file store. Instructors often link these
+ * from a module or page description instead of adding them as content
+ * topics, so they have no topicId. Brightspace serves them to the signed-in
+ * web session, not to the API token, so this goes through the session cookie.
+ */
+async function downloadCourseFile(
+  apiClient: D2LApiClient,
+  courseId: number,
+  filePath: string,
+  downloadPath: string | undefined,
+  customFilename?: string
+): Promise<CallToolResult> {
+  log("INFO", `Downloading course file: courseId=${courseId}, path=${filePath}`);
+
+  const response = await apiClient.getPageRaw(
+    `${QUICKLINK_PATH}?ou=${courseId}&type=coursefile&fileId=${encodeURIComponent(filePath)}`
+  );
+  if (!response) {
+    return errorResponse(
+      `Course files need a Brightspace web session cookie, and none is available. Sign in with \`${AUTH_COMMAND}\` and retry. A server that runs on D2L_ACCESS_TOKEN alone has no cookie: set D2L_SESSION_COOKIE as well, or sign in through the browser.`
+    );
+  }
+
+  const disposition = response.headers.get("Content-Disposition") ?? "";
+  const filename = parseContentDispositionFilename(disposition) ?? filePath.split("/").pop() ?? "download";
+  return finishDownload(response, filename, downloadPath, customFilename, "Course file");
 }
 
 /** Download an instructor-provided handout, independently of student submissions. */

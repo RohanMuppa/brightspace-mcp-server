@@ -11,6 +11,7 @@ import { toolResponse, sanitizeError } from "./tool-helpers.js";
 import { convertHtmlToMarkdown } from "../utils/html-converter.js";
 import { matchesModifiedSince } from "../utils/modified-since.js";
 import { log } from "../utils/logger.js";
+import { extractCourseFilePaths } from "../utils/course-files.js";
 import { contentAvailability, type ContentAvailability } from "./content-availability.js";
 
 // D2L Content API response type
@@ -177,6 +178,8 @@ export async function buildContentTree(
         log('DEBUG', `Content depth ceiling of ${MAX_CONTENT_DEPTH} reached at module ${item.Id}: not descending further`);
       }
 
+      const courseFiles = item.Description?.Html ? extractCourseFilePaths(item.Description.Html, courseId) : [];
+
       // Only include module if it has matching children (or filter is 'all')
       if (typeFilter === 'all' || processedChildren.length > 0) {
         tree.push({
@@ -186,6 +189,7 @@ export async function buildContentTree(
           description: item.Description?.Html?.trim()
             ? convertHtmlToMarkdown(item.Description.Html).markdown
             : item.Description?.Text ?? null,
+          ...(courseFiles.length > 0 ? { courseFiles } : {}),
           ...(item.ModuleDueDate ? { dueDate: item.ModuleDueDate } : {}),
           ...(item.IsHidden ? { isHidden: item.IsHidden } : {}),
           ...(item.IsLocked ? { isLocked: item.IsLocked } : {}),

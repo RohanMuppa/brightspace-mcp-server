@@ -179,6 +179,8 @@ interface Setup {
   /** Content-Length header on the raw download. */
   contentLength?: number;
   body?: Buffer | ReadableStream<Uint8Array>;
+  /** Pass null to simulate no stored session cookie for getPageRaw. */
+  pageResponse?: null;
 }
 
 /**
@@ -197,11 +199,20 @@ function largePdfStream(megabytes: number): ReadableStream<Uint8Array> {
   });
 }
 
-function setup({ disposition, submissions, newsItem, contentLength, body = pdfBuffer() }: Setup) {
+function setup({ disposition, submissions, newsItem, contentLength, body = pdfBuffer(), pageResponse }: Setup) {
   const rawRequested: string[] = [];
 
+  const pageRequested: string[] = [];
   const apiClient = {
     le: (orgUnitId: number, p: string) => `/d2l/api/le/1.0/${orgUnitId}${p}`,
+    getPageRaw: vi.fn(async (p: string) => {
+      pageRequested.push(p);
+      if (pageResponse === null) return null;
+      return new Response(body instanceof Buffer ? toArrayBuffer(body) : body, {
+        status: 200,
+        headers: { ...(disposition ? { "Content-Disposition": disposition } : {}) },
+      });
+    }),
     get: vi.fn(async (p: string) => (p.includes("/news/") ? newsItem : submissions)),
     getRaw: vi.fn(async (p: string) => {
       rawRequested.push(p);
@@ -223,7 +234,7 @@ function setup({ disposition, submissions, newsItem, contentLength, body = pdfBu
   };
 
   registerDownloadFile(server as any, apiClient as any);
-  return { call: (args: unknown) => handler!(args), rawRequested };
+  return { call: (args: unknown) => handler!(args), rawRequested, pageRequested };
 }
 
 const parse = (result: any) => JSON.parse(result.content[0].text);
@@ -870,5 +881,84 @@ describe("download_file: instructor assignment attachments", () => {
     const result = await call({ courseId: COURSE, folderId: 5, fileId: 11, topicId: 7, source: "assignmentAttachment" });
     expect(result.isError).toBe(true);
     expect(rawRequested).toEqual([]);
+  });
+});
+
+describe("download_file: course file links (coursePath)", () => {
+  const QUICKLINK = (id: number, file: string) =>
+    `/d2l/common/dialogs/quickLink/quickLink.d2l?ou=${id}&type=coursefile&fileId=${encodeURIComponent(file)}`;
+
+  it("fetches a course file by its path through the cookie-authenticated quickLink and saves it", async () => {
+    const { call, pageRequested, rawRequested } = setup({});
+
+    const result = await call({ courseId: COURSE, coursePath: "Notes/Lecture01.pdf", downloadPath: targetDir });
+
+    expect(pageRequested).toEqual([QUICKLINK(COURSE, "Notes/Lecture01.pdf")]);
+    expect(rawRequested).toEqual([]);
+    expect(await walk(root)).toEqual(["a/b/Lecture01.pdf"]);
+    expect(parse(result).mode).toBe("disk");
+  });
+
+  it("accepts the quickLink URL a module description carries and resolves the same file", async () => {
+    const { call, pageRequested } = setup({});
+    const link = `/d2l/common/dialogs/quickLink/quickLink.d2l?ou=${COURSE}&type=coursefile&fileId=Notes%2fLecture01.pdf`;
+
+    await call({ courseId: COURSE, coursePath: link, downloadPath: targetDir });
+
+    expect(pageRequested).toEqual([QUICKLINK(COURSE, "Notes/Lecture01.pdf")]);
+  });
+
+  it("honours customFilename", async () => {
+    const { call } = setup({});
+
+    await call({ courseId: COURSE, coursePath: "Notes/x.pdf", downloadPath: targetDir, customFilename: "Lecture 1 - Intro.pdf" });
+
+    expect(await walk(root)).toEqual(["a/b/Lecture 1 - Intro.pdf"]);
+  });
+
+  it("returns the file inline when downloadPath is omitted", async () => {
+    const { call } = setup({ body: minimalPdf("Hello logic") });
+
+    const result = await call({ courseId: COURSE, coursePath: "Notes/x.pdf" });
+
+    expect(textOf(result)).toContain("Hello logic");
+  });
+
+  it.each(["../secret.pdf", "Notes/../../secret.pdf", "/etc/passwd", "https://evil.example/a.pdf", "Notes\\..\\a.pdf"])(
+    "refuses the path %s without sending a request",
+    async coursePath => {
+      const { call, pageRequested } = setup({});
+
+      const result = await call({ courseId: COURSE, coursePath, downloadPath: targetDir });
+
+      expect(result.isError).toBe(true);
+      expect(pageRequested).toEqual([]);
+    },
+  );
+
+  it("explains that the session cookie is missing instead of reporting a bare failure", async () => {
+    const { call } = setup({ pageResponse: null });
+
+    const result = await call({ courseId: COURSE, coursePath: "Notes/x.pdf", downloadPath: targetDir });
+
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toMatch(/sign in|re-authenticate/i);
+  });
+
+  it("tells a bearer-token-only user how to supply a session cookie", async () => {
+    const { call } = setup({ pageResponse: null });
+
+    const result = await call({ courseId: COURSE, coursePath: "Notes/x.pdf", downloadPath: targetDir });
+
+    expect(textOf(result)).toContain("D2L_SESSION_COOKIE");
+  });
+
+  it("cannot be combined with topicId", async () => {
+    const { call, pageRequested } = setup({});
+
+    const result = await call({ courseId: COURSE, coursePath: "Notes/x.pdf", topicId: 5, downloadPath: targetDir });
+
+    expect(result.isError).toBe(true);
+    expect(pageRequested).toEqual([]);
   });
 });

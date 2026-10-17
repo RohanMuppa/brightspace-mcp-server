@@ -401,3 +401,37 @@ describe("get_course_content module descriptions (#152)", () => {
     }
   );
 });
+
+describe("get_course_content courseFiles", () => {
+  const link = (file: string, extra = "") =>
+    `<a href="/d2l/common/dialogs/quickLink/quickLink.d2l?ou=101&amp;type=coursefile&amp;fileId=${file}${extra}">x</a>`;
+
+  async function courseFilesFor(Html: string) {
+    const { call } = setupBrokenStructure({ ...SELF_REFERENCING_MODULE, Description: { Text: "", Html } });
+    const body = JSON.parse((await call({ courseId: COURSE_ID })).content[0].text);
+    return body.contentTree[0].courseFiles;
+  }
+
+  it("lists the course file paths linked in a module description, once each", async () => {
+    // The same file is usually linked twice: the visible link and the embedded viewer.
+    const html = `<p>${link("Notes%2fLecture01.pdf")}</p><p>${link("Notes%2fLecture01.pdf")}</p><p>${link("Tutorials%2fT01.pdf")}</p>`;
+
+    expect(await courseFilesFor(html)).toEqual(["Notes/Lecture01.pdf", "Tutorials/T01.pdf"]);
+  });
+
+  it("keeps parentheses and spaces in the file name", async () => {
+    expect(await courseFilesFor(link("Notes%2fsyntax%28new-proof%29.pdf"))).toEqual(["Notes/syntax(new-proof).pdf"]);
+    expect(await courseFilesFor(link("Notes%2fSlide+61+and+63.pdf"))).toEqual(["Notes/Slide 61 and 63.pdf"]);
+  });
+
+  it("ignores LTI links and links to other courses, and omits the field when there are none", async () => {
+    const lti = '<a href="/d2l/common/dialogs/quickLink/quickLink.d2l?ou=101&amp;type=lti&amp;rCode=A">tool</a>';
+    const other = '<a href="/d2l/common/dialogs/quickLink/quickLink.d2l?ou=999&amp;type=coursefile&amp;fileId=Notes%2fa.pdf">x</a>';
+
+    expect(await courseFilesFor(lti + other)).toBeUndefined();
+  });
+
+  it("drops paths that parseCoursePath would refuse", async () => {
+    expect(await courseFilesFor(link("..%2fsecret.pdf") + link("Notes%2fok.pdf"))).toEqual(["Notes/ok.pdf"]);
+  });
+});

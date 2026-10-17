@@ -193,13 +193,13 @@ Registered in `src/tools/index.ts`, schemas in `src/tools/schemas.ts`:
 | `get_calendar_events` | Course calendar events (exams, labs, schedule changes, hand-made deadlines) in a window, default the next 7 days |
 | `get_announcements` | Recent course announcements, with each one's attached files (`attachments`). `body` is the full post as markdown converted from D2L's Html (links, lists, tables and embedded-content addresses kept), falling back to D2L's plain Text only for a text-only post; `pagination.truncated` means more posts remain, never that a body was cut |
 | `get_syllabus` | Syllabus document for a course |
-| `get_course_content` | Module tree and content topics; module descriptions are Markdown preserving embedded links (with plain-text fallback) |
+| `get_course_content` | Module tree and content topics; module descriptions are Markdown preserving embedded links (with plain-text fallback); a module that links course files from its description also carries `courseFiles`, the paths to pass to `download_file` as `coursePath` |
 | `get_discussions` | Discussion forums and recent posts |
 | `search_course` | Keyword search across a course's content (modules/topics/file names), announcements, and discussion forums/topics in one call |
 | `get_roster` | Classlist for a course |
 | `get_my_groups` | The current user's project/discussion groups in a course, with each group's members |
 | `get_classlist_emails` | Emails of classmates and instructors |
-| `download_file` | Get a file attachment — course content (`topicId`), a submission (`folderId` + `fileId`), or an announcement attachment (`newsId` + `fileId`). `downloadPath` is optional: omit it to get the file back inline in the tool response (extracted text for PDFs/Office docs, an image block for jpeg/png/gif/webp, capped at 10MB / 400k extracted characters), or pass an absolute host path to save it to disk (streamed, up to 2GB) |
+| `download_file` | Get a file attachment — course content (`topicId`), a file an instructor linked by path inside a module description rather than adding as a topic (`coursePath`: `Notes/Lecture 1.pdf` or the `quickLink.d2l?...type=coursefile` URL from `get_course_content`; fetched with the saved web session, so it needs a signed-in session), a submission (`folderId` + `fileId`), or an announcement attachment (`newsId` + `fileId`). `downloadPath` is optional: omit it to get the file back inline in the tool response (extracted text for PDFs/Office docs, an image block for jpeg/png/gif/webp, capped at 10MB / 400k extracted characters), or pass an absolute host path to save it to disk (streamed, up to 2GB) |
 | `get_assignment_files` | Read the files attached to an assignment (spec, rubric, starter workbook) and return their text |
 | `get_announcement_files` | Read the files attached to an announcement (prompts, rubric, updated schedule) and return their text |
 | `get_video_transcript` | Transcript of a video embedded in course content (Kaltura, YouTube), with timestamps |
@@ -323,6 +323,7 @@ src/
     config-store.ts         ~/.brightspace-mcp/config.json reader/writer
     config.ts               Resolved config (store + env fallback)
     course-filter.ts        Filter enrolled vs archived courses, and (currentOnly) vs out-of-term courses
+    course-files.ts         Course-file path rules shared by download_file (`coursePath`) and get_course_content (`courseFiles`)
     download-helpers.ts     Stream-to-disk with validation
     file-validator.ts       Magic-byte file-type checks
     html-converter.ts       HTML to Markdown via turndown
