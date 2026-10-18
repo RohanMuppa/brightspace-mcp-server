@@ -158,6 +158,7 @@ export async function runPrepare(args: SetupArgs, overrides: Partial<PrepareDeps
   // ── School ──
   const existing = deps.readExistingConfig();
   let baseUrl: string | undefined;
+  let invalidUrl = false;
   let schoolName: string | undefined;
   if (args.preset) {
     baseUrl = args.preset.baseUrl;
@@ -165,7 +166,8 @@ export async function runPrepare(args: SetupArgs, overrides: Partial<PrepareDeps
   } else if (args.url) {
     const normalized = normalizeUrl(args.url);
     if (isValidUrl(normalized)) baseUrl = new URL(normalized).origin;
-    else steps.push(fail("school", `"${args.url}" isn't a valid Brightspace address — pass it like --url purdue.brightspace.com`));
+    else invalidUrl = true;
+    if (invalidUrl) steps.push(fail("school", `"${args.url}" isn't a valid Brightspace address — pass it like --url purdue.brightspace.com`));
   } else if (existing?.baseUrl) {
     baseUrl = existing.baseUrl;
   }
@@ -201,10 +203,12 @@ export async function runPrepare(args: SetupArgs, overrides: Partial<PrepareDeps
   // ── Network, settings, session (need a school) ──
   let signedIn = false;
   if (baseUrl) {
+    let reachable = true;
     try {
       await deps.discoverVersions(baseUrl);
       steps.push(ok("network", `${baseUrl} is reachable`));
     } catch {
+      reachable = false;
       steps.push(fail("network", `Could not reach ${baseUrl} — check the internet connection and the school address`));
     }
 
@@ -234,7 +238,16 @@ export async function runPrepare(args: SetupArgs, overrides: Partial<PrepareDeps
     if (preset?.campusPrompt && !campus) notes.push("sign-in will ask which campus");
     const noteText = notes.length ? ` (${notes.join("; ")})` : "";
 
-    if (sameSettings(existing, config)) {
+    if (!reachable) {
+      // A mistyped --url must not replace a working setup: nothing is saved
+      // until the school answers.
+      steps.push(fail("settings", "Settings not saved, because the school couldn't be reached — the saved setup is unchanged"));
+    } else if (existing?.password) {
+      // A password from before v2 still sits in config.json, and loading the
+      // config moves it into the credential store. Rewriting the file here
+      // would drop the only copy, so it is left exactly as it is.
+      steps.push(ok("settings", "Settings left as they are: this computer still has a password from an older version, which the next sign-in moves to the credential store"));
+    } else if (sameSettings(existing, config)) {
       steps.push(ok("settings", `Settings already saved, no password stored by prepare${noteText}`));
     } else {
       try {
@@ -296,7 +309,9 @@ export async function runPrepare(args: SetupArgs, overrides: Partial<PrepareDeps
           }
           : {
             needsHuman: true,
-            instructions: "Ask the person which school they're at, then run prepare again with its flag (for example --purdue) or --url <their Brightspace address>.",
+            instructions: invalidUrl
+              ? "The address given with --url isn't a valid Brightspace address. Ask the person for the address they open to see their courses, then run prepare again with --url <that address>."
+              : "Ask the person which school they're at, then run prepare again with its flag (for example --purdue) or --url <their Brightspace address>.",
           };
 
   return {

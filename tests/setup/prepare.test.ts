@@ -220,9 +220,29 @@ describe("setup --prepare", () => {
     expect(result.state).toBe("blocked");
   });
 
-  it("is blocked when the school can't be reached", async () => {
-    const result = await runPrepare(args("--purdue"), harness({ networkUp: false }).deps);
+  it("is blocked when the school can't be reached, and leaves a working setup alone", async () => {
+    const working = { baseUrl: PURDUE, username: "alice", campus: "x", rememberMfa: true, includeCourses: [7] };
+    const h = harness({ networkUp: false, existing: working });
+    const result = await runPrepare(args("--url", "purdue.brightspace.con"), h.deps);
     expect(result.state).toBe("blocked");
+    expect(h.saves).toEqual([]);
+    expect(h.stored()).toEqual(working);
+    expect(result.steps.find((s) => s.id === "settings")?.line).toContain("not saved");
+  });
+
+  it("leaves a config holding a password from an older version as it is, so the only copy isn't lost", async () => {
+    const legacy = { baseUrl: PURDUE, username: "alice", password: "v1secret" };
+    const h = harness({ existing: legacy });
+    const result = await runPrepare(args("--purdue", "--username", "alice"), h.deps);
+    expect(h.saves).toEqual([]);
+    expect(h.stored()).toEqual(legacy);
+    expect(result.steps.find((s) => s.id === "settings")?.line).toContain("older version");
+  });
+
+  it("says the --url address is invalid rather than that no school was given", async () => {
+    const result = await runPrepare(args("--url", "not a url"), harness().deps);
+    expect(result.state).toBe("needs_input");
+    expect(result.next.instructions).toContain("isn't a valid Brightspace address");
   });
 
   it("is blocked when the credential store isn't usable", async () => {

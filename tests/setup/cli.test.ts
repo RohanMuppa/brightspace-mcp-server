@@ -35,6 +35,12 @@ describe.skipIf(!existsSync(setupJs))("setup CLI without a terminal", () => {
     expect(result.stderr).toContain("setup --purdue --prepare");
   });
 
+  it("keeps --url in the prepare command it suggests", () => {
+    const result = run("--url", "learn.example.edu", "--sign-in");
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("setup --url https://learn.example.edu --prepare");
+  });
+
   it("fails on an unknown flag with the usage text", () => {
     const result = run("--prepar");
     expect(result.status).toBe(2);

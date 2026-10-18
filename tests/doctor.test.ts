@@ -587,6 +587,14 @@ describe("doctor: Chromium", () => {
     expect(idOf(result, "browser").ok).toBe(true);
   });
 
+  it("doesn't require Chromium when an environment credential signs in", async () => {
+    const result = await runDoctorChecks(deps({
+      env: { D2L_SESSION_COOKIE: "d2lSessionVal=a; d2lSecureSessionVal=b" },
+      chromiumStatus: async () => ({ headless: "missing", visible: false }),
+    }));
+    expect(idOf(result, "browser").ok).toBe(true);
+  });
+
   it("reports a check that throws as a problem, not a crash", async () => {
     const result = await runDoctorChecks(deps({ chromiumStatus: async () => { throw new Error("boom"); } }));
     expect(idOf(result, "browser").ok).toBe(false);

@@ -305,6 +305,11 @@ async function describeTwoFactorShortcuts(
 }
 
 async function checkBrowser(deps: DoctorDeps): Promise<CheckResult> {
+  // An environment credential signs in without a browser, so a container
+  // with no Chromium is still a working install.
+  if (deps.env.D2L_ACCESS_TOKEN || deps.env.D2L_SESSION_COOKIE) {
+    return pass("browser", "Chromium not needed: signing in via an environment variable");
+  }
   let status: ChromiumStatus;
   try {
     status = await deps.chromiumStatus();

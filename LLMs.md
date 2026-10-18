@@ -32,7 +32,7 @@ How to run it:
 
 What it does, all without a prompt:
 - checks Node, the native credential store, Chromium (downloading it when missing, unless `--no-browser-install`) and that the school is reachable;
-- saves the public settings to `~/.brightspace-mcp/config.json`, with no password;
+- saves the public settings to `~/.brightspace-mcp/config.json`, with no password. It only saves once the school is reachable, so a mistyped `--url` can't replace a working setup, and it leaves alone a config that still holds an older version's password;
 - registers the server in every AI app it finds: Claude Desktop, Cursor and Antigravity by editing their config files, and Codex and Claude Code through their own CLIs, at user scope.
   - An existing `brightspace` entry that runs something else is left alone and reported. Pass `--replace` to change it.
 

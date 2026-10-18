@@ -616,7 +616,8 @@ async function main(): Promise<void> {
   // shell, a pipe) they would hang, so say what to run instead.
   if (!process.stdin.isTTY) {
     console.error("Setup asks questions, so it has to run in a terminal someone can type in.");
-    console.error(`An AI agent should run ${prepareCommand(args.preset?.baseUrl)} instead, then have the person run the sign-in command it prints.`);
+    const school = args.preset?.baseUrl ?? (args.url && isValidUrl(normalizeUrl(args.url)) ? normalizeUrl(args.url) : undefined);
+    console.error(`An AI agent should run ${prepareCommand(school)} instead, then have the person run the sign-in command it prints.`);
     process.exitCode = 2;
     return;
   }
