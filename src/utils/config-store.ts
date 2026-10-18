@@ -32,7 +32,8 @@ export interface ConfigStoreData {
   rememberMfa?: boolean;
   /**
    * Sign in with Microsoft Entra's passwordless phone approval, so no
-   * password is saved. Asked by setup, off by default; D2L_PASSWORDLESS overrides.
+   * password is saved. Off by default and no longer asked by setup, which
+   * clears it; D2L_PASSWORDLESS overrides.
    */
   passwordless?: boolean;
   includeCourses?: number[];

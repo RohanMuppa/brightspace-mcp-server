@@ -191,13 +191,10 @@ describe("saved settings on a repeat run", () => {
     expect("totpUri" in config).toBe(false);
   });
 
-  it("saves a passwordless answer without any password", () => {
-    const saved = buildConfigToSave(
-      { baseUrl: answers.baseUrl, password: "v1-plaintext" },
-      { ...answers, password: undefined, passwordless: true },
-    );
-    expect(saved.passwordless).toBe(true);
-    expect(saved.password).toBeUndefined();
+  it("turns off a saved passwordless setting, since setup now always saves a password", () => {
+    const saved = buildConfigToSave({ baseUrl: answers.baseUrl, passwordless: true }, answers);
+    expect("passwordless" in saved).toBe(false);
+    expect(saved.password).toBe(answers.password);
   });
 
   it("writes just the answers when there is nothing saved yet", () => {

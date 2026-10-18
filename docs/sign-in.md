@@ -18,9 +18,9 @@ To be asked less often, see [Fewer 2FA prompts](#fewer-2fa-prompts).
 
 ## Passwordless sign-in
 
-Answering yes to `setup`'s "Sign in without a saved password" question (saved as `passwordless` in `config.json`; `D2L_PASSWORDLESS` overrides it) skips the password prompt and saves no password: setup also removes one saved earlier for the same account. Sign-in then submits only your username, and Microsoft's passwordless phone approval — the number you type into Authenticator — is the whole sign-in. It is off by default, and Microsoft Entra only; the other school-specific sign-in flows still need a password.
+Setup no longer offers this; it always saves your password. It is still available for anyone who sets `D2L_PASSWORDLESS=true` in their AI client's config for this server: sign-in then submits only your username, no password is read, and Microsoft's passwordless phone approval (the number you type into Authenticator) is the whole sign-in. Microsoft Entra only, and passwordless phone sign-in must already be on in Microsoft Authenticator.
 
-The tradeoff: **every sign-in needs your phone**, because there is no password for the server to supply. That's fine when you're at your desk using an assistant, and bad for anything unattended (a scheduled job, a headless agent) — automatic re-sign-in after a session expires waits until someone approves. Passwordless phone sign-in must already be turned on for your account in Microsoft Authenticator. If Microsoft asks for a password anyway, sign-in stops with an error naming `D2L_PASSWORDLESS` instead of waiting out the timeout; turn passwordless off and rerun `setup` to save a password.
+Every sign-in then needs your phone, including automatic ones after a session expires, so it doesn't suit anything unattended. If Microsoft asks for a password anyway, sign-in stops with an error naming `D2L_PASSWORDLESS`; remove the setting and rerun `setup`.
 
 ## Fewer 2FA prompts
 
