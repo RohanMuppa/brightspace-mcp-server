@@ -21,8 +21,9 @@ vi.mock("node:fs", async (importOriginal) => {
 
 const fs = await vi.importActual<typeof import("node:fs")>("node:fs");
 const {
-  SCHOOL_PRESETS, buildConfigToSave, configureMcpClient, inspectMcpClient, presetForArgv, readPasswordInput,
+  SCHOOL_PRESETS, buildConfigToSave, configureMcpClient, inspectMcpClient, planQuestions, presetForArgv, readPasswordInput,
 } = await import("../../src/setup.js");
+const { signInCommand, prepareCommand } = await import("../../src/utils/commands.js");
 const { createSSOFlow } = await import("../../src/auth/sso-flow.js");
 const { SunySSOFlow } = await import("../../src/auth/suny-sso.js");
 const { TUDelftSSOFlow } = await import("../../src/auth/tudelft-sso.js");
@@ -57,6 +58,10 @@ describe("school presets", () => {
       expect(presetForArgv(["node", "setup.js", `--${flag}`])).toBe(expected);
     }
     expect(presetForArgv(["node", "setup.js", "--WESTERN"])).toBe(SCHOOL_PRESETS.western);
+  });
+
+  it("finds the school flag anywhere, so --sign-in can come first", () => {
+    expect(presetForArgv(["node", "index.js", "setup", "--sign-in", "--purdue"])).toBe(SCHOOL_PRESETS.purdue);
   });
 
   it("ignores flags that are not presets, including inherited object keys", () => {
@@ -331,5 +336,39 @@ describe("password prompt input", () => {
 
   it("cancels on Ctrl+C even inside a longer chunk", () => {
     expect(readPasswordInput("", "abc\x03def").outcome).toBe("cancel");
+  });
+});
+
+describe("which questions each mode asks", () => {
+  const known = { baseUrl: "https://purdue.brightspace.com", campusNeeded: false, username: "alice", passwordSaved: true };
+
+  it("sign-in asks only what prepare couldn't know, and offers to keep a saved password", () => {
+    expect(planQuestions("sign-in", known)).toEqual({
+      askUrl: false, askCampus: false, askUsername: false, password: "keep-or-ask", registerApps: false, confirmSignIn: false,
+    });
+  });
+
+  it("sign-in asks for a username, campus and password that aren't saved", () => {
+    expect(planQuestions("sign-in", { ...known, username: undefined, campusNeeded: true, passwordSaved: false })).toMatchObject({
+      askCampus: true, askUsername: true, password: "ask",
+    });
+  });
+
+  it("the wizard asks everything and registers apps before asking to sign in", () => {
+    expect(planQuestions("wizard", { campusNeeded: true, passwordSaved: true })).toEqual({
+      askUrl: true, askCampus: true, askUsername: true, password: "ask", registerApps: true, confirmSignIn: true,
+    });
+  });
+});
+
+describe("setup commands for a school", () => {
+  it("uses the school's flag when it has one", () => {
+    expect(signInCommand("https://purdue.brightspace.com")).toBe("npx -y brightspace-mcp-server@latest setup --purdue --sign-in");
+    expect(prepareCommand("https://mylearning.suny.edu/")).toBe("npx -y brightspace-mcp-server@latest setup --suny --prepare");
+  });
+
+  it("falls back to --url, and to the saved school when there's no address", () => {
+    expect(signInCommand("https://learn.example.edu")).toBe("npx -y brightspace-mcp-server@latest setup --url https://learn.example.edu --sign-in");
+    expect(signInCommand()).toBe("npx -y brightspace-mcp-server@latest setup --sign-in");
   });
 });

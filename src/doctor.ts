@@ -22,18 +22,15 @@
 import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import * as os from "node:os";
 import {
   configStoreExists,
   loadConfigStore,
   type ConfigStoreData,
 } from "./utils/config-store.js";
-import { accountSessionDirectory, envBoolean, expandTilde, readEnvSecret, parseSessionCookieEnv } from "./utils/config.js";
+import { envBoolean, readEnvSecret, parseSessionCookieEnv } from "./utils/config.js";
 import { getStoredPassword, getStoredTotpUri } from "./auth/credential-store.js";
 import { describeShortcuts } from "./utils/two-factor-shortcuts.js";
 import { discoverVersions } from "./api/version-discovery.js";
-import { TokenManager, type TokenManagerOptions } from "./auth/token-manager.js";
-import { SessionStore } from "./auth/session-store.js";
 import type { TokenData } from "./types/index.js";
 import { D2LApiClient } from "./api/client.js";
 import {
@@ -48,7 +45,14 @@ import {
   AUTH_COMMAND,
   GLOBAL_INSTALL_COMMAND,
   CLEAR_NPX_CACHE_COMMAND,
+  prepareCommand,
+  signInCommand,
 } from "./utils/commands.js";
+import { chromiumReady, chromiumStatus, type ChromiumStatus } from "./utils/browser-install.js";
+import { nodeVersionSupported, readOnlyTokenManager, readSavedSessionToken, sessionDirFor } from "./utils/saved-session.js";
+
+// Tests import this from doctor.ts.
+export { readOnlySessionStore } from "./utils/saved-session.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -62,38 +66,9 @@ function readInstalledVersion(): string {
   }
 }
 
-/**
- * doctor only ever reads a saved session — it must never write session.json,
- * trash it, or take the write lock a v1-record migration uses (that lock can
- * also throw AuthenticationInProgressError while a real sign-in holds it).
- * SessionStore.peek() is the read-only sibling of load() that does none of
- * that, so every write-shaped method here is a no-op and load() delegates to
- * peek() instead of the real load(). Exported for tests, which pass a fake
- * in place of a real SessionStore to prove the no-op wiring.
- */
-export function readOnlySessionStore(store: Pick<SessionStore, "peek">): NonNullable<TokenManagerOptions["sessionStore"]> {
-  return {
-    load: () => store.peek(),
-    save: async () => {},
-    clear: async () => {},
-    saveIfCurrent: async () => true,
-    clearIfCurrent: async () => true,
-  };
-}
-
-/** A TokenManager that can mint from a saved cookie but can never write, clear, or migrate session.json. */
-function readOnlyTokenManager(baseUrl: string, sessionDir: string, envAccessToken?: string, envSessionCookie?: string): TokenManager {
-  return new TokenManager({
-    baseUrl,
-    envAccessToken,
-    envSessionCookie,
-    sessionStore: readOnlySessionStore(new SessionStore(sessionDir)),
-  });
-}
-
 // ── Types ─────────────────────────────────────────────────────────────
 
-export type CheckId = "node" | "config" | "credential" | "network" | "session" | "courses" | "version";
+export type CheckId = "node" | "browser" | "config" | "credential" | "network" | "session" | "courses" | "version";
 
 export interface CheckResult {
   id: CheckId;
@@ -138,6 +113,8 @@ export interface DoctorDeps {
    */
   countCourses: (baseUrl: string, sessionDir: string, envAccessToken?: string, envSessionCookie?: string) => Promise<{ count: number; hasMore: boolean }>;
   fetchLatestVersion: () => Promise<string | null>;
+  /** Launches headless Chromium once to see whether it is installed. Never opens a window. */
+  chromiumStatus: () => Promise<ChromiumStatus>;
   installKind: InstallKind;
   installedVersion: string;
 }
@@ -152,8 +129,7 @@ function defaultDoctorDeps(): DoctorDeps {
     getStoredPassword,
     getStoredTotpUri: (baseUrl, username) => getStoredTotpUri(baseUrl, username),
     discoverVersions,
-    getSessionToken: (baseUrl, sessionDir, envAccessToken, envSessionCookie) =>
-      readOnlyTokenManager(baseUrl, sessionDir, envAccessToken, envSessionCookie).getToken(),
+    getSessionToken: readSavedSessionToken,
     countCourses: async (baseUrl, sessionDir, envAccessToken, envSessionCookie) => {
       const apiClient = new D2LApiClient({
         baseUrl,
@@ -164,6 +140,7 @@ function defaultDoctorDeps(): DoctorDeps {
       return { count: response?.Items?.length ?? 0, hasMore: Boolean(response?.PagingInfo?.HasMoreItems) };
     },
     fetchLatestVersion,
+    chromiumStatus: () => chromiumStatus(),
     installKind: installKindOf(),
     installedVersion: readInstalledVersion(),
   };
@@ -180,8 +157,7 @@ function problem(id: CheckId, message: string): CheckResult {
 // ── Individual checks ────────────────────────────────────────────────
 
 function checkNode(deps: DoctorDeps): CheckResult {
-  const major = Number(deps.nodeVersion.replace(/^v/, "").split(".")[0]);
-  if (Number.isFinite(major) && major >= 20) {
+  if (nodeVersionSupported(deps.nodeVersion)) {
     return pass("node", `Node.js ${deps.nodeVersion} (20 or newer)`);
   }
   return problem(
@@ -252,12 +228,7 @@ function checkConfig(deps: DoctorDeps): ConfigCheck {
     return { ok: false, result: problem("config", `The configured Brightspace URL is invalid — run: ${SETUP_COMMAND}`) };
   }
 
-  const sessionRoot = deps.env.D2L_SESSION_DIR
-    ? expandTilde(deps.env.D2L_SESSION_DIR)
-    : store?.sessionDir
-      ? expandTilde(store.sessionDir)
-      : path.join(os.homedir(), ".d2l-session");
-  const sessionDir = accountSessionDirectory(sessionRoot, baseUrl, username);
+  const sessionDir = sessionDirFor(deps.env, store, baseUrl, username);
 
   const label = username ? `signed in as ${username} at ${baseUrl}` : `configured for ${baseUrl} via environment variables`;
   return {
@@ -286,7 +257,7 @@ async function checkCredential(
   try {
     const password = await deps.getStoredPassword(baseUrl, username);
     if (password) return pass("credential", "Password saved in your operating system's credential store");
-    return problem("credential", `No saved password found for this account — run: ${SETUP_COMMAND}`);
+    return problem("credential", `No saved password found for this account — run this in a terminal: ${signInCommand(baseUrl)}`);
   } catch (error) {
     // On Linux the store itself (secret-tool / an unlocked Secret Service)
     // is usually the problem, and the thrown error already explains that in
@@ -295,7 +266,7 @@ async function checkCredential(
     if (deps.platform === "linux") {
       return problem("credential", error instanceof Error ? error.message : "The Linux credential store is locked or unavailable. Unlock your keyring and try again.");
     }
-    return problem("credential", `Run setup again: ${SETUP_COMMAND}`);
+    return problem("credential", `Run this in a terminal to save your password again: ${signInCommand(baseUrl)}`);
   }
 }
 
@@ -333,6 +304,17 @@ async function describeTwoFactorShortcuts(
   return describeShortcuts({ rememberMfa, keySaved });
 }
 
+async function checkBrowser(deps: DoctorDeps): Promise<CheckResult> {
+  let status: ChromiumStatus;
+  try {
+    status = await deps.chromiumStatus();
+  } catch {
+    return problem("browser", `Could not check for Chromium — run: ${prepareCommand()}`);
+  }
+  if (chromiumReady(status)) return pass("browser", "Chromium is installed for sign-in");
+  return problem("browser", `Chromium is missing, so sign-in can't start — run: ${prepareCommand()}`);
+}
+
 async function checkNetwork(deps: DoctorDeps, baseUrl: string): Promise<CheckResult> {
   try {
     await deps.discoverVersions(baseUrl);
@@ -359,9 +341,14 @@ async function checkSession(
   baseUrl: string,
   sessionDir: string,
   envAccessToken: string | undefined,
-  envSessionCookie: string | undefined
+  envSessionCookie: string | undefined,
+  passwordSaved: boolean
 ): Promise<SessionCheckOk | SessionCheckFail> {
-  const failMessage = `No working saved sign-in — open your AI app and ask a question to sign in, or run: ${AUTH_COMMAND}`;
+  // Without a saved password (an install `setup --prepare` got ready), asking
+  // the AI app can't sign in on its own: the person has to run sign-in.
+  const failMessage = passwordSaved
+    ? `No working saved sign-in — open your AI app and ask a question to sign in, or run: ${AUTH_COMMAND}`
+    : `Not signed in yet — run this in a terminal: ${signInCommand(baseUrl)}`;
   try {
     const token = await deps.getSessionToken(baseUrl, sessionDir, envAccessToken, envSessionCookie);
     if (token) return { ok: true, result: pass("session", "Saved sign-in works — a token was issued without opening a browser") };
@@ -439,6 +426,7 @@ async function checkVersion(deps: DoctorDeps): Promise<CheckResult> {
 /** Human-readable name for each check, used to prefix its "Skipped" line. */
 const CHECK_NAMES: Record<CheckId, string> = {
   node: "Node.js version",
+  browser: "Chromium",
   config: "Setup",
   credential: "Credential store",
   network: "Brightspace reachability",
@@ -460,6 +448,7 @@ export async function runDoctorChecks(overrides: Partial<DoctorDeps> = {}): Prom
   const notes: string[] = [];
 
   checks.push(checkNode(deps));
+  checks.push(await checkBrowser(deps));
 
   const config = checkConfig(deps);
   checks.push(config.result);
@@ -470,11 +459,12 @@ export async function runDoctorChecks(overrides: Partial<DoctorDeps> = {}): Prom
     checks.push(skip("session", SKIPPED_SETUP));
     checks.push(skip("courses", SKIPPED_SETUP));
   } else {
-    checks.push(await checkCredential(deps, config.baseUrl, config.username, config.envAccessToken, config.envSessionCookie));
+    const credential = await checkCredential(deps, config.baseUrl, config.username, config.envAccessToken, config.envSessionCookie);
+    checks.push(credential);
     notes.push(await describeTwoFactorShortcuts(deps, config.baseUrl, config.username));
     checks.push(await checkNetwork(deps, config.baseUrl));
 
-    const session = await checkSession(deps, config.baseUrl, config.sessionDir, config.envAccessToken, config.envSessionCookie);
+    const session = await checkSession(deps, config.baseUrl, config.sessionDir, config.envAccessToken, config.envSessionCookie, credential.ok);
     checks.push(session.result);
 
     if (session.ok) {
@@ -493,6 +483,14 @@ export async function runDoctorChecks(overrides: Partial<DoctorDeps> = {}): Prom
 
 async function main(): Promise<void> {
   const result = await runDoctorChecks();
+
+  // For agents finishing an install: the same result, machine-readable, and
+  // nothing else on stdout.
+  if (process.argv.includes("--json")) {
+    console.log(JSON.stringify(result, null, 2));
+    process.exitCode = result.allOk ? 0 : 1;
+    return;
+  }
 
   console.log("");
   console.log("Brightspace MCP Server — doctor");

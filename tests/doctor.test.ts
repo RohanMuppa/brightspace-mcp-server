@@ -30,6 +30,7 @@ function deps(overrides: Partial<DoctorDeps> = {}): Partial<DoctorDeps> {
     getSessionToken: async () => ({ accessToken: "tok", capturedAt: 0, expiresAt: 0, source: "cache" as const }),
     countCourses: async () => ({ count: 4, hasMore: false }),
     fetchLatestVersion: async () => "3.9.9",
+    chromiumStatus: async () => ({ headless: "present" as const, visible: true }),
     installKind: "npx-cache",
     installedVersion: "3.9.9",
     ...overrides,
@@ -45,7 +46,7 @@ describe("doctor: all-pass path", () => {
     expect(result.allOk).toBe(true);
     expect(result.checks.every((c) => c.ok)).toBe(true);
     expect(result.checks.map((c) => c.id)).toEqual([
-      "node", "config", "credential", "network", "session", "courses", "version",
+      "node", "browser", "config", "credential", "network", "session", "courses", "version",
     ]);
   });
 
@@ -140,11 +141,11 @@ describe("doctor: (b) config file", () => {
 });
 
 describe("doctor: (c) credential store", () => {
-  it("fails with 'run setup' when no password is saved", async () => {
+  it("names the sign-in step when no password is saved (prepare saves none)", async () => {
     const result = await runDoctorChecks(deps({ getStoredPassword: async () => null }));
     const check = idOf(result, "credential");
     expect(check.ok).toBe(false);
-    expect(check.line).toContain(SETUP_COMMAND);
+    expect(check.line).toContain(`${SETUP_COMMAND} --purdue --sign-in`);
   });
 
   it("explains the unlocked keyring on Linux when the store throws", async () => {
@@ -162,7 +163,7 @@ describe("doctor: (c) credential store", () => {
     expect(check.line).toContain("keyring");
   });
 
-  it("says 'run setup again' on a non-Linux store failure", async () => {
+  it("names the sign-in step on a non-Linux store failure", async () => {
     const result = await runDoctorChecks(
       deps({
         platform: "darwin",
@@ -345,7 +346,7 @@ describe("doctor: 2FA shortcuts line", () => {
     ]);
     expect(result.allOk).toBe(true);
     expect(result.checks.map((c) => c.id)).toEqual([
-      "node", "config", "credential", "network", "session", "courses", "version",
+      "node", "browser", "config", "credential", "network", "session", "courses", "version",
     ]);
   });
 
@@ -560,5 +561,34 @@ describe("doctor: read-only session-store wiring (doctor must never write sessio
     });
 
     await expect(tokenManager.getToken()).resolves.not.toBeNull();
+  });
+});
+
+describe("doctor: an install prepare got ready", () => {
+  it("names the sign-in step, not the AI app, when nothing is saved yet", async () => {
+    const result = await runDoctorChecks(deps({ getStoredPassword: async () => null, getSessionToken: async () => null }));
+    expect(idOf(result, "session").line).toBe(
+      `✗ Not signed in yet — run this in a terminal: ${SETUP_COMMAND} --purdue --sign-in`,
+    );
+  });
+});
+
+describe("doctor: Chromium", () => {
+  it("fails with the prepare command when a browser sign-in needs is missing", async () => {
+    const result = await runDoctorChecks(deps({ chromiumStatus: async () => ({ headless: "missing", visible: true }) }));
+    const check = idOf(result, "browser");
+    expect(check.ok).toBe(false);
+    expect(check.line).toContain(`${SETUP_COMMAND} --prepare`);
+    expect(result.allOk).toBe(false);
+  });
+
+  it("passes when a test launch was blocked for another reason but both browsers exist", async () => {
+    const result = await runDoctorChecks(deps({ chromiumStatus: async () => ({ headless: "unknown", visible: true, detail: "sandbox" }) }));
+    expect(idOf(result, "browser").ok).toBe(true);
+  });
+
+  it("reports a check that throws as a problem, not a crash", async () => {
+    const result = await runDoctorChecks(deps({ chromiumStatus: async () => { throw new Error("boom"); } }));
+    expect(idOf(result, "browser").ok).toBe(false);
   });
 });

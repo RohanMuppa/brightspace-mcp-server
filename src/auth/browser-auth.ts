@@ -21,6 +21,7 @@ import type { AuthPhase } from "./auth-phases.js";
 import { AuthCooldown } from "./auth-cooldown.js";
 import { mintAccessToken } from "./token-mint.js";
 import { isMissingBrowserError, PLAYWRIGHT_INSTALL_HINT } from "../utils/browser-install.js";
+import { signInCommand } from "../utils/commands.js";
 
 const SILENT_SSO_TIMEOUT_MS = 30000;
 const SILENT_SSO_POLL_MS = 1000;
@@ -443,7 +444,7 @@ export class BrowserAuth {
         await this.waitForVisibleLogin(page);
         return false;
       }
-      throw new UnsupportedAuthenticationError("Automatic sign-in requires saved credentials. Run brightspace-mcp-server setup.");
+      throw new UnsupportedAuthenticationError(`Automatic sign-in requires saved credentials. Run this in a terminal: ${signInCommand(this.config.baseUrl)}`);
     }
     if (!pendingMfa && !credentialPrompt) {
       if (this.config.headless === false) {

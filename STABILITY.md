@@ -15,8 +15,17 @@ can be added; it is never removed, renamed, or repurposed to mean something else
 ## CLI subcommands
 
 - `setup` — interactive wizard. School-preset flags come from `SCHOOL_PRESETS` in
-  `src/setup.ts`: `--purdue`, `--suny`, `--western`, `--cuny`, `--tudelft` today. New
-  presets may be added; an existing flag's school and behavior won't change.
+  `src/setup/presets.ts`: `--purdue`, `--suny`, `--western`, `--cuny`, `--tudelft`,
+  `--leiden`, `--mcgill`, `--ngeeann`, `--javeriana` today. New presets may be added;
+  an existing flag's school and behavior won't change.
+  - `--prepare` (agents, no prompts) and `--sign-in` (the person's last step) are stable,
+    as are `--url`, `--username`, `--campus`, `--json`, `--replace` and `--no-browser-install`.
+    `--prepare --json` prints `{state, school?, steps, apps, restart, next}`. Its `state`
+    values and those fields follow the additive-only rule.
+  - Since 4.0.0, an unknown flag is an error (exit 2) instead of being ignored. The wizard
+    and `--sign-in` exit 2 when stdin is not a terminal, instead of waiting for typing.
+- `doctor` — `--json` prints `{checks: [{id, ok, line}], allOk, notes}`. Check ids may be
+  added (4.0.0 added `browser`).
 - `auth` — manual re-authentication, no required flags. `--automatic` is internal
   (used by `AuthRunner` to retry in the background) and not a documented user flag.
 - No subcommand — runs the MCP server itself.

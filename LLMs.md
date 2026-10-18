@@ -14,94 +14,80 @@ Distributed on npm as `brightspace-mcp-server`. Register it as `npx -y brightspa
 
 ## Installing it for a user
 
-Follow these steps in order. Stop and report back if any step fails.
+Installing takes three stages: you do everything you can, the person signs in, then you check it worked (issue #258). Only stage 2 needs the person. Stop and report back if a stage fails.
 
-### 1. Verify Node.js 20+ and native secure storage
+### 1. Prepare everything yourself (no prompts)
 
-```bash
-node --version
-```
-
-If Node is missing or below v20, tell the user to install the LTS from https://nodejs.org/ and stop. Require macOS Keychain, Windows Credential Manager, or an unlocked Linux Secret Service with `secret-tool` (`libsecret-tools` on Debian/Ubuntu). Linux uses libsecret directly; secrets pass through stdin, and temporary kernel-key storage is never used. v2 has no plaintext credential fallback.
-
-### 2. Run the setup wizard
+Check `node --version` first. If Node is missing or below v20, tell the user to install the LTS from https://nodejs.org/ and stop. Then ask the user, in chat, which school they're at and the username they sign in with. Don't ask for their password; only stage 2 takes it, typed by them.
 
 ```bash
-npx -y brightspace-mcp-server@latest setup
+npx -y brightspace-mcp-server@latest setup --purdue --prepare --username <their username> --json
 ```
 
-If the user is at Purdue, use the preset:
+How to run it:
+
+- **School:** use the school's flag: `--purdue`, `--suny`, `--western`, `--tudelft`, `--cuny`, `--leiden`, `--mcgill`, `--ngeeann` or `--javeriana`. For any other school, use `--url <their Brightspace address>` instead.
+- **SUNY campus:** add `--campus "<campus>"` if you know it. Otherwise stage 2 asks.
+- **Timeout:** allow several minutes. A first run can download Chromium (about 200 MB).
+
+What it does, all without a prompt:
+- checks Node, the native credential store, Chromium (downloading it when missing, unless `--no-browser-install`) and that the school is reachable;
+- saves the public settings to `~/.brightspace-mcp/config.json`, with no password;
+- registers the server in every AI app it finds: Claude Desktop, Cursor and Antigravity by editing their config files, and Codex and Claude Code through their own CLIs, at user scope.
+  - An existing `brightspace` entry that runs something else is left alone and reported. Pass `--replace` to change it.
+
+Running it again changes nothing that is already right.
+
+With `--json`, stdout is one JSON object. Progress lines go to stderr.
+- `state`:
+  - `ready_for_sign_in` (exit 0): go to stage 2.
+  - `signed_in` (exit 0): a saved sign-in already works; skip to stage 3.
+  - `needs_input` (exit 1): no school was given.
+  - `blocked` (exit 1): fix each step whose `ok` is false, then rerun.
+- `steps[]`: `{id, ok, blocking, line}`.
+- `apps[]`: one `outcome` per app: `added`, `current`, `replaced`, `different_left` or `failed`.
+- `restart[]`: the apps that need restarting to load the server.
+- `next`: `{command, needsHuman, instructions}`.
+
+For any other client (Windsurf, Copilot, Zed, Continue, etc.), register `npx -y brightspace-mcp-server@latest` yourself. On Windows that is `cmd /c npx -y brightspace-mcp-server@latest`. Config formats and paths differ per client and change over time, so check the client's current docs rather than guessing.
+
+### 2. Hand the sign-in to the person
+
+`next.command` is the person's step, for example:
 
 ```bash
-npx -y brightspace-mcp-server@latest setup --purdue
+npx -y brightspace-mcp-server@latest setup --purdue --sign-in
 ```
 
-If the user is at a SUNY campus, use the SUNY preset. It also asks which campus
-they attend, which lets sign-in skip SUNY's shared campus picker:
+It uses what stage 1 saved and asks only what needs them:
+- their username or SUNY campus, if you didn't pass them;
+- their password, or whether to keep one already saved;
+- how they confirm sign-in:
+  - 1: a phone app, either an approval or a code typed in the terminal. Chromium stays hidden.
+  - 2: another way, such as a text message. This saves `headless: false`, and the sign-in page opens for them to finish. Automatic re-auth later stays hidden either way.
+- how often to approve.
 
-```bash
-npx -y brightspace-mcp-server@latest setup --suny
-```
+Then it signs in and prints `Setup complete!`. If sign-in doesn't finish, it exits 1 and prints the same command to run again. Rerunning is always safe.
 
-If the user is at a CUNY campus, use the CUNY preset. Their username is the
-full CUNY Login address, and sign-in asks in the terminal for the code from
-their authenticator app. CUNY requires that code on every full sign-in, so
-when the Brightspace session ends the user reruns `auth` in a terminal:
+It needs a terminal: without one it exits 2 rather than waiting for typing. So never run it in your own background shell; hand it over like this:
 
-```bash
-npx -y brightspace-mcp-server@latest setup --cuny
-```
-
-If the user is at McGill University, use the McGill preset. Sign-in goes
-through myCourses' SAML redirect straight to Microsoft Entra:
-
-```bash
-npx -y brightspace-mcp-server@latest setup --mcgill
-```
-
-If the user is at Pontificia Universidad Javeriana Cali, use the Javeriana
-preset. Sign-in goes through MobilityGuard OneGate, which asks in the
-terminal for a code from the user's authenticator app:
-
-```bash
-npx -y brightspace-mcp-server@latest setup --javeriana
-```
-
-The wizard:
-
-- prompts for the school's Brightspace URL (skipped with `--purdue`, `--suny`, `--western`, `--tudelft`, `--cuny`, `--leiden`, `--mcgill`, `--ngeeann`, or `--javeriana`)
-- asks how the user confirms sign-in: 1, a phone app (approval or a terminal code; Chromium stays hidden), or 2, another way such as a text message (`headless: false`: the sign-in page opens during `setup`/`auth` for the user to finish; automatic re-auth stays hidden regardless)
-- saves the password in the native credential store and public settings in `~/.brightspace-mcp/config.json` (0600)
-- writes the encrypted session below `~/.d2l-session/accounts/<account-hash>/` (AES-256-GCM)
-- auto-configures Claude Desktop, Cursor, and Antigravity, and uses their own CLIs to configure Codex and Claude Code when detected; an existing `brightspace` entry that runs anything other than `npx -y brightspace-mcp-server@latest` is printed and replaced only if the user says yes
-
-Wait for the user to finish login and MFA before continuing.
-
-#### Handing the wizard to the user
-
-The wizard needs the user's own username, password, and MFA approval, which you must not type for them. Many users installing this are beginners who have never used a terminal, so the hand-off is where installs stall. Do it this way:
-
-- **Run it where the user can type.** That means a visible terminal they control: a terminal tab or panel your app shows them, or one they open themselves (Terminal on macOS, PowerShell on Windows). Never run it in a background shell, where the prompts can't reach them.
-- **Say exactly where it is and what to do first.** Name the place the way they see it ("the terminal panel on the right, titled *brightspace setup*"), and link it if your app supports that. Tell them to click inside it before typing, because keystrokes go to the chat box until they do. Tell them the first question is their username and to press Enter after each answer.
-- **Warn them about the password prompt.** Only asterisks appear as they type, and they still press Enter. Then the wizard asks how they approve sign-ins and waits for the MFA approval on their phone.
-- **Don't take "done" on faith.** Read the terminal yourself if you can. The wizard is finished only when it prints `Setup complete!`. If it is still on a prompt, tell the user which question it is waiting on and where to answer it. Don't just ask again whether they are done. Don't offer a one-click "I'm done" reply: a beginner will click it before they have typed anything.
+- **Run it where the user can type.** That means a visible terminal they control: a terminal tab or panel your app shows them, or one they open themselves (Terminal on macOS, PowerShell on Windows).
+- **Say exactly where it is and what to do first.** Name the place the way they see it ("the terminal panel on the right, titled *brightspace setup*"), and link it if your app supports that. Tell them to click inside it before typing, because keystrokes go to the chat box until they do. Tell them to press Enter after each answer.
+- **Warn them about the password prompt.** Only asterisks appear as they type, and they still press Enter. Then it asks how they confirm sign-in and waits for the approval on their phone.
+- **Don't take "done" on faith.** Read the terminal yourself if you can. It is finished only when it prints `Setup complete!`. If it is still on a prompt, tell the user which question it is waiting on and where to answer it. Don't just ask again whether they are done. Don't offer a one-click "I'm done" reply: a beginner will click it before they have typed anything.
 - **If typing in your panel doesn't work,** give them the one command to paste into their own terminal app, and say how to open that app.
 
-### 3. Register the MCP server in the user's AI client
+The interactive wizard, `setup --purdue` with no mode flag, still works for a person setting up alone. It asks everything, registers apps before asking "Sign in now?", and also needs a terminal.
 
-The server command to register is:
+### 3. Verify
 
+```bash
+npx -y brightspace-mcp-server@latest doctor --json
 ```
-npx -y brightspace-mcp-server@latest
-```
 
-On **Windows**, wrap with cmd: `cmd /c npx -y brightspace-mcp-server@latest`.
+`allOk: true` means the setup, the saved sign-in and one real course-list request all worked. Each failed check's `line` names its fix.
 
-Claude Desktop, Cursor, and Antigravity (`~/.gemini/antigravity/mcp_config.json`) are auto-configured by the setup wizard. When their CLIs are installed, Codex Desktop and CLI are configured together through `codex mcp add`, and Claude Code is configured at user scope through `claude mcp add --scope user`. Before writing, setup compares the existing entry's command with the expected one — Codex via `codex mcp get brightspace --json`, Claude Code by reading the user-scope `mcpServers` in `.claude.json` (so a project `.mcp.json` can't stand in for a missing user registration) — and asks before replacing one that differs. For any other client (Windsurf, Copilot, Zed, Continue, etc.), look up the client's current MCP config format and file path, then add an entry with the command above. Config formats and paths differ per client and change over time, so verify against current client docs rather than guessing.
-
-### 4. Restart the AI client
-
-Tell the user to fully quit and reopen their AI client so it picks up the new MCP server.
+Then tell the user to fully quit and reopen the apps in `restart`, and ask a question such as "What's due this week?". Calling `get_my_courses` from the restarted app is the end-to-end check.
 
 ## Auth
 
@@ -284,7 +270,13 @@ While a sign-in is still being worked on in the background, `get_assignments`, `
 ```
 src/
   index.ts                  MCP server entrypoint, registers tools
-  setup.ts                  Setup wizard (CLI subcommand `setup`)
+  setup.ts                  `setup`: interactive wizard and `--sign-in`; routes `--prepare`
+  setup/
+    args.ts                 setup's flags and modes (wizard, --prepare, --sign-in)
+    presets.ts              School presets (`--purdue`, ...) and lookup by URL
+    config.ts               Saved-settings merge shared by every mode
+    clients.ts              AI apps setup registers in (one list for wizard and prepare)
+    prepare.ts              `setup --prepare`: no-prompt install steps for agents, JSON result
   auth-cli.ts               Manual reauth (CLI subcommand `auth`; `auth --logout` ends the saved session)
   doctor.ts                 Beginner diagnostic (CLI subcommand `doctor`)
   update.ts                 Self-update checker
@@ -335,7 +327,9 @@ src/
     course-filter.ts        Filter enrolled vs archived courses, and (currentOnly) vs out-of-term courses
     course-files.ts         Course-file path rules shared by download_file (`coursePath`) and get_course_content (`courseFiles`)
     download-helpers.ts     Stream-to-disk with validation
+    browser-install.ts      Chromium check (prepare, doctor), install via the bundled Playwright, missing-browser hint
     file-validator.ts       Magic-byte file-type checks
+    saved-session.ts        Read-only saved sign-in checks shared by doctor and prepare
     html-attributes.ts      Quote-aware tag attribute reading and entity decoding for raw D2L HTML
     html-converter.ts       HTML to Markdown via turndown
     pdf-extractor.ts        PDF text extraction via unpdf
@@ -350,7 +344,10 @@ src/
 
 | Command | What it does |
 |---------|--------------|
-| `npx -y brightspace-mcp-server@latest setup` | Interactive setup wizard |
+| `npx -y brightspace-mcp-server@latest setup` | Interactive setup wizard (needs a terminal) |
+| `npx -y brightspace-mcp-server@latest setup --purdue --prepare --username <u> --json` | For AI agents: everything but the password and sign-in, with no prompts — checks, Chromium download, settings, registering AI apps. Takes `--url`, `--campus`, `--replace`, `--no-browser-install`. See [Installing it for a user](#installing-it-for-a-user) |
+| `npx -y brightspace-mcp-server@latest setup --purdue --sign-in` | The person's last install step: password, how they confirm sign-in, then sign-in. Uses what `--prepare` saved |
+| `npx -y brightspace-mcp-server@latest setup --help` | Every setup flag |
 | `npx -y brightspace-mcp-server@latest setup --purdue` | Setup with Purdue preset |
 | `npx -y brightspace-mcp-server@latest setup --suny` | Setup with SUNY preset (also asks for campus) |
 | `npx -y brightspace-mcp-server@latest setup --cuny` | Setup with CUNY preset |
@@ -359,7 +356,7 @@ src/
 | `npx -y brightspace-mcp-server@latest setup --javeriana` | Setup with Javeriana Cali preset |
 | `npx -y brightspace-mcp-server@latest auth` | Manual reauth |
 | `npx -y brightspace-mcp-server@latest auth --logout` | Delete this computer's saved session so the next call does a full sign-in. Keeps the password, `config.json`, and credential-store entries. Local only |
-| `npx -y brightspace-mcp-server@latest doctor` | Diagnose a broken setup — Node version, saved config, credential store, Brightspace reachability, saved sign-in, a real course-list call, and installed version, each as a ✓/✗ line with one plain-English next step, then one informational line on the 2FA shortcuts (remember this device, saved authenticator key) |
+| `npx -y brightspace-mcp-server@latest doctor` | Diagnose a broken setup — Node version, Chromium, saved config, credential store, Brightspace reachability, saved sign-in, a real course-list call, and installed version, each as a ✓/✗ line with one plain-English next step, then one informational line on the 2FA shortcuts (remember this device, saved authenticator key). `--json` prints `{checks, allOk, notes}` instead |
 | `npx -y brightspace-mcp-server@latest` | Run the MCP server (registered in AI client config) |
 | `npm run build` | Compile TypeScript to `build/` |
 | `npm run dev` | Watch-mode TypeScript compile |
