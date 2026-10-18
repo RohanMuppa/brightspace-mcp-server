@@ -758,7 +758,7 @@ async function main(): Promise<void> {
   if (claudePath) {
     const configClaude = await ask(
       rl2,
-      "Would you like to automatically configure Claude Desktop? (yes/no): ",
+      "Would you like to automatically configure Claude Desktop? Highly recommended. (yes/no): ",
     );
     if (
       /^y(es)?$/i.test(configClaude) &&
@@ -811,7 +811,7 @@ async function main(): Promise<void> {
 
     const configureClient = await ask(
       rl2,
-      `${client.displayName} detected. Configure it automatically? (yes/no): `,
+      `${client.displayName} detected. Configure it automatically? Highly recommended. (yes/no): `,
     );
     if (
       /^y(es)?$/i.test(configureClient) &&
