@@ -353,7 +353,7 @@ export function registerDownloadFile(
 
         // Determine download source
         if (coursePath !== undefined) {
-          const filePath = parseCoursePath(coursePath, courseId);
+          const filePath = parseCoursePath(coursePath, courseId, apiClient.origin);
           if (typeof filePath !== "string") return errorResponse(filePath.error);
           return await downloadCourseFile(apiClient, courseId, filePath, downloadPath, customFilename);
         } else if (topicId !== undefined) {
@@ -392,7 +392,7 @@ export function registerDownloadFile(
           );
         } else {
           return errorResponse(
-            "Either topicId (for content files), both folderId and fileId (for submission files), or both newsId and fileId (for announcement attachments) must be provided"
+            "Either topicId (for content files), coursePath (for course files linked from a module description), both folderId and fileId (for submission files), or both newsId and fileId (for announcement attachments) must be provided"
           );
         }
       } catch (error) {
@@ -422,7 +422,18 @@ async function downloadCourseFile(
   );
   if (!response) {
     return errorResponse(
-      `Course files need a Brightspace web session cookie, and none is available. Sign in with \`${AUTH_COMMAND}\` and retry. A server that runs on D2L_ACCESS_TOKEN alone has no cookie: set D2L_SESSION_COOKIE as well, or sign in through the browser.`
+      `Course files are served only to a signed-in Brightspace web session, and there is no valid one: the session cookie is missing or has expired. Sign in again with \`${AUTH_COMMAND}\` and retry. A server that runs on D2L_ACCESS_TOKEN alone has no cookie: set D2L_SESSION_COOKIE as well, or sign in through the browser.`
+    );
+  }
+
+  // A missing file or a refused one can come back as an ordinary Brightspace
+  // web page with HTTP 200. That page is not the file, so it is never saved
+  // or shown under the file's name.
+  const contentType = (response.headers.get("Content-Type") ?? "").toLowerCase();
+  if (contentType.startsWith("text/html") && !/\.html?$/i.test(filePath)) {
+    await response.body?.cancel();
+    return errorResponse(
+      `Brightspace answered with a web page instead of the course file "${filePath}". The file may have been moved or deleted, or this account may not be allowed to open it.`
     );
   }
 

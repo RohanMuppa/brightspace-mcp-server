@@ -181,6 +181,8 @@ interface Setup {
   body?: Buffer | ReadableStream<Uint8Array>;
   /** Pass null to simulate no stored session cookie for getPageRaw. */
   pageResponse?: null;
+  /** Content-Type header getPageRaw answers with. */
+  pageContentType?: string;
 }
 
 /**
@@ -199,18 +201,22 @@ function largePdfStream(megabytes: number): ReadableStream<Uint8Array> {
   });
 }
 
-function setup({ disposition, submissions, newsItem, contentLength, body = pdfBuffer(), pageResponse }: Setup) {
+function setup({ disposition, submissions, newsItem, contentLength, body = pdfBuffer(), pageResponse, pageContentType }: Setup) {
   const rawRequested: string[] = [];
 
   const pageRequested: string[] = [];
   const apiClient = {
+    origin: "https://purdue.brightspace.com",
     le: (orgUnitId: number, p: string) => `/d2l/api/le/1.0/${orgUnitId}${p}`,
     getPageRaw: vi.fn(async (p: string) => {
       pageRequested.push(p);
       if (pageResponse === null) return null;
       return new Response(body instanceof Buffer ? toArrayBuffer(body) : body, {
         status: 200,
-        headers: { ...(disposition ? { "Content-Disposition": disposition } : {}) },
+        headers: {
+          ...(disposition ? { "Content-Disposition": disposition } : {}),
+          ...(pageContentType ? { "Content-Type": pageContentType } : {}),
+        },
       });
     }),
     get: vi.fn(async (p: string) => (p.includes("/news/") ? newsItem : submissions)),
@@ -951,6 +957,60 @@ describe("download_file: course file links (coursePath)", () => {
     const result = await call({ courseId: COURSE, coursePath: "Notes/x.pdf", downloadPath: targetDir });
 
     expect(textOf(result)).toContain("D2L_SESSION_COOKIE");
+  });
+
+  it("treats a plain path whose file name mentions quickLink.d2l as a path, not a URL", async () => {
+    const { call, pageRequested } = setup({});
+
+    await call({ courseId: COURSE, coursePath: "Notes/quickLink.d2l-guide.pdf", downloadPath: targetDir });
+
+    expect(pageRequested).toEqual([QUICKLINK(COURSE, "Notes/quickLink.d2l-guide.pdf")]);
+  });
+
+  it("accepts an absolute quickLink URL on this Brightspace", async () => {
+    const { call, pageRequested } = setup({});
+    const link = `https://purdue.brightspace.com/d2l/common/dialogs/quickLink/quickLink.d2l?ou=${COURSE}&type=coursefile&fileId=Notes%2fa.pdf`;
+
+    await call({ courseId: COURSE, coursePath: link, downloadPath: targetDir });
+
+    expect(pageRequested).toEqual([QUICKLINK(COURSE, "Notes/a.pdf")]);
+  });
+
+  it("refuses an absolute quickLink URL on another Brightspace", async () => {
+    const { call, pageRequested } = setup({});
+    const link = "https://other.brightspace.com/d2l/common/dialogs/quickLink/quickLink.d2l?type=coursefile&fileId=Notes%2fa.pdf";
+
+    const result = await call({ courseId: COURSE, coursePath: link, downloadPath: targetDir });
+
+    expect(result.isError).toBe(true);
+    expect(pageRequested).toEqual([]);
+  });
+
+  it.each([
+    ["disk", {}],
+    ["inline", { downloadPath: undefined as string | undefined }],
+  ])("refuses to hand back a Brightspace web page as the file (%s)", async (_mode, extra) => {
+    const { call } = setup({
+      body: Buffer.from("<!DOCTYPE html><html><body>File not found</body></html>"),
+      pageContentType: "text/html; charset=utf-8",
+    });
+
+    const result = await call({ courseId: COURSE, coursePath: "Notes/Lecture01.pdf", downloadPath: targetDir, ...extra });
+
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toMatch(/web page instead of the course file/);
+    expect(await walk(root)).toEqual([]);
+  });
+
+  it("still downloads a course file that really is HTML", async () => {
+    const { call } = setup({
+      body: Buffer.from("<!DOCTYPE html><html><body>Lab handout</body></html>"),
+      pageContentType: "text/html",
+    });
+
+    const result = await call({ courseId: COURSE, coursePath: "Labs/handout.html", downloadPath: targetDir });
+
+    expect(parse(result).mode).toBe("disk");
   });
 
   it("cannot be combined with topicId", async () => {

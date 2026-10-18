@@ -326,6 +326,7 @@ src/
     course-files.ts         Course-file path rules shared by download_file (`coursePath`) and get_course_content (`courseFiles`)
     download-helpers.ts     Stream-to-disk with validation
     file-validator.ts       Magic-byte file-type checks
+    html-attributes.ts      Quote-aware tag attribute reading and entity decoding for raw D2L HTML
     html-converter.ts       HTML to Markdown via turndown
     pdf-extractor.ts        PDF text extraction via unpdf
     logger.ts               Structured logging

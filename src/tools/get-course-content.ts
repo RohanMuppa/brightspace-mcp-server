@@ -178,10 +178,9 @@ export async function buildContentTree(
         log('DEBUG', `Content depth ceiling of ${MAX_CONTENT_DEPTH} reached at module ${item.Id}: not descending further`);
       }
 
-      const courseFiles = item.Description?.Html ? extractCourseFilePaths(item.Description.Html, courseId) : [];
-
       // Only include module if it has matching children (or filter is 'all')
       if (typeFilter === 'all' || processedChildren.length > 0) {
+        const courseFiles = item.Description?.Html ? extractCourseFilePaths(item.Description.Html, courseId, apiClient.origin) : [];
         tree.push({
           type: 'module',
           id: item.Id,

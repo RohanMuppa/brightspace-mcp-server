@@ -21,6 +21,20 @@ import { log } from "../utils/logger.js";
 import { AUTH_COMMAND } from "../utils/commands.js";
 import { devActivity } from "../utils/dev-activity.js";
 
+/**
+ * True when a followed redirect ended on this Brightspace's sign-in page. A
+ * web route asked with a dead cookie 302s there rather than serving the
+ * expired-session stub, and fetch follows the redirect to an HTTP 200.
+ */
+function landedOnLogin(responseUrl: string, baseUrl: string): boolean {
+  try {
+    const url = new URL(responseUrl);
+    return url.origin === new URL(baseUrl).origin && url.pathname.toLowerCase() === "/d2l/login";
+  } catch {
+    return false;
+  }
+}
+
 /** An ordinary course HTML link to the login page is not an expired session. */
 function isExpiredSessionRedirect(body: string, baseUrl: string): boolean {
   const expiredTarget = (target: string): boolean => {
@@ -639,8 +653,8 @@ export class D2LApiClient {
       const contentType = (response.headers.get("content-type") ?? "").toLowerCase();
       if (contentType.startsWith("text/html")) {
         const body = await response.text();
-        if (isExpiredSessionRedirect(body, this.baseUrl)) {
-          log("DEBUG", "File download answered with the session-expired stub, treating it as a 401");
+        if (isExpiredSessionRedirect(body, this.baseUrl) || landedOnLogin(response.url, this.baseUrl)) {
+          log("DEBUG", "File download answered with the sign-in page, treating it as a 401");
           throw new ApiError(
             401,
             path,

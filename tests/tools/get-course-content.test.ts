@@ -431,6 +431,18 @@ describe("get_course_content courseFiles", () => {
     expect(await courseFilesFor(lti + other)).toBeUndefined();
   });
 
+  it("keeps an apostrophe in the file name, written literally or as a character reference", async () => {
+    expect(await courseFilesFor(link("Notes%2fBob's%20notes.pdf"))).toEqual(["Notes/Bob's notes.pdf"]);
+    expect(await courseFilesFor(link("Notes%2fBob&#39;s%20notes.pdf"))).toEqual(["Notes/Bob's notes.pdf"]);
+    expect(await courseFilesFor(link("Notes%2fBob&#x27;s%20notes.pdf"))).toEqual(["Notes/Bob's notes.pdf"]);
+  });
+
+  it("keeps a double quote in a single-quoted href", async () => {
+    const html = `<a href='/d2l/common/dialogs/quickLink/quickLink.d2l?ou=101&amp;type=coursefile&amp;fileId=Notes%2fthe "best" one.pdf'>x</a>`;
+
+    expect(await courseFilesFor(html)).toEqual(['Notes/the "best" one.pdf']);
+  });
+
   it("drops paths that parseCoursePath would refuse", async () => {
     expect(await courseFilesFor(link("..%2fsecret.pdf") + link("Notes%2fok.pdf"))).toEqual(["Notes/ok.pdf"]);
   });

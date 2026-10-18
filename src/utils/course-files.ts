@@ -4,6 +4,9 @@
  * Licensed under MIT — see LICENSE file for details.
  */
 
+import { tagAttributes } from "./html-attributes.js";
+import { toBrightspacePath } from "./transcript/lti.js";
+
 export const QUICKLINK_PATH = "/d2l/common/dialogs/quickLink/quickLink.d2l";
 
 /**
@@ -11,19 +14,19 @@ export const QUICKLINK_PATH = "/d2l/common/dialogs/quickLink/quickLink.d2l";
  * Accepts that path or the quickLink URL a module description carries, and
  * refuses anything that could name a file outside the course file store, so
  * the argument can only ever steer the request inside this course's files.
+ * An absolute quickLink URL must be on `origin`; without one, only a
+ * root-relative link is accepted.
  */
-export function parseCoursePath(input: string, courseId: number): string | { error: string } {
+export function parseCoursePath(input: string, courseId: number, origin?: string): string | { error: string } {
   let filePath = input.trim();
 
-  if (filePath.includes("quickLink.d2l")) {
-    let link: URL;
-    try {
-      link = new URL(filePath, "https://placeholder.invalid");
-    } catch {
-      return { error: "coursePath is not a valid quickLink URL." };
-    }
-    if (link.pathname !== QUICKLINK_PATH || link.searchParams.get("type") !== "coursefile") {
-      return { error: "coursePath must be a course file path or a quickLink URL with type=coursefile." };
+  // A plain course-file path never starts with "/" or names a scheme, so
+  // anything that does is a link, however its file name reads.
+  if (filePath.startsWith("/") || /^[a-z][a-z\d+.-]*:\/\//i.test(filePath)) {
+    const brightspacePath = toBrightspacePath(filePath, origin);
+    const link = brightspacePath === null ? null : new URL(brightspacePath, "https://placeholder.invalid");
+    if (link === null || link.pathname !== QUICKLINK_PATH || link.searchParams.get("type") !== "coursefile") {
+      return { error: "coursePath must be a course file path or a quickLink URL on this Brightspace with type=coursefile." };
     }
     const ou = link.searchParams.get("ou");
     if (ou !== null && ou !== String(courseId)) {
@@ -51,10 +54,12 @@ export function parseCoursePath(input: string, courseId: number): string | { err
  * HTML because the Markdown conversion escapes parentheses in file names.
  * Anything parseCoursePath would refuse, and links to other courses, are left out.
  */
-export function extractCourseFilePaths(html: string, courseId: number): string[] {
+export function extractCourseFilePaths(html: string, courseId: number, origin?: string): string[] {
   const found: string[] = [];
-  for (const [, href] of html.matchAll(/href\s*=\s*["']([^"']*quickLink\.d2l[^"']*)["']/gi)) {
-    const parsed = parseCoursePath(href.replace(/&amp;/g, "&"), courseId);
+  for (const anchor of tagAttributes(html, "a")) {
+    const href = anchor.get("href");
+    if (!href?.includes("quickLink.d2l")) continue;
+    const parsed = parseCoursePath(href, courseId, origin);
     if (typeof parsed === "string" && !found.includes(parsed)) found.push(parsed);
   }
   return found;

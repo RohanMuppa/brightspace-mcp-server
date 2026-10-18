@@ -14,6 +14,7 @@
  */
 
 import { detectVideoPlatform, extractKalturaIds, extractYouTubeVideoId } from "./platform.js";
+import { tagAttributes } from "../html-attributes.js";
 
 /** What a launch page leads to: the video itself, another Brightspace page to request, or nothing recognizable. */
 export type LaunchPageFinding = { videoUrl: string } | { nextPath: string } | null;
@@ -51,28 +52,6 @@ export function toBrightspacePath(url: string, origin?: string): string | null {
   if (parsed.origin !== expectedOrigin || parsed.username || parsed.password) return null;
   if (!parsed.pathname.startsWith("/d2l/")) return null;
   return `${parsed.pathname}${parsed.search}`;
-}
-
-function decodeEntities(value: string): string {
-  return value
-    .replace(/&#x([0-9a-f]+);/gi, (_, hex: string) => String.fromCodePoint(parseInt(hex, 16)))
-    .replace(/&#(\d+);/g, (_, dec: string) => String.fromCodePoint(parseInt(dec, 10)))
-    .replace(/&quot;/g, '"')
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&amp;/g, "&");
-}
-
-function tagAttributes(html: string, tag: string): Map<string, string>[] {
-  return [...html.matchAll(new RegExp(`<${tag}\\b[^>]*>`, "gi"))].map(
-    element =>
-      new Map(
-        [...element[0].matchAll(/([\w-]+)\s*=\s*(["'])([\s\S]*?)\2/g)].map(match => [
-          match[1].toLowerCase(),
-          decodeEntities(match[3]),
-        ])
-      )
-  );
 }
 
 /** True when an adapter could fetch a transcript from `url`, or name the platform it can't yet. */
