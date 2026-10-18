@@ -41,13 +41,33 @@ type Child = ReturnType<typeof mockChild>;
  * Advance the fake clock, a second at a time, letting the real file-system
  * calls the relay poll makes finish between steps. Fake timers do not drive
  * real I/O, and the poll awaits it before arming its next timer.
+ *
+ * This used to pause a fixed 25 ms of real time per step. On a slow CI runner
+ * (Windows, most often) the poll's I/O took longer than that, so a fake second
+ * passed with no poll armed and the poll fell behind the clock: a refreshed
+ * challenge was seen a second late, or the file was last touched 15 s before
+ * the window ended. Waiting until no file-system request is pending makes the
+ * steps independent of how fast the machine is.
  */
 async function pass(ms: number): Promise<void> {
   for (let left = ms; left > 0; left -= 1000) {
     await vi.advanceTimersByTimeAsync(Math.min(1000, left));
-    await realSleep(25);
+    await settleFileSystem();
   }
-  await realSleep(25);
+  await settleFileSystem();
+}
+
+/**
+ * Wait (in real time) until no file-system request is in flight. A request's
+ * callback runs before the next timer phase, so once none is pending the poll
+ * has either armed its next fake timer or finished. Capped at a few seconds so
+ * a stuck request fails the test's own assertion instead of hanging it.
+ */
+async function settleFileSystem(): Promise<void> {
+  for (let i = 0; i < 500; i++) {
+    await realSleep(1);
+    if (!process.getActiveResourcesInfo().some((resource) => resource.startsWith("FSReq"))) return;
+  }
 }
 
 /** What this process's child prints when it finds another process's sign-in holding the lock. */
