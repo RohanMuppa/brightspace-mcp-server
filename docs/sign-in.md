@@ -18,9 +18,9 @@ To be asked less often, see [Fewer 2FA prompts](#fewer-2fa-prompts).
 
 ## Passwordless sign-in
 
-Answering yes to `setup`'s "Sign in without a saved password" question (saved as `passwordless` in `config.json`; `D2L_PASSWORDLESS` overrides it) skips the password prompt and saves no password: setup also removes one saved earlier for the same account. Sign-in then submits only your username, and Microsoft's passwordless phone approval — the number you type into Authenticator — is the whole sign-in. It is off by default, and Microsoft Entra only; the other school-specific sign-in flows still need a password.
+Setup no longer offers this; it always saves your password. It is still available for anyone who sets `D2L_PASSWORDLESS=true` in their AI client's config for this server: sign-in then submits only your username, no password is read, and Microsoft's passwordless phone approval (the number you type into Authenticator) is the whole sign-in. Microsoft Entra only, and passwordless phone sign-in must already be on in Microsoft Authenticator.
 
-The tradeoff: **every sign-in needs your phone**, because there is no password for the server to supply. That's fine when you're at your desk using an assistant, and bad for anything unattended (a scheduled job, a headless agent) — automatic re-sign-in after a session expires waits until someone approves. Passwordless phone sign-in must already be turned on for your account in Microsoft Authenticator. If Microsoft asks for a password anyway, sign-in stops with an error naming `D2L_PASSWORDLESS` instead of waiting out the timeout; turn passwordless off and rerun `setup` to save a password.
+Every sign-in then needs your phone, including automatic ones after a session expires, so it doesn't suit anything unattended. If Microsoft asks for a password anyway, sign-in stops with an error naming `D2L_PASSWORDLESS`; remove the setting and rerun `setup`.
 
 ## Fewer 2FA prompts
 
@@ -98,9 +98,9 @@ Other AI apps open on this computer are signed out too and will ask you to sign 
 | McGill University | `--mcgill` | Microsoft Entra; myCourses sends you straight to Entra via SAML. |
 | Javeriana Cali | `--javeriana` | MobilityGuard OneGate: password, then an authenticator code that `auth` prompts for in the terminal. Headless sign-in needs the terminal prompt; otherwise use the visible browser. |
 | Ngee Ann Polytechnic | `--ngeeann` | Plain Microsoft Entra, no extra steps. |
-| Any other D2L school | none | Run `setup` with no flag and paste your Brightspace URL (for example `https://yourschool.brightspace.com`). An unsupported login page falls back to a visible browser window you complete by hand. |
+| Any other D2L school | none | Run `setup` with no flag and paste your Brightspace URL (for example `https://yourschool.brightspace.com`). If the login page isn't recognized, answer 2 ("Another way") to setup's sign-in question: the page then opens for you to finish by hand when you sign in with `setup` or `auth`. With 1, an unrecognized page stops with an error. |
 
-The setup wizard saves your password in the native credential store and asks how you'll complete MFA: wait for approval or number matching, enter a terminal code from an authenticator app, or use a visible browser for other interactive methods. It can also configure Claude Desktop, Cursor, Codex Desktop and CLI, and Claude Code when installed — restart your AI client when it finishes.
+The setup wizard saves your password in the native credential store and asks how you confirm it's you: 1, a phone app (tap Approve or type a code in the terminal), or 2, another way such as a text message, which shows you the sign-in page to finish yourself. The page only opens when you sign in with `setup` or `auth`; automatic sign-ins later always run in the background. It can also configure Claude Desktop, Cursor, Codex Desktop and CLI, and Claude Code when installed — restart your AI client when it finishes.
 
 ## No browser? Paste a session cookie or token
 

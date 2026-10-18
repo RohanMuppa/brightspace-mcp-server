@@ -57,7 +57,7 @@ If your school uses D2L Brightspace, yes. These have automatic sign-in built in:
 | McGill University | Microsoft Entra | `--mcgill` |
 | Javeriana Cali | OneGate (password + authenticator code) | `--javeriana` |
 | Ngee Ann Polytechnic | Microsoft Entra | `--ngeeann` |
-| Any other D2L school | Paste your Brightspace address; if the login page isn't recognized, a browser window opens so you can sign in by hand | none |
+| Any other D2L school | Paste your Brightspace address. If the login page isn't recognized, pick option 2 at setup's sign-in question so the page opens for you to finish by hand | none |
 
 School-specific quirks: [docs/sign-in.md](docs/sign-in.md#per-school-notes).
 
@@ -97,7 +97,6 @@ All optional, set in your AI app's MCP `env` config or your shell. The full list
 | Setting | What it does |
 |---------|--------------|
 | `D2L_REMEMBER_MFA=true` | Tick Microsoft's "Don't ask again" box so later sign-ins skip the second factor (off by default; not for shared computers). `setup` asks this as option 2 of its one "how often do you want to approve sign-ins" question and saves it as `rememberMfa` in `config.json`; the env var overrides it ([details](docs/sign-in.md#fewer-2fa-prompts)) |
-| `D2L_PASSWORDLESS=true` | Sign in with Microsoft Entra's passwordless phone approval, so no password is saved on the computer (off by default; Entra schools only). Every sign-in, including automatic ones, then waits for you to approve on your phone, so it suits interactive use, not unattended or scheduled jobs. `setup` asks this and saves it as `passwordless` in `config.json`; the env var overrides it ([details](docs/sign-in.md#passwordless-sign-in)) |
 | `D2L_TOTP_SECRET` | An authenticator setup key, so a Microsoft Entra "enter a code" challenge is answered on this computer instead of on your phone (off by default). Prefer `setup` (option 3), which keeps the key in your OS keychain; this variable is for CI and containers with no keychain and is weaker, because anything that can read the process environment gets your second factor ([details](docs/sign-in.md#fewer-2fa-prompts)) |
 | `D2L_HEADLESS=false` | Show the browser window during sign-in, for MFA methods that need a click |
 | `D2L_DUO_PASSCODE=1` | On Duo, type a passcode instead of waiting for a push |

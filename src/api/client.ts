@@ -21,6 +21,20 @@ import { log } from "../utils/logger.js";
 import { AUTH_COMMAND } from "../utils/commands.js";
 import { devActivity } from "../utils/dev-activity.js";
 
+/**
+ * True when a followed redirect ended on this Brightspace's sign-in page. A
+ * web route asked with a dead cookie 302s there rather than serving the
+ * expired-session stub, and fetch follows the redirect to an HTTP 200.
+ */
+function landedOnLogin(responseUrl: string, baseUrl: string): boolean {
+  try {
+    const url = new URL(responseUrl);
+    return url.origin === new URL(baseUrl).origin && url.pathname.toLowerCase() === "/d2l/login";
+  } catch {
+    return false;
+  }
+}
+
 /** An ordinary course HTML link to the login page is not an expired session. */
 function isExpiredSessionRedirect(body: string, baseUrl: string): boolean {
   const expiredTarget = (target: string): boolean => {
@@ -363,19 +377,28 @@ export class D2LApiClient {
    * read by a read-only tool is not worth an MFA prompt.
    */
   async getPage(path: string): Promise<string | null> {
+    const response = await this.getPageRaw(path);
+    return response ? await response.text() : null;
+  }
+
+  /**
+   * Like getPage, but returns the response itself so a binary body (a course
+   * file reached through a quickLink or /content/enforced path) is not decoded
+   * as text. Same cookie, same origin check, same null on a dead session.
+   */
+  async getPageRaw(path: string): Promise<Response | null> {
     // The cookie belongs to this Brightspace alone. A path that would make
     // `${baseUrl}${path}` name another host (`@evil.example/`, `.evil.example/`,
     // `//evil.example/`) is refused before the cookie is ever read.
     if (!this.isSameOriginPath(path)) {
-      log("WARN", "getPage refused a path outside the Brightspace origin");
+      log("WARN", "getPageRaw refused a path outside the Brightspace origin");
       return null;
     }
     const token = await this.tokenManager.getToken();
     if (!token?.cookieHeader) return null;
     const cookieToken: TokenData = { ...token, accessToken: `cookie:${token.cookieHeader}` };
     try {
-      const response = await this.retrying(() => this.throttled(() => this.makeRawRequest(path, cookieToken)));
-      return await response.text();
+      return await this.retrying(() => this.throttled(() => this.makeRawRequest(path, cookieToken)));
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) return null;
       throw error;
@@ -630,8 +653,8 @@ export class D2LApiClient {
       const contentType = (response.headers.get("content-type") ?? "").toLowerCase();
       if (contentType.startsWith("text/html")) {
         const body = await response.text();
-        if (isExpiredSessionRedirect(body, this.baseUrl)) {
-          log("DEBUG", "File download answered with the session-expired stub, treating it as a 401");
+        if (isExpiredSessionRedirect(body, this.baseUrl) || landedOnLogin(response.url, this.baseUrl)) {
+          log("DEBUG", "File download answered with the sign-in page, treating it as a 401");
           throw new ApiError(
             401,
             path,

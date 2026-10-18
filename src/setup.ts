@@ -398,14 +398,12 @@ export function configureMcpClient(configPath: string): boolean {
 export interface WizardAnswers {
   baseUrl: string;
   username: string;
-  /** Absent when passwordless sign-in was chosen: nothing is saved. */
   password?: string;
   /** An authenticator enrollment to save; absent leaves any saved one alone. */
   totpUri?: string;
   headless: boolean;
   /** Left undefined, the saved choice for the same school is kept. */
   rememberMfa?: boolean;
-  passwordless?: boolean;
   campus?: string;
 }
 
@@ -454,7 +452,7 @@ export function buildConfigToSave(
     username: answers.username,
     // Always the freshly typed one: a carried v1 plaintext password would
     // otherwise be the value written to the native store.
-    password: answers.passwordless ? undefined : answers.password,
+    password: answers.password,
     // Only ever the freshly typed one. Never read back out of `carried`: the
     // enrollment lives in the credential store, never in config.json, so a
     // value here could only have come from this run.
@@ -462,7 +460,10 @@ export function buildConfigToSave(
     headless: answers.headless,
   };
   if (answers.rememberMfa !== undefined) config.rememberMfa = answers.rememberMfa;
-  if (answers.passwordless !== undefined) config.passwordless = answers.passwordless;
+  // Setup no longer offers passwordless sign-in and always saves a password,
+  // so a carried `passwordless: true` would make sign-in ignore that password.
+  // D2L_PASSWORDLESS still turns it on for anyone who wants it.
+  delete config.passwordless;
   if (answers.campus) config.campus = answers.campus;
   return config;
 }
@@ -546,6 +547,10 @@ async function main(): Promise<void> {
   }
   console.log(dim("  By Rohan Muppa — github.com/rohanmuppa/brightspace-mcp-server"));
   console.log("");
+  // An assistant often opens this wizard in a side panel the user has never
+  // used, and their typing keeps going to the chat box until they click here.
+  console.log("  Click in this window, then type your answer to each question and press Enter.");
+  console.log("");
 
   const rl = readline.createInterface({
     input: process.stdin,
@@ -611,47 +616,21 @@ async function main(): Promise<void> {
   console.log("");
 
   // ── Step 3: Password (hidden) ────────────────────────────────────
-  // Opt-in only, asked the way remember-MFA is: passwordless trades a saved
-  // password for a phone approval on every sign-in, so it is never the default.
-  let savedPasswordless: boolean | undefined;
-  try {
-    savedPasswordless = configStoreExists() ? loadConfigStore().passwordless : undefined;
-  } catch {
-    // An invalid old config is replaced by the setup values below.
-  }
-  console.log(dim("  Microsoft Entra schools can sign you in with only a phone approval, so no password is saved on this computer."));
-  console.log(dim("  The cost: every sign-in, including automatic ones after a session expires, waits until you approve on your phone."));
-  console.log(dim("  Fine for using an assistant at your desk; not for unattended or scheduled use. It needs passwordless phone sign-in"));
-  console.log(dim("  turned on in Microsoft Authenticator first, or Microsoft will still ask for a password and sign-in will stop."));
-  const defaultPasswordless = savedPasswordless === true ? "yes" : "no";
-  let passwordlessAnswer = "";
-  while (!/^(y(es)?|no?)$/i.test(passwordlessAnswer)) {
-    passwordlessAnswer = await ask(
-      rl,
-      `  Sign in without a saved password (Microsoft Entra only)? (yes/no) [${defaultPasswordless}]: `,
-    ) || defaultPasswordless;
-    if (!/^(y(es)?|no?)$/i.test(passwordlessAnswer)) console.log(yellow("  Please enter yes or no."));
-  }
-  const passwordless = /^y/i.test(passwordlessAnswer);
-  console.log("");
-
   // Close the rl temporarily since askPassword manages its own
   rl.close();
 
   let password = "";
-  if (!passwordless) {
-    console.log(dim("  The password you use to sign in. It won't be shown as you type — asterisks stand in for each character."));
-    const passwordPrompt = preset
-      ? `What is your ${preset.name} password? `
-      : "What is your Brightspace password? ";
-    while (!password) {
-      password = await askPassword(passwordPrompt);
-      if (!password) {
-        console.log(yellow("  Password is required."));
-      }
+  console.log(dim("  The password you use to sign in. It won't be shown as you type — asterisks stand in for each character."));
+  const passwordPrompt = preset
+    ? `What is your ${preset.name} password? `
+    : "What is your Brightspace password? ";
+  while (!password) {
+    password = await askPassword(passwordPrompt);
+    if (!password) {
+      console.log(yellow("  Password is required."));
     }
-    console.log("");
   }
+  console.log("");
 
   // Re-open readline for remaining prompts
   let rl2 = readline.createInterface({
@@ -672,9 +651,9 @@ async function main(): Promise<void> {
   // MFA you have is detected at sign-in time, so offering "approve a prompt"
   // and "type a code" as separate choices would be a distinction the code does
   // not make, and picking between them would change nothing on disk.
-  console.log("  When your school asks you to approve the sign-in, how will you do it?");
-  console.log("    1. I approve on my phone, or I type a code from an authenticator app (recommended)");
-  console.log("    2. Something else — open a browser window I can use");
+  console.log("  How do you confirm it's you when you sign in?");
+  console.log("    1. With a phone app: I tap Approve or type a code (recommended)");
+  console.log("    2. Another way, like a text message: show me the sign-in page");
   let savedHeadless: boolean | undefined;
   let savedRememberMfa: boolean | undefined;
   try {
@@ -692,8 +671,8 @@ async function main(): Promise<void> {
   }
   const headless = mfaChoice !== "2";
   console.log(dim(headless
-    ? "  Authentication will run without a browser window."
-    : "  A browser window will open when authentication is needed."));
+    ? "  Sign-in will run in the background."
+    : "  The sign-in page will open when you sign in here, so you can finish it yourself."));
   console.log("");
 
   // ── Step 4b: How often to approve (the one 2FA question) ─────────
@@ -738,14 +717,11 @@ async function main(): Promise<void> {
     totpUri,
     headless,
     rememberMfa,
-    passwordless,
     campus: campus || undefined,
   });
 
   await saveSecureConfig(config);
-  console.log(green(passwordless
-    ? "  No password saved: each sign-in will wait for your phone approval."
-    : "  Password saved in your operating system credential store."));
+  console.log(green("  Password saved in your operating system credential store."));
   if (totpUri) console.log(green("  Authenticator enrollment saved in your operating system credential store."));
   if (shortcuts?.removeKey) {
     try {
@@ -782,7 +758,7 @@ async function main(): Promise<void> {
   if (claudePath) {
     const configClaude = await ask(
       rl2,
-      "Would you like to automatically configure Claude Desktop? (yes/no): ",
+      "Would you like to automatically configure Claude Desktop? Highly recommended. (yes/no): ",
     );
     if (
       /^y(es)?$/i.test(configClaude) &&
@@ -835,7 +811,7 @@ async function main(): Promise<void> {
 
     const configureClient = await ask(
       rl2,
-      `${client.displayName} detected. Configure it automatically? (yes/no): `,
+      `${client.displayName} detected. Configure it automatically? Highly recommended. (yes/no): `,
     );
     if (
       /^y(es)?$/i.test(configureClient) &&

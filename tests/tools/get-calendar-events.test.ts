@@ -262,8 +262,38 @@ describe("get_calendar_events", () => {
       return [];
     });
 
-    const events = parse(await call({}));
-    expect(events.map((e: any) => e.courseName)).toEqual(["MA 261"]);
+    const result = await call({});
+    expect(parse(result).map((e: any) => e.courseName)).toEqual(["MA 261"]);
+    // Issue #262: the failed course is named, not silently dropped.
+    expect(result.content).toHaveLength(2);
+    expect(result.content[1].text).toContain(String(COURSE_A.Id));
+    expect(result.content[1].text).not.toContain(String(COURSE_B.Id));
+    expect(result.content[1].text).toContain("could not be read");
+  });
+
+  it("names a single requested course whose calendar fails instead of an empty list read as no events", async () => {
+    const { call } = setup((path) => {
+      if (path.includes("/enrollments/")) return enrollments(COURSE_A);
+      if (path.includes("/calendar/")) throw new Error("503 Service Unavailable");
+      return [];
+    });
+
+    const result = await call({ courseId: COURSE_A.Id });
+
+    expect(result.isError).toBeUndefined();
+    expect(parse(result)).toEqual([]);
+    expect(result.content[1].text).toContain(String(COURSE_A.Id));
+    expect(result.content[1].text).toContain("Do not report");
+  });
+
+  it("adds no notice when every course's calendar loads", async () => {
+    const { call } = setup((path) => {
+      if (path.includes("/enrollments/")) return enrollments(COURSE_A, COURSE_B);
+      return page();
+    });
+
+    const result = await call({});
+    expect(result.content).toHaveLength(1);
   });
 
   it("queries only the requested course when courseId is given", async () => {
@@ -410,5 +440,22 @@ describe("get_calendar_events while sign-in is pending", () => {
     const parsed = parse(result);
     expect(Array.isArray(parsed)).toBe(true);
     expect(parsed).toHaveLength(1);
+    expect(notice(result)).toContain(String(COURSE_B.Id));
+  });
+
+  it("names both the pending and the failed course when each happens", async () => {
+    const { call } = setup((path) => {
+      if (path.includes("/enrollments/")) return enrollments(COURSE_A, COURSE_B);
+      if (path.includes(`/${COURSE_A.Id}/calendar/`)) throw mfaPending();
+      if (path.includes(`/${COURSE_B.Id}/calendar/`)) throw new Error("500");
+      return [];
+    });
+
+    const result = await call({});
+
+    expect(parse(result)).toEqual([]);
+    expect(notice(result)).toContain("Sign-in to Brightspace is still in progress");
+    expect(notice(result)).toContain(`(${COURSE_A.Id})`);
+    expect(notice(result)).toContain(`(${COURSE_B.Id}) could not be read`);
   });
 });
