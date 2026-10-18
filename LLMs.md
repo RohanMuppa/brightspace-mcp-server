@@ -70,7 +70,7 @@ npx -y brightspace-mcp-server@latest setup --javeriana
 The wizard:
 
 - prompts for the school's Brightspace URL (skipped with `--purdue`, `--suny`, `--western`, `--tudelft`, `--cuny`, `--leiden`, `--mcgill`, `--ngeeann`, or `--javeriana`)
-- asks whether MFA uses device approval, terminal code entry, or a visible browser, then authenticates accordingly
+- asks how the user confirms sign-in: 1, a phone app (approval or a terminal code; Chromium stays hidden), or 2, another way such as a text message (`headless: false`: the sign-in page opens during `setup`/`auth` for the user to finish; automatic re-auth stays hidden regardless)
 - saves the password in the native credential store and public settings in `~/.brightspace-mcp/config.json` (0600)
 - writes the encrypted session below `~/.d2l-session/accounts/<account-hash>/` (AES-256-GCM)
 - auto-configures Claude Desktop, Cursor, and Antigravity, and uses their own CLIs to configure Codex and Claude Code when detected; an existing `brightspace` entry that runs anything other than `npx -y brightspace-mcp-server@latest` is printed and replaced only if the user says yes

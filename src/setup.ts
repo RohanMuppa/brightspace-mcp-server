@@ -651,9 +651,9 @@ async function main(): Promise<void> {
   // MFA you have is detected at sign-in time, so offering "approve a prompt"
   // and "type a code" as separate choices would be a distinction the code does
   // not make, and picking between them would change nothing on disk.
-  console.log("  When your school asks you to approve the sign-in, how will you do it?");
-  console.log("    1. I approve on my phone, or I type a code from an authenticator app (recommended)");
-  console.log("    2. Something else — open a browser window I can use");
+  console.log("  How do you confirm it's you when you sign in?");
+  console.log("    1. With a phone app: I tap Approve or type a code (recommended)");
+  console.log("    2. Another way, like a text message: show me the sign-in page");
   let savedHeadless: boolean | undefined;
   let savedRememberMfa: boolean | undefined;
   try {
@@ -671,8 +671,8 @@ async function main(): Promise<void> {
   }
   const headless = mfaChoice !== "2";
   console.log(dim(headless
-    ? "  Authentication will run without a browser window."
-    : "  A browser window will open when authentication is needed."));
+    ? "  Sign-in will run in the background."
+    : "  The sign-in page will open when you sign in here, so you can finish it yourself."));
   console.log("");
 
   // ── Step 4b: How often to approve (the one 2FA question) ─────────
