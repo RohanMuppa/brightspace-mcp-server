@@ -546,6 +546,10 @@ async function main(): Promise<void> {
   }
   console.log(dim("  By Rohan Muppa — github.com/rohanmuppa/brightspace-mcp-server"));
   console.log("");
+  // An assistant often opens this wizard in a side panel the user has never
+  // used, and their typing keeps going to the chat box until they click here.
+  console.log("  Click in this window, then type your answer to each question and press Enter.");
+  console.log("");
 
   const rl = readline.createInterface({
     input: process.stdin,

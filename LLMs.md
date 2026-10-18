@@ -77,6 +77,16 @@ The wizard:
 
 Wait for the user to finish login and MFA before continuing.
 
+#### Handing the wizard to the user
+
+The wizard needs the user's own username, password, and MFA approval, which you must not type for them. Many users installing this are beginners who have never used a terminal, so the hand-off is where installs stall. Do it this way:
+
+- **Run it where the user can type.** That means a visible terminal they control: a terminal tab or panel your app shows them, or one they open themselves (Terminal on macOS, PowerShell on Windows). Never run it in a background shell, where the prompts can't reach them.
+- **Say exactly where it is and what to do first.** Name the place the way they see it ("the terminal panel on the right, titled *brightspace setup*"), and link it if your app supports that. Tell them to click inside it before typing, because keystrokes go to the chat box until they do. Tell them the first question is their username and to press Enter after each answer.
+- **Warn them about the password prompt.** Only asterisks appear as they type, and they still press Enter. Then the wizard asks how they approve sign-ins and waits for the MFA approval on their phone.
+- **Don't take "done" on faith.** Read the terminal yourself if you can. The wizard is finished only when it prints `Setup complete!`. If it is still on a prompt, tell the user which question it is waiting on and where to answer it. Don't just ask again whether they are done. Don't offer a one-click "I'm done" reply: a beginner will click it before they have typed anything.
+- **If typing in your panel doesn't work,** give them the one command to paste into their own terminal app, and say how to open that app.
+
 ### 3. Register the MCP server in the user's AI client
 
 The server command to register is:
