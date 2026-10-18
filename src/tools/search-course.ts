@@ -279,9 +279,10 @@ export function registerSearchCourse(
               }
             } catch (error) {
               // One forum's topics failing (e.g. no access) shouldn't drop
-              // every other forum — same graceful-degradation rule
-              // get_discussions already follows for this exact call.
+              // every other forum, but it still has to be named in `note` so
+              // a search missing those topics never reads as complete.
               log("DEBUG", `search_course: topics fetch failed for forum ${forum.ForumId}`, error);
+              notes.push(`discussions: topics in "${forum.Name}" ${describeFailure(error)}`);
             }
           }
         } catch (error) {
