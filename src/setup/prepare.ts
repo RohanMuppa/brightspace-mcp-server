@@ -230,7 +230,7 @@ export async function runPrepare(args: SetupArgs, overrides: Partial<PrepareDeps
     delete config.totpUri;
 
     const notes: string[] = [];
-    if (carried?.username && args.username && carried.username !== args.username) {
+    if (carried?.username && args.username && carried.username !== config.username) {
       notes.push(`was ${carried.username}; sign-in starts fresh for the new account`);
     }
     if (!username) notes.push("sign-in will ask for the username");
@@ -260,7 +260,7 @@ export async function runPrepare(args: SetupArgs, overrides: Partial<PrepareDeps
 
     if (username) {
       try {
-        const token = await deps.getSessionToken(baseUrl, sessionDirFor(deps.env, config, baseUrl, username));
+        const token = await deps.getSessionToken(baseUrl, sessionDirFor(deps.env, config, baseUrl, config.username));
         signedIn = Boolean(token);
       } catch {
         signedIn = false;

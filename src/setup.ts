@@ -22,7 +22,7 @@ import { askShortcutQuestion, type ShortcutIO } from "./utils/two-factor-shortcu
 import { DOCTOR_COMMAND, prepareCommand, signInCommand } from "./utils/commands.js";
 import { serverCommand } from "./utils/mcp-client-cli.js";
 import { parseSetupArgs, SETUP_USAGE, type SetupArgs } from "./setup/args.js";
-import { buildConfigToSave, isValidUrl, normalizeUrl, readExistingConfig, sameSchool } from "./setup/config.js";
+import { buildConfigToSave, isValidUrl, normalizeUrl, readExistingConfig, sameSchool, savedUsername } from "./setup/config.js";
 import { detectMcpClients, isChatGPTInstalled, type McpClientTarget } from "./setup/clients.js";
 import { presetForBaseUrl, type SchoolPreset } from "./setup/presets.js";
 import { formatPrepare, runPrepare } from "./setup/prepare.js";
@@ -312,7 +312,9 @@ async function interactive(args: SetupArgs): Promise<void> {
   let preset = args.preset ?? (baseUrl ? presetForBaseUrl(baseUrl)?.preset : undefined);
   const carried = baseUrl && saved && sameSchool(saved.baseUrl, baseUrl) ? saved : null;
 
-  const knownUsername = args.username ?? (mode === "sign-in" ? carried?.username : undefined);
+  const knownUsername = args.username !== undefined
+    ? savedUsername(carried?.username, args.username)
+    : mode === "sign-in" ? carried?.username : undefined;
   let passwordSaved = false;
   if (mode === "sign-in" && baseUrl && knownUsername) {
     try {
@@ -402,6 +404,8 @@ async function interactive(args: SetupArgs): Promise<void> {
   } else {
     console.log(dim(`  Username: ${username}`));
   }
+  // The saved spelling of the same account still finds what 4.0.0 saved.
+  username = savedUsername(saved && sameSchool(saved.baseUrl, baseUrl) ? saved.username : undefined, username);
   console.log("");
 
   // ── Step 3: Password (hidden) ────────────────────────────────────

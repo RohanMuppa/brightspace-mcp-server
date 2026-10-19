@@ -145,4 +145,16 @@ describe("Setup saves the canonical username", () => {
     const config = buildConfigToSave(null, { baseUrl: SCHOOL, username: " Alice ", password: "x", headless: true });
     expect(config.username).toBe("Alice");
   });
+
+  it("keeps the saved spelling when the same email is typed again in another case", () => {
+    const existing = { baseUrl: SCHOOL, username: "Student@purdue.edu" };
+    const config = buildConfigToSave(existing, { baseUrl: SCHOOL, username: "student@PURDUE.edu ", password: "x", headless: true });
+    expect(config.username).toBe("Student@purdue.edu");
+  });
+
+  it("lowercases a newly typed email that replaces a different saved account", () => {
+    const existing = { baseUrl: SCHOOL, username: "Other@purdue.edu" };
+    const config = buildConfigToSave(existing, { baseUrl: SCHOOL, username: "Student@purdue.edu", password: "x", headless: true });
+    expect(config.username).toBe("student@purdue.edu");
+  });
 });

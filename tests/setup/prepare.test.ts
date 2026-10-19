@@ -5,6 +5,13 @@ import type { McpClientTarget } from "../../src/setup/clients.js";
 import type { ChromiumStatus } from "../../src/utils/browser-install.js";
 import type { ConfigStoreData } from "../../src/utils/config-store.js";
 import type { Registration } from "../../src/utils/mcp-client-cli.js";
+import { createHash } from "node:crypto";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+import { getStoredPassword, getStoredTotpUri } from "../../src/auth/credential-store.js";
+import { accountSessionDirectory } from "../../src/utils/config.js";
+import { MemoryCredentialBackend } from "../auth/secure-store-fixtures.js";
 
 /**
  * `setup --prepare` is what an AI agent runs before handing over to the
@@ -277,5 +284,40 @@ describe("setup --prepare", () => {
     expect(text).not.toContain("hunter2");
     expect(text).not.toContain("otpauth");
     expect(h.saves.every((saved) => !("password" in saved) && !("totpUri" in saved))).toBe(true);
+  });
+});
+
+describe("setup --prepare on a 4.0.0 config with a mixed-case email", () => {
+  const MIXED = "Student@purdue.edu";
+  const hash = (name: string) => createHash("sha256").update(JSON.stringify([PURDUE, name])).digest("hex");
+  const legacyKey = (prefix: string) => JSON.stringify(["brightspace-mcp-server", `${prefix}:${hash(MIXED)}`]);
+
+  for (const flags of [["--purdue"], ["--purdue", "--username", "student@purdue.edu"]]) {
+    it(`still finds the saved password, enrollment and session (${flags.join(" ")})`, async () => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "prepare-casing-"));
+      try {
+        const backend = new MemoryCredentialBackend();
+        backend.values.set(legacyKey("password"), "dummy-password");
+        backend.values.set(legacyKey("totp"), "otpauth://totp/Purdue?secret=GEZDGNBVGY3TQOJQ");
+        const session = path.join(root, "accounts", hash(MIXED));
+        await fs.mkdir(session, { recursive: true });
+        const h = harness({ existing: { baseUrl: PURDUE, username: MIXED, headless: false } });
+
+        await runPrepare(args(...flags), h.deps);
+
+        const username = h.stored()?.username ?? "";
+        expect(await getStoredPassword(PURDUE, username, backend)).toBe("dummy-password");
+        expect(await getStoredTotpUri(PURDUE, username, backend)).not.toBeNull();
+        expect(accountSessionDirectory(root, PURDUE, username)).toBe(session);
+      } finally {
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    });
+  }
+
+  it("doesn't call a recased email a new account", async () => {
+    const h = harness({ existing: { baseUrl: PURDUE, username: MIXED } });
+    const result = await runPrepare(args("--purdue", "--username", "student@purdue.edu"), h.deps);
+    expect(result.steps.find((s) => s.id === "settings")?.line).not.toContain("starts fresh");
   });
 });
