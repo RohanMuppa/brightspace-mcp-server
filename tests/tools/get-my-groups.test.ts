@@ -208,6 +208,55 @@ describe("get_my_groups user in no group", () => {
   });
 });
 
+describe("get_my_groups unreadable group category", () => {
+  it("names a category it couldn't read instead of saying the user is in no group", async () => {
+    const { call, requested } = setup({
+      categories: [
+        { GroupCategoryId: 1, Name: "Project Groups" },
+        { GroupCategoryId: 2, Name: "Lab Sections" },
+      ],
+      groups: { 1: [{ GroupId: 10, Name: "Group A", Enrollments: [7, 8] }] },
+      groupsError: { 2: new ApiError(403, groupsPath(2), "Forbidden") },
+    });
+
+    const payload = parse(await call({ courseId: COURSE_ID }));
+
+    expect(payload.groups).toEqual([]);
+    expect(payload.note).toContain('"Lab Sections"');
+    expect(payload.note).not.toMatch(/not a member/i);
+    expect(requested).not.toContain(CLASSLIST_PATH);
+  });
+
+  it("returns the groups it found and notes the category it couldn't read", async () => {
+    const { call } = setup({
+      categories: [
+        { GroupCategoryId: 1, Name: "Project Groups" },
+        { GroupCategoryId: 2, Name: "Lab Sections" },
+      ],
+      groups: { 1: [{ GroupId: 10, Name: "Group A", Enrollments: [MY_ID] }] },
+      groupsError: { 2: new ApiError(404, groupsPath(2), "Not Found") },
+      classlist: { Objects: [classlistUser(MY_ID, "Ada Lovelace")], Next: null },
+    });
+
+    const payload = parse(await call({ courseId: COURSE_ID }));
+
+    expect(payload.groups.map((g: any) => g.groupId)).toEqual([10]);
+    expect(payload.note).toContain('"Lab Sections"');
+    expect(payload.note).not.toContain("Project Groups");
+  });
+
+  it("still fails on a groups error other than 403 or 404", async () => {
+    const { call } = setup({
+      categories: [{ GroupCategoryId: 1, Name: "Project Groups" }],
+      groupsError: { 1: new ApiError(500, groupsPath(1), "Server Error") },
+    });
+
+    const result = await call({ courseId: COURSE_ID });
+
+    expect(result.isError).toBe(true);
+  });
+});
+
 describe("get_my_groups schema validation", () => {
   it("rejects a missing courseId", async () => {
     const { call, requested } = setup({});
