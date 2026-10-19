@@ -9,6 +9,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { spawn } from "node:child_process";
 import { acquireProcessLock, AuthenticationInProgressError } from "./auth-lock.js";
+import { canonicalUsername } from "./username.js";
 
 const SERVICE = "brightspace-mcp-server";
 const LINUX_GUIDANCE = "Linux requires secret-tool and an unlocked Secret Service. Install libsecret-tools (Debian/Ubuntu) or your distribution's libsecret tools, unlock the desktop keyring, then retry. Temporary kernel key storage is not supported.";
@@ -156,68 +157,89 @@ export const nativeCredentialBackend: CredentialBackend = {
   },
 };
 
-function passwordAccount(baseUrl: string, username: string): string {
-  const identity = JSON.stringify([new URL(baseUrl).origin, username]);
-  return `password:${createHash("sha256").update(identity).digest("hex")}`;
+/**
+ * Where one of an account's secrets lives, canonical key first. Releases up to
+ * 4.0.0 hashed the username exactly as given, so that key follows as a legacy
+ * one to read from and clean up. The authenticator enrollment uses a separate
+ * `totp:` prefix so the seed can never be returned where a password is
+ * expected, and the same username rules so one account's two secrets live or
+ * die together. A Purdue-fork enrollment saved under the lowercased email is
+ * already the canonical key. TOTP idea from ElliotDrel/brightspace-mcp-server
+ * (branch codex/purdue-totp).
+ */
+function accountKeys(prefix: "password" | "totp", baseUrl: string, username: string): [string, ...string[]] {
+  const origin = new URL(baseUrl).origin;
+  const key = (name: string) => `${prefix}:${createHash("sha256").update(JSON.stringify([origin, name])).digest("hex")}`;
+  const canonical = key(canonicalUsername(username));
+  const exact = key(username);
+  return exact === canonical ? [canonical] : [canonical, exact];
 }
 
 /**
- * The authenticator enrollment's own account, derived exactly like
- * passwordAccount (same origin + username, same casing rules) so one account's
- * two secrets live or die together, under a separate `totp:` prefix so the
- * seed can never be returned where a password is expected.
- * Idea from ElliotDrel/brightspace-mcp-server (branch codex/purdue-totp).
+ * Read a secret under its canonical key, falling back to a legacy key. A
+ * legacy secret is copied to the canonical key and removed only once the copy
+ * reads back intact; a store that refuses any step keeps the legacy entry,
+ * and the secret is returned either way.
  */
-function totpAccount(baseUrl: string, username: string): string {
-  const identity = JSON.stringify([new URL(baseUrl).origin, username]);
-  return `totp:${createHash("sha256").update(identity).digest("hex")}`;
+async function getSecret(prefix: "password" | "totp", baseUrl: string, username: string, backend: CredentialBackend): Promise<string | null> {
+  const [canonical, ...legacy] = accountKeys(prefix, baseUrl, username);
+  const current = await backend.getPassword(SERVICE, canonical);
+  if (current !== null) return current;
+  for (const account of legacy) {
+    const value = await backend.getPassword(SERVICE, account);
+    if (value === null) continue;
+    try {
+      await backend.setPassword(SERVICE, canonical, value);
+      if (await backend.getPassword(SERVICE, canonical) === value) await backend.deletePassword(SERVICE, account);
+    } catch {
+      // Migration is best effort; the legacy entry still answers next time.
+    }
+    return value;
+  }
+  return null;
+}
+
+async function setSecret(prefix: "password" | "totp", baseUrl: string, username: string, value: string, backend: CredentialBackend, unverified: string): Promise<void> {
+  const [account] = accountKeys(prefix, baseUrl, username);
+  await backend.setPassword(SERVICE, account, value);
+  if (await backend.getPassword(SERVICE, account) !== value) throw new NativeCredentialStoreError(unverified);
+}
+
+/** Remove the secret under every key it may sit under. Safe when none was saved. */
+async function deleteSecret(prefix: "password" | "totp", baseUrl: string, username: string, backend: CredentialBackend, kept: string): Promise<void> {
+  for (const account of accountKeys(prefix, baseUrl, username)) {
+    // Some native stores raise on deleting an entry that does not exist.
+    if (await backend.getPassword(SERVICE, account) === null) continue;
+    await backend.deletePassword(SERVICE, account);
+    if (await backend.getPassword(SERVICE, account) !== null) throw new NativeCredentialStoreError(kept);
+  }
 }
 
 /** The account's saved authenticator enrollment, or null when none was saved. */
 export async function getStoredTotpUri(baseUrl: string, username: string, backend: CredentialBackend = nativeCredentialBackend): Promise<string | null> {
-  return backend.getPassword(SERVICE, totpAccount(baseUrl, username));
+  return getSecret("totp", baseUrl, username, backend);
 }
 
 export async function setStoredTotpUri(baseUrl: string, username: string, uri: string, backend: CredentialBackend = nativeCredentialBackend): Promise<void> {
-  const account = totpAccount(baseUrl, username);
-  await backend.setPassword(SERVICE, account, uri);
-  if (await backend.getPassword(SERVICE, account) !== uri) {
-    throw new NativeCredentialStoreError("The authenticator enrollment could not be verified in the native credential store. Existing configuration was preserved.");
-  }
+  await setSecret("totp", baseUrl, username, uri, backend, "The authenticator enrollment could not be verified in the native credential store. Existing configuration was preserved.");
 }
 
 /** Remove an account's saved authenticator enrollment. Safe when none was saved. */
 export async function deleteStoredTotpUri(baseUrl: string, username: string, backend: CredentialBackend = nativeCredentialBackend): Promise<void> {
-  const account = totpAccount(baseUrl, username);
-  // Some native stores raise on deleting an entry that does not exist.
-  if (await backend.getPassword(SERVICE, account) === null) return;
-  await backend.deletePassword(SERVICE, account);
-  if (await backend.getPassword(SERVICE, account) !== null) {
-    throw new NativeCredentialStoreError("The saved authenticator enrollment could not be removed from the native credential store.");
-  }
+  await deleteSecret("totp", baseUrl, username, backend, "The saved authenticator enrollment could not be removed from the native credential store.");
 }
 
 export async function getStoredPassword(baseUrl: string, username: string, backend: CredentialBackend = nativeCredentialBackend): Promise<string | null> {
-  return backend.getPassword(SERVICE, passwordAccount(baseUrl, username));
+  return getSecret("password", baseUrl, username, backend);
 }
 
 export async function setStoredPassword(baseUrl: string, username: string, password: string, backend: CredentialBackend = nativeCredentialBackend): Promise<void> {
-  const account = passwordAccount(baseUrl, username);
-  await backend.setPassword(SERVICE, account, password);
-  if (await backend.getPassword(SERVICE, account) !== password) {
-    throw new NativeCredentialStoreError("The saved password could not be verified in the native credential store. Existing configuration was preserved.");
-  }
+  await setSecret("password", baseUrl, username, password, backend, "The saved password could not be verified in the native credential store. Existing configuration was preserved.");
 }
 
 /** Remove an account's saved password, so passwordless sign-in leaves none behind. */
 export async function deleteStoredPassword(baseUrl: string, username: string, backend: CredentialBackend = nativeCredentialBackend): Promise<void> {
-  const account = passwordAccount(baseUrl, username);
-  // Some native stores raise on deleting an entry that does not exist.
-  if (await backend.getPassword(SERVICE, account) === null) return;
-  await backend.deletePassword(SERVICE, account);
-  if (await backend.getPassword(SERVICE, account) !== null) {
-    throw new NativeCredentialStoreError("The saved password could not be removed from the native credential store. Existing configuration was preserved.");
-  }
+  await deleteSecret("password", baseUrl, username, backend, "The saved password could not be removed from the native credential store. Existing configuration was preserved.");
 }
 
 function decodeKey(value: string): Buffer {

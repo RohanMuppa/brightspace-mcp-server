@@ -4,6 +4,7 @@
  * Licensed under MIT — see LICENSE file for details.
  */
 
+import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import { createHash } from "node:crypto";
@@ -13,6 +14,7 @@ import { configStoreExists, getConfigStorePath, loadConfigStore } from "./config
 import type { ConfigStoreData } from "./config-store.js";
 import { resolveStoredPassword } from "./secure-config.js";
 import { getStoredTotpUri } from "../auth/credential-store.js";
+import { canonicalUsername } from "../auth/username.js";
 import { normalizeTotpEnrollment } from "../auth/totp.js";
 import { migrateLegacyState } from "../auth/legacy-state.js";
 
@@ -189,8 +191,14 @@ export async function loadConfig(): Promise<AppConfig> {
 
 export function accountSessionDirectory(root: string, baseUrl: string, username?: string): string {
   if (!username) return root;
-  const account = createHash("sha256").update(JSON.stringify([new URL(baseUrl).origin, username])).digest("hex");
-  return path.join(root, "accounts", account);
+  const origin = new URL(baseUrl).origin;
+  const directory = (name: string) => path.join(root, "accounts", createHash("sha256").update(JSON.stringify([origin, name])).digest("hex"));
+  const canonical = directory(canonicalUsername(username));
+  // Releases up to 4.0.0 named the directory after the username exactly as
+  // given. Its encryption key is tied to that path, so a session already
+  // saved there keeps being used rather than stranded.
+  const legacy = directory(username);
+  return legacy !== canonical && !fs.existsSync(canonical) && fs.existsSync(legacy) ? legacy : canonical;
 }
 
 /**

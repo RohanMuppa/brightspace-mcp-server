@@ -6,6 +6,7 @@
  * The settings setup saves, shared by the wizard, prepare and sign-in.
  */
 
+import { canonicalUsername } from "../auth/username.js";
 import { configStoreExists, loadConfigStore, type ConfigStoreData } from "../utils/config-store.js";
 
 // ── URL validation ─────────────────────────────────────────────────
@@ -88,7 +89,7 @@ export function buildConfigToSave(
   const config: ConfigStoreData = {
     ...carried,
     baseUrl: answers.baseUrl,
-    username: answers.username,
+    username: canonicalUsername(answers.username),
     // Always the freshly typed one: a carried v1 plaintext password would
     // otherwise be the value written to the native store.
     password: answers.password,
