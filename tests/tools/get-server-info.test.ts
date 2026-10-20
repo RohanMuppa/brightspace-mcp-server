@@ -158,6 +158,7 @@ describe("get_server_info microsoftSession", () => {
       staySignedInExpires: "2099-01-01T00:00:00.000Z",
       rememberMfa: "ticked",
       rememberMfaAt: "2026-10-01T12:00:00.000Z",
+      note: expect.stringContaining("Stay signed in keeps the Microsoft sign-in only"),
     });
   });
 
