@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { packedFilePaths } from "./pack-json.js";
 
 /**
  * What actually ships is decided by the "files" array in package.json.
@@ -26,8 +27,7 @@ function packedPaths(): string[] {
     timeout: 120_000,
     shell: isWindows,
   });
-  const [entry] = JSON.parse(out) as Array<{ files: Array<{ path: string }> }>;
-  return entry.files.map((f) => f.path);
+  return packedFilePaths(JSON.parse(out));
 }
 
 describe("npm pack", () => {
