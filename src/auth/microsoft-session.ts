@@ -30,7 +30,25 @@ export interface MicrosoftSession {
   staySignedInExpires: string | null;
   rememberMfa: RememberMfaOutcome;
   rememberMfaAt: string | null;
+  /**
+   * What these two values mean for 2FA, in plain words. "Stay signed in"
+   * only keeps the Microsoft sign-in; it never promises the school won't ask
+   * for 2FA again, which is what users read it as (#227).
+   */
+  note: string;
 }
+
+const STAY_SIGNED_IN_NOTE =
+  "Stay signed in keeps the Microsoft sign-in only; your school can still ask for 2FA on a new sign-in.";
+
+/** One sentence for each Don't ask again outcome, after STAY_SIGNED_IN_NOTE. */
+const REMEMBER_MFA_NOTES: Record<RememberMfaOutcome, string> = {
+  ticked: "\"Don't ask again\" was ticked, so Microsoft may skip 2FA for a while; your school decides how long.",
+  already: "\"Don't ask again\" was already on, so Microsoft may skip 2FA for a while; your school decides how long.",
+  absent: "Your school's sign-in page didn't offer \"Don't ask again\", so 2FA is asked whenever your school requires it.",
+  unknown: "Whether \"Don't ask again\" applied isn't known yet; it is recorded at the next sign-in that reaches 2FA.",
+  off: "\"Don't ask again\" is off. To be asked less often, rerun setup and pick \"Less often\" (or set D2L_REMEMBER_MFA=true).",
+};
 
 interface SummaryFile {
   version: 1;
@@ -114,5 +132,6 @@ export async function readMicrosoftSession(sessionDir: string, now = Date.now())
     staySignedInExpires: staySignedIn && expires! > 0 ? new Date(expires! * 1000).toISOString() : null,
     rememberMfa: summary.rememberMfa?.outcome ?? "unknown",
     rememberMfaAt: summary.rememberMfa?.at ?? null,
+    note: `${STAY_SIGNED_IN_NOTE} ${REMEMBER_MFA_NOTES[summary.rememberMfa?.outcome ?? "unknown"]}`,
   };
 }

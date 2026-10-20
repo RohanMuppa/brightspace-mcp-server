@@ -63,6 +63,19 @@ describe("Microsoft session summary", () => {
     });
   });
 
+  // #227: a user read "stay signed in until 2027" as "no more 2FA prompts".
+  it("says plainly that staying signed in doesn't skip 2FA, and what Don't ask again means", async () => {
+    await recordMicrosoftSession(dir, state(cookie("ESTSAUTHPERSISTENT", IN_90_DAYS)), { outcome: "off", at: "2026-10-01T12:00:00.000Z" });
+    const { note } = (await readMicrosoftSession(dir, NOW))!;
+    expect(note).toContain("your school can still ask for 2FA");
+    expect(note).toContain("D2L_REMEMBER_MFA=true");
+
+    for (const [outcome, phrase] of [["ticked", "was ticked"], ["already", "already on"], ["absent", "didn't offer"], ["unknown", "isn't known yet"]] as const) {
+      await recordMicrosoftSession(dir, state(cookie("ESTSAUTHPERSISTENT", IN_90_DAYS)), { outcome, at: "2026-10-01T12:00:00.000Z" });
+      expect((await readMicrosoftSession(dir, NOW))!.note).toContain(phrase);
+    }
+  });
+
   it("reports no stay-signed-in without Entra's persistent cookie", async () => {
     await recordMicrosoftSession(dir, state(cookie("ESTSAUTH", -1)));
     expect(await readMicrosoftSession(dir, NOW)).toMatchObject({ staySignedIn: false, staySignedInExpires: null });
