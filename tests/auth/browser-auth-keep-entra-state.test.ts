@@ -77,6 +77,7 @@ describe("browser state on a failed sign-in", () => {
       staySignedInExpires: "2026-12-30T12:00:00.000Z",
       rememberMfa: "ticked",
       rememberMfaAt: "2026-10-01T11:59:00.000Z",
+      note: expect.stringContaining("was ticked"),
     });
   });
 
