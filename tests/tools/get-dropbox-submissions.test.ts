@@ -188,4 +188,60 @@ describe("get_dropbox_submissions", () => {
     expect(parsed.totalSubmissions).toBe(2);
     expect(parsed.returnedSubmissions).toBe(1);
   });
+
+  it("reports a failed feedback read as unknown, keeps it under activeOnly, and names the submitter", async () => {
+    const { call } = setup((path) => {
+      if (path.endsWith("/dropbox/folders/")) return [folder];
+      if (path.endsWith("/submissions/")) {
+        return [submission({ Id: 1, SubmittedBy: { Identifier: "501", DisplayName: "Graded" } }),
+          submission({ Id: 2, SubmittedBy: { Identifier: "502", DisplayName: "Unreadable" } }),
+          submission({ Id: 3, SubmittedBy: { Identifier: "503", DisplayName: "Ungraded" } })];
+      }
+      if (path.includes("/feedback/user/501")) {
+        return { Score: 90, Feedback: { Text: "Nice work", Html: "" }, IsGraded: true };
+      }
+      if (path.includes("/feedback/user/502")) {
+        throw new ApiError(500, "/feedback/user/502", "Internal Server Error");
+      }
+      throw notFound(); // no feedback yet for 503
+    });
+
+    const result = await call({ courseId: COURSE_ID, folderId: FOLDER_ID, activeOnly: true });
+    const parsed = body(result);
+    expect(parsed.submissions.map((s: any) => s.userId)).toEqual(["502", "503"]);
+    expect(parsed.submissions[0].feedbackStatus).toBeNull();
+    expect(parsed.submissions[1].feedbackStatus).toMatchObject({ isGraded: false });
+    expect(parsed.note).toContain('"Unreadable"');
+    expect(parsed.note).not.toContain('"Ungraded"');
+  });
+
+  it("joins the truncation and unread-feedback notes", async () => {
+    const { call } = setup((path) => {
+      if (path.endsWith("/dropbox/folders/")) return [folder];
+      if (path.endsWith("/submissions/")) {
+        return [submission({ Id: 1, SubmittedBy: { Identifier: "501", DisplayName: "Unreadable" } }),
+          submission({ Id: 2, SubmittedBy: { Identifier: "502", DisplayName: "Tail" } })];
+      }
+      if (path.includes("/feedback/user/")) throw forbidden();
+      throw notFound();
+    });
+
+    const result = await call({ courseId: COURSE_ID, folderId: FOLDER_ID, limit: 1 });
+    const parsed = body(result);
+    expect(parsed.note).toContain("Showing 1 of 2 submissions");
+    expect(parsed.note).toContain('"Unreadable"');
+    expect(parsed.note).not.toContain('"Tail"');
+  });
+
+  it("leaves note out when every feedback read succeeds or is a 404", async () => {
+    const { call } = setup((path) => {
+      if (path.endsWith("/dropbox/folders/")) return [folder];
+      if (path.endsWith("/submissions/")) return [submission()];
+      throw notFound();
+    });
+
+    const parsed = body(await call({ courseId: COURSE_ID, folderId: FOLDER_ID }));
+    expect(parsed.note).toBeUndefined();
+    expect(parsed.submissions[0].feedbackStatus).toMatchObject({ isGraded: false, score: null });
+  });
 });
