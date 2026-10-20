@@ -21,6 +21,35 @@ import { sanitizeError } from "../../src/tools/tool-helpers.js";
  * joining a local background child polls it.
  */
 
+/**
+ * The relay poll's file calls, answered by their synchronous twins so each one
+ * settles in a microtask. Real async file I/O runs on libuv's thread pool,
+ * which fake timers can't drive, and `fs.promises.readFile` isn't even listed
+ * by process.getActiveResourcesInfo() while it runs. Waiting on it in real
+ * time (a fixed pause, then a pending-request check) still let the fake clock
+ * move a second ahead of a slow read under a loaded test run, and the poll
+ * missed a refreshed number. Done this way, every poll finishes inside the
+ * fake-timer step that started it, however busy the machine is. The files are
+ * still real: the tests create and inspect them with node:fs directly.
+ */
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  const sync = await import("node:fs");
+  const synchronous = <A extends unknown[], R>(fn: (...args: A) => R) => async (...args: A): Promise<R> => fn(...args);
+  const mocked = {
+    ...actual,
+    access: synchronous(sync.accessSync),
+    lstat: synchronous(sync.lstatSync),
+    mkdir: synchronous(sync.mkdirSync),
+    readFile: synchronous(sync.readFileSync),
+    rename: synchronous(sync.renameSync),
+    rmdir: synchronous(sync.rmdirSync),
+    unlink: synchronous(sync.unlinkSync),
+    utimes: synchronous(sync.utimesSync),
+    writeFile: synchronous(sync.writeFileSync),
+  };
+  return { ...mocked, default: mocked };
+});
 vi.mock("node:child_process", () => ({ spawn: vi.fn(), execFileSync: vi.fn() }));
 vi.mock("../../src/utils/logger.js", () => ({ log: vi.fn() }));
 vi.mock("../../src/utils/dev-activity.js", () => ({ devActivity: vi.fn() }));
@@ -38,36 +67,17 @@ function mockChild() {
 type Child = ReturnType<typeof mockChild>;
 
 /**
- * Advance the fake clock, a second at a time, letting the real file-system
- * calls the relay poll makes finish between steps. Fake timers do not drive
- * real I/O, and the poll awaits it before arming its next timer.
- *
- * This used to pause a fixed 25 ms of real time per step. On a slow CI runner
- * (Windows, most often) the poll's I/O took longer than that, so a fake second
- * passed with no poll armed and the poll fell behind the clock: a refreshed
- * challenge was seen a second late, or the file was last touched 15 s before
- * the window ended. Waiting until no file-system request is pending makes the
- * steps independent of how fast the machine is.
+ * Advance the fake clock a second at a time. The poll's file calls settle in
+ * microtasks (see the node:fs/promises mock above), so advanceTimersByTimeAsync
+ * runs each poll to completion before its next timer is due. The short real
+ * pause lets the mocked children's stdout events through.
  */
 async function pass(ms: number): Promise<void> {
   for (let left = ms; left > 0; left -= 1000) {
     await vi.advanceTimersByTimeAsync(Math.min(1000, left));
-    await settleFileSystem();
-  }
-  await settleFileSystem();
-}
-
-/**
- * Wait (in real time) until no file-system request is in flight. A request's
- * callback runs before the next timer phase, so once none is pending the poll
- * has either armed its next fake timer or finished. Capped at a few seconds so
- * a stuck request fails the test's own assertion instead of hanging it.
- */
-async function settleFileSystem(): Promise<void> {
-  for (let i = 0; i < 500; i++) {
     await realSleep(1);
-    if (!process.getActiveResourcesInfo().some((resource) => resource.startsWith("FSReq"))) return;
   }
+  await realSleep(1);
 }
 
 /** What this process's child prints when it finds another process's sign-in holding the lock. */
