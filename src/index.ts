@@ -83,7 +83,7 @@ if (subcommand === 'setup') {
       // Check for updates now, then every few hours. A stdio server can stay
       // alive for days, so a boot-only check would never see a release. The
       // interval is unref'd and cannot hold the process open.
-      startUpdateChecks();
+      startUpdateChecks({ transport: http ? "http" : "stdio" });
 
       // Log active course filter config if any filter is set
       if (config.courseFilter.includeCourseIds || config.courseFilter.excludeCourseIds || !config.courseFilter.activeOnly) {
