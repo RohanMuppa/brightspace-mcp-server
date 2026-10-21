@@ -58,6 +58,8 @@ export interface HttpServerOptions {
   token: string;
   /** 0 picks a free port (tests). */
   port: number;
+  /** Told how many requests are in progress whenever that number changes. */
+  onActiveChange?: (active: number) => void;
 }
 
 export interface RunningHttpServer {
@@ -124,7 +126,7 @@ function readBody(req: IncomingMessage): Promise<string> {
  * carry no Origin other than this server's own (a page in a browser always
  * sends one), and present the bearer token.
  */
-export function startHttpServer({ runtime, token, port }: HttpServerOptions): Promise<RunningHttpServer> {
+export function startHttpServer({ runtime, token, port, onActiveChange }: HttpServerOptions): Promise<RunningHttpServer> {
   const expectedToken = createHash("sha256").update(token).digest();
   const authorized = (header: string | undefined): boolean => {
     const match = /^Bearer[ ]+(\S+)[ ]*$/i.exec(header ?? "");
@@ -177,8 +179,10 @@ export function startHttpServer({ runtime, token, port }: HttpServerOptions): Pr
 
   const httpServer = createServer((req, res) => {
     active += 1;
+    onActiveChange?.(active);
     res.once("close", () => {
       active -= 1;
+      onActiveChange?.(active);
       // A keep-alive connection that just finished its last request would
       // otherwise hold a closing server open until it timed out.
       if (closing) setImmediate(() => httpServer.closeIdleConnections());
