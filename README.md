@@ -109,6 +109,36 @@ All optional, set in your AI app's MCP `env` config or your shell. The full list
 | `D2L_NO_UPDATE_CHECK=1` | Turn off the new-version notice |
 | `D2L_DEV_MODE=true` | Write a local, content-free log of tool calls and sign-in events, for debugging session problems ([how](docs/dev-mode.md)) |
 
+## One server for all your chats (optional)
+
+Normally every chat starts its own copy of the server. With many Codex chats open that is many copies, each roughly 70 MB of memory. Instead you can run **one** copy yourself and point every chat at it by URL. It uses the same saved password, saved session, and sign-in as before; a question that needs a sign-in still signs in once, for every chat.
+
+1. **Make a secret token, once.** Chats must present it, so other programs and web pages can't read your grades. Generate one:
+   ```bash
+   node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+   ```
+   Save it as a user environment variable named `D2L_HTTP_TOKEN`, where both the server and Codex can see it. On Windows: `setx D2L_HTTP_TOKEN <token>` (apps and terminals opened afterwards see it). On macOS or Linux: add `export D2L_HTTP_TOKEN=<token>` to your shell profile (`~/.zshrc`, `~/.bashrc`); a Codex app launched from the Dock or a desktop menu may not read that profile, so start it from a terminal. The server never prints the token.
+2. **Start the server and leave it running** in a terminal of its own:
+   ```bash
+   npx -y brightspace-mcp-server@latest http
+   ```
+   It listens on `http://127.0.0.1:18765/mcp`, on this computer only. Pick another port with `--port 18766` or `D2L_HTTP_PORT`. Start it once per login: chats do not start it, and a second copy on the same port stops at once with "already in use" rather than running alongside the first. Nothing signs in at startup.
+3. **Point Codex at it.** In `~/.codex/config.toml`, replace the `command` and `args` lines of your `[mcp_servers.brightspace]` entry with:
+   ```toml
+   [mcp_servers.brightspace]
+   url = "http://127.0.0.1:18765/mcp"
+   bearer_token_env_var = "D2L_HTTP_TOKEN"
+   ```
+   (`env_http_headers = { "Authorization" = "D2L_HTTP_AUTHORIZATION" }` also works, if that variable holds `Bearer <token>`.) A project's own `.codex/config.toml` overrides this one, so remove any `brightspace` entry there or change it the same way. If you rerun `setup` later, say no when it offers to replace the Codex entry.
+4. **Restart Codex.** Chats that were already open keep the old per-chat server until Codex restarts. If you stop or restart the shared server, calls fail until it is back; if they still fail after that, start a new chat or restart Codex.
+
+Things that change:
+- **Settings go to the server, not to Codex.** A URL entry has no process to pass an `env` table to, so `D2L_*` settings (the [table above](#settings-you-might-want)) are set in the terminal that runs `http`, in a `.env` file in the directory you start it from, or saved by `setup`.
+- **Sign-in messages show up in the server's terminal.** The number to approve still comes back in the chat's answer, and, in clients that show tool progress, while the question is running.
+- **Stopping it:** press Ctrl+C. Questions already running finish first; press Ctrl+C again to stop at once.
+
+Any other MCP client that can connect to a Streamable HTTP URL with a bearer token can share the same server. To go back to one copy per chat, put the `command`/`args` entry back (rerunning `setup` does it) and stop the shared server.
+
 ## When it asks you to sign in
 
 There's no separate login — asking a question signs you in, and it stays signed in on its own most days. When your school wants two-factor again, the number to approve shows up right in the answer; approve it on your phone and the assistant keeps checking on its own — each check waits up to 45 seconds and the original question completes as soon as the sign-in does, without you having to say you've approved it. If your AI client shows tool progress messages, the number appears while the question is still running instead. If it ever gets stuck, run this in a terminal:
