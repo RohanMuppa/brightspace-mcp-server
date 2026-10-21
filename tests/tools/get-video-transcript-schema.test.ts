@@ -40,3 +40,10 @@ describe("get_video_transcript — advertised input schema", () => {
     expect(tool.inputSchema.properties.maxChars.description).toMatch(/offset/);
   });
 });
+
+describe("get_video_transcript — advertised LTI support (#281)", () => {
+  it("does not promise every Brightspace LTI link resolves, and names the unresolved-launch reason", () => {
+    expect(tool.description).not.toMatch(/including its Brightspace LTI links\)/);
+    expect(tool.description).toMatch(/lti_launch_unresolved/);
+  });
+});

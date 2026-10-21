@@ -231,6 +231,29 @@ describe("get_video_transcript — Brightspace LTI quickLinks", () => {
     expect(body.message).toMatch(/LTI link/);
     expect(body.message).not.toMatch(/supported video platform/);
   });
+
+  it("marks an unresolved launch with its own reason and says the captions may still exist (#281)", async () => {
+    const { call } = setupLti({
+      [QUICKLINK]: launchPage(
+        `<form method="post" action="https://tool.example.com/lti/login">` +
+          `<input type="hidden" name="login_hint" value="abc" /></form>`
+      ),
+    });
+    const body = JSON.parse((await call({ courseId: COURSE_ID, topicId: 55 })).content[0].text);
+
+    expect(body.reason).toBe("lti_launch_unresolved");
+    expect(body.message).toMatch(/does not mean the video has no captions/i);
+  });
+});
+
+describe("get_video_transcript — telling an unresolved launch from missing captions (#281)", () => {
+  it("marks a video with no captions with a different reason than an unresolved LTI launch", async () => {
+    const { call } = setup(kalturaFetch({ captionAssets: [] }));
+    const body = JSON.parse((await call({ courseId: COURSE_ID, topicId: 55 })).content[0].text);
+
+    expect(body.hasTranscript).toBe(false);
+    expect(body.reason).toBe("no_captions");
+  });
 });
 
 describe("get_video_transcript — absolute same-origin quickLinks (#190)", () => {

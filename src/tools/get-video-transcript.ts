@@ -147,8 +147,11 @@ export function registerGetVideoTranscript(
         "Read the transcript of a video embedded in course content, such as a recorded lecture or explainer clip. " +
         "Call it with courseId and topicId from get_course_content (typeFilter: 'video' or 'other'), or with videoUrl " +
         "directly if you already have the link. Returns transcript text with timestamps, plus title and duration when " +
-        "available. Currently supports Kaltura (e.g. BoilerCast, including its Brightspace LTI links) and YouTube; other platforms return a clear message " +
-        "naming what isn't supported yet. Each call returns at most maxChars characters (up to 100000); to read a whole " +
+        "available. Currently supports Kaltura (e.g. BoilerCast) and YouTube; other platforms return a clear message " +
+        "naming what isn't supported yet. A Brightspace LTI link (a quickLink with type=lti) is followed only when its launch " +
+        "page names the video; when it doesn't (e.g. an LTI 1.3 tool that needs its own browser sign-in), the result has " +
+        "reason 'lti_launch_unresolved', which says nothing about whether the video has captions. A video found to have " +
+        "no captions has reason 'no_captions'. Each call returns at most maxChars characters (up to 100000); to read a whole " +
         "transcript, call again with offset set to the returned nextOffset until truncated is false. Read only — this " +
         "never marks the video as watched.",
       inputSchema: GetVideoTranscriptSchema,
@@ -188,10 +191,12 @@ export function registerGetVideoTranscript(
               videoUrl: publicUrl,
               platform: "unknown",
               hasTranscript: false,
+              reason: "lti_launch_unresolved",
               message:
                 `This is a Brightspace LTI link (${publicUrl}), and its launch did not reveal which video it opens. ` +
                 "Some tools only hand over the video after a browser sign-in to the tool itself, which this server " +
-                "can't do. The video platform itself may still be supported. Open it in Brightspace directly.",
+                "can't do. This does not mean the video has no captions, and the video platform itself may still be " +
+                "supported. Open it in Brightspace directly.",
             });
           }
           resolvedUrl = launchedUrl;
@@ -218,6 +223,7 @@ export function registerGetVideoTranscript(
             videoUrl: publicUrl,
             platform,
             hasTranscript: false,
+            reason: "no_captions",
             message: outcome.noTranscript,
           });
         }
