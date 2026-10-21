@@ -32,14 +32,22 @@ const RECONNECT_HINT =
  * the client has already closed ends the process cleanly, since there is no
  * one left to answer; and every other way the process stops says why on
  * stderr, which MCP clients keep as the server's log.
+ *
+ * The shared HTTP server passes stdio = false: its clients are not on stdin
+ * and stdout, so a closed terminal pipe says nothing about them.
  */
-export function guardServerProcess(proc: GuardedProcess = process): void {
+export function guardServerProcess(proc: GuardedProcess = process, stdio = true): void {
   proc.on("uncaughtException", (error) => {
     log("ERROR", "Uncaught exception; the server is still running", error);
   });
   proc.on("unhandledRejection", (reason) => {
     log("ERROR", "Unhandled promise rejection", reason);
   });
+  proc.on("exit", (code: number) => {
+    if (code === 0) return;
+    log("ERROR", `Brightspace MCP server exited with code ${code}. ${RECONNECT_HINT}`);
+  });
+  if (!stdio) return;
   proc.stdout.on("error", (error: NodeJS.ErrnoException) => {
     if (error.code === "EPIPE") {
       log("INFO", "The MCP client closed the connection (stdout pipe closed); shutting down");
@@ -50,9 +58,5 @@ export function guardServerProcess(proc: GuardedProcess = process): void {
   });
   proc.stdin.on("end", () => {
     log("INFO", "The MCP client closed stdin; the server will stop");
-  });
-  proc.on("exit", (code: number) => {
-    if (code === 0) return;
-    log("ERROR", `Brightspace MCP server exited with code ${code}. ${RECONNECT_HINT}`);
   });
 }

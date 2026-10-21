@@ -70,8 +70,8 @@ export function sessionDirFor(
   return accountSessionDirectory(sessionRoot, baseUrl, username);
 }
 
-/** True for the Node versions this package supports (20 and newer). */
+/** True for the Node versions this package supports (22 and newer). */
 export function nodeVersionSupported(version: string): boolean {
   const major = Number(version.replace(/^v/, "").split(".")[0]);
-  return Number.isFinite(major) && major >= 20;
+  return Number.isFinite(major) && major >= 22;
 }

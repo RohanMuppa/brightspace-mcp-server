@@ -156,7 +156,7 @@ describe("acceptOmittedArguments", () => {
 describe("server wiring", () => {
   it("installs acceptOmittedArguments before the first tool is registered", async () => {
     const { readFile } = await import("node:fs/promises");
-    const source = await readFile(new URL("../../src/index.ts", import.meta.url), "utf8");
+    const source = await readFile(new URL("../../src/server.ts", import.meta.url), "utf8");
     const installed = source.indexOf("acceptOmittedArguments(server);");
     const firstRegistration = source.indexOf("registerGetMyCourses(server");
     expect(installed).toBeGreaterThan(-1);
