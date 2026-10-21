@@ -158,11 +158,11 @@ function problem(id: CheckId, message: string): CheckResult {
 
 function checkNode(deps: DoctorDeps): CheckResult {
   if (nodeVersionSupported(deps.nodeVersion)) {
-    return pass("node", `Node.js ${deps.nodeVersion} (20 or newer)`);
+    return pass("node", `Node.js ${deps.nodeVersion} (22 or newer)`);
   }
   return problem(
     "node",
-    `Node.js ${deps.nodeVersion} is too old — install Node 20 or newer from https://nodejs.org/, then try again.`
+    `Node.js ${deps.nodeVersion} is too old — install Node 22 or newer from https://nodejs.org/, then try again.`
   );
 }
 
