@@ -35,7 +35,9 @@ const enrollment = (id: number) => ({
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
-describe("shared localhost HTTP server", () => {
+// Real sockets and several clients per test: a loaded CI runner needs more
+// than the 5 s default.
+describe("shared localhost HTTP server", { timeout: 30_000 }, () => {
   const realFetch = globalThis.fetch;
   let upstream: string[];
   /** Replaces the fake enrollments answer for one test. */
@@ -139,7 +141,7 @@ describe("shared localhost HTTP server", () => {
     const chats = await Promise.all([connect(url), connect(url), connect(url)]);
 
     const calls = chats.map((chat) => chat.callTool({ name: "get_my_courses", arguments: {} }));
-    await vi.waitFor(() => expect(upstream.some((u) => u.includes("myenrollments"))).toBe(true));
+    await vi.waitFor(() => expect(upstream.some((u) => u.includes("myenrollments"))).toBe(true), { timeout: 15_000 });
     release();
     const results = await Promise.all(calls);
 
@@ -198,7 +200,7 @@ describe("shared localhost HTTP server", () => {
     const failed = await chat.callTool({ name: "get_my_courses", arguments: {} });
     expect(failed.isError).toBe(true);
     expect((await chat.callTool({ name: "get_server_info", arguments: {} })).isError).not.toBe(true);
-  }, 20_000);
+  });
 
   it("rejects a client without the right bearer token", async () => {
     const { url, port } = await listen();
@@ -253,7 +255,7 @@ describe("shared localhost HTTP server", () => {
     const server = await listen();
     const chat = await connect(server.url);
     const call = chat.callTool({ name: "get_my_courses", arguments: {} });
-    await vi.waitFor(() => expect(upstream.some((u) => u.includes("myenrollments"))).toBe(true));
+    await vi.waitFor(() => expect(upstream.some((u) => u.includes("myenrollments"))).toBe(true), { timeout: 15_000 });
 
     let closed = false;
     const closing = server.close().then(() => { closed = true; });

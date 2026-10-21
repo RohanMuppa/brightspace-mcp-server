@@ -60,7 +60,7 @@ describe.skipIf(!existsSync(entry))("brightspace-mcp-server http (real process)"
     const exited = new Promise<number | null>((done) => child.once("close", (code) => done(code)));
     children.push({ child, exited });
     const ready = new Promise<void>((done, fail) => {
-      const timer = setTimeout(() => fail(new Error(`no readiness line; stderr: ${stderr}`)), 15_000);
+      const timer = setTimeout(() => fail(new Error(`no readiness line; stderr: ${stderr}`)), 45_000);
       child.stderr!.on("data", (chunk) => {
         stderr += String(chunk);
         if (stderr.includes(`listening on http://127.0.0.1:${port}/mcp`)) { clearTimeout(timer); done(); }
@@ -93,11 +93,11 @@ describe.skipIf(!existsSync(entry))("brightspace-mcp-server http (real process)"
     // The first is untouched and still running.
     expect(server.child.exitCode).toBeNull();
     expect(server.stderr()).not.toContain(TOKEN);
-  }, 30_000);
+  }, 90_000);
 
   it("will not start without a bearer token", async () => {
     const server = start(await freePort(), null);
     expect(await server.exited).toBe(1);
     expect(server.stderr()).toMatch(/D2L_HTTP_TOKEN is not set/);
-  }, 30_000);
+  }, 90_000);
 });

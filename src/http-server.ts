@@ -154,11 +154,13 @@ export function startHttpServer({ runtime, token, port }: HttpServerOptions): Pr
       body = JSON.parse(await readBody(req));
     } catch (error) {
       if (error instanceof BodyTooLarge) {
-        // Discard the rest unread, so the client hears the 413 rather than a
-        // reset; Node's request timeout bounds a body that never ends.
+        // Discard the rest without buffering it. Closing the socket on unread
+        // data would reset it before the client reads the 413. Only a client
+        // holding the token gets this far, and Node's request timeout bounds
+        // a body that never ends.
         req.removeAllListeners("data");
         req.resume();
-        return sendError(res, 413, `Request body exceeds ${MAX_BODY_BYTES} bytes`, { Connection: "close" });
+        return sendError(res, 413, `Request body exceeds ${MAX_BODY_BYTES} bytes`);
       }
       return sendError(res, 400, "Parse error: the body is not valid JSON");
     }
