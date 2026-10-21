@@ -76,7 +76,7 @@ School-specific quirks: [docs/sign-in.md](docs/sign-in.md#per-school-notes).
 | Syllabus | "What's the late policy in ECE 264's syllabus?" (if the course keeps its syllabus in an external tool such as Simple Syllabus, you get the link to open instead) |
 | People | "Who are the TAs for ECE 264?" · "Who is in my project group?" |
 | Discussions | "Summarize the latest posts in the final project thread" |
-| Lecture videos | "What did the professor say about pinch-off in Tuesday's recording?" (Kaltura, including BoilerCast LTI links, and YouTube) |
+| Lecture videos | "What did the professor say about pinch-off in Tuesday's recording?" (Kaltura, including BoilerCast LTI links, and YouTube. When YouTube asks for a sign-in or a "not a bot" check, the answer says so, with the video link and how to get the transcript yourself: open the link in your browser, choose "Show transcript", and paste it in. The server never gets past that check for you) |
 | Calendar | "When is my midterm?" · "Is lab cancelled on Thursday?" |
 | For instructors and TAs | "Which students haven't submitted Lab 4 yet?" · "What feedback did I leave on this student's homework?" · "Download that student's submitted PDF" (students get a clear "instructor access required" note for these, but can read their own released feedback, below) |
 | Signing out | "Sign me out of Brightspace" (your AI app may ask you to confirm first; details under [When it asks you to sign in](#when-it-asks-you-to-sign-in)) |

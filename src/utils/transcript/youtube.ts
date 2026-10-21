@@ -79,10 +79,10 @@ function trackLabel(track: CaptionTrack): string | undefined {
 function playabilityFailure(status: string, reason: string | undefined): Error {
   const detail = reason ? ` YouTube said: ${reason}` : "";
   if (status === "LOGIN_REQUIRED") {
-    return new TranscriptFetchError(`YouTube would not serve this video without a sign-in.${detail}`);
+    return new TranscriptFetchError(`YouTube would not serve this video without a sign-in.${detail}`, "sign_in_required");
   }
   if (status === "UNPLAYABLE" || status === "ERROR") {
-    return new TranscriptFetchError(`YouTube reports this video as unavailable.${detail}`);
+    return new TranscriptFetchError(`YouTube reports this video as unavailable.${detail}`, "unavailable");
   }
   return new TranscriptFetchError(`YouTube refused to describe this video (${status}).${detail}`);
 }
@@ -185,6 +185,7 @@ export async function getYouTubeTranscript(
     throw new TranscriptFetchError(
       "YouTube issued this caption track behind a proof-of-origin check this server cannot answer, " +
         "so the captions could not be downloaded. The video may still have captions.",
+      "access_blocked",
     );
   }
 
@@ -200,6 +201,7 @@ export async function getYouTubeTranscript(
     throw new TranscriptFetchError(
       "YouTube listed a caption track for this video but served an empty response for it. " +
         "This is usually a temporary block rather than a missing transcript; try again.",
+      "access_blocked",
     );
   }
 

@@ -325,3 +325,56 @@ describe("get_video_transcript — absolute same-origin quickLinks (#190)", () =
     expect(body.platform).toBe("unknown");
   });
 });
+
+describe("get_video_transcript — YouTube refusals carry an actionable reason (#283)", () => {
+  const WATCH_URL = "https://www.youtube.com/watch?v=jZLtbye--sg";
+  const BOT_CHECK = { playabilityStatus: { status: "LOGIN_REQUIRED", reason: "Sign in to confirm you're not a bot" } };
+
+  function youtubeFetch(player: unknown, caption = ""): FetchLike {
+    return vi.fn(async (url: string) =>
+      url.includes("youtubei/v1/player") ? jsonResponse(player) : textResponse(caption)
+    ) as unknown as FetchLike;
+  }
+
+  /** The structured block that follows the human-readable error text. */
+  function details(result: any) {
+    return JSON.parse(result.content[1].text);
+  }
+
+  it("labels a sign-in/bot check as such, with the source URL and a browser recovery path", async () => {
+    const { call } = setup(youtubeFetch(BOT_CHECK), null);
+    const result = await call({ videoUrl: WATCH_URL });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toMatch(/sign-in/i);
+    const body = details(result);
+    expect(body.reason).toBe("sign_in_required");
+    expect(body.platform).toBe("youtube");
+    expect(body.videoUrl).toBe(WATCH_URL);
+    expect(body.hasTranscript).toBe(false);
+    expect(body.recovery).toContain(WATCH_URL);
+    expect(body.recovery).toMatch(/Show transcript/);
+  });
+
+  it("labels a caption download YouTube blocked as access_blocked, not as missing captions", async () => {
+    const tracks = [{ baseUrl: "https://www.youtube.com/api/timedtext?v=vid&exp=xpe&fmt=srv3", languageCode: "en" }];
+    const player = { playabilityStatus: { status: "OK" }, captions: { playerCaptionsTracklistRenderer: { captionTracks: tracks } } };
+    const { call } = setup(youtubeFetch(player), null);
+    const result = await call({ videoUrl: WATCH_URL });
+
+    expect(result.isError).toBe(true);
+    expect(details(result).reason).toBe("access_blocked");
+  });
+
+  it("labels a video with no caption tracks as no_captions, still a non-error answer", async () => {
+    const player = { playabilityStatus: { status: "OK" }, captions: { playerCaptionsTracklistRenderer: { captionTracks: [] } } };
+    const { call } = setup(youtubeFetch(player), null);
+    const result = await call({ videoUrl: WATCH_URL });
+    const body = JSON.parse(result.content[0].text);
+
+    expect(result.isError).toBeUndefined();
+    expect(body.hasTranscript).toBe(false);
+    expect(body.reason).toBe("no_captions");
+    expect(body.videoUrl).toBe(WATCH_URL);
+  });
+});

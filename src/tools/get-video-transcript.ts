@@ -18,7 +18,11 @@ import {
 import { readLtiLaunchPage, toBrightspacePath } from "../utils/transcript/lti.js";
 import { getKalturaTranscript } from "../utils/transcript/kaltura.js";
 import { getYouTubeTranscript } from "../utils/transcript/youtube.js";
-import { NoTranscriptError, TranscriptFetchError } from "../utils/transcript/errors.js";
+import {
+  NoTranscriptError,
+  TranscriptFetchError,
+  type TranscriptFailureReason,
+} from "../utils/transcript/errors.js";
 import type { FetchLike, TranscriptResult } from "../utils/transcript/types.js";
 import { log } from "../utils/logger.js";
 import { stripD2lSessionParams } from "../utils/session-params.js";
@@ -72,17 +76,45 @@ async function followLtiLaunch(apiClient: D2LApiClient, path: string): Promise<s
   return null;
 }
 
+/**
+ * What a person can do about each failure. A sign-in or bot check is never
+ * worked around here: the way past it is the user's own browser, and the
+ * result says plainly that nothing was read.
+ */
+function transcriptRecovery(reason: TranscriptFailureReason, videoUrl: string): string {
+  switch (reason) {
+    case "sign_in_required":
+    case "access_blocked":
+      return (
+        `Open ${videoUrl} in your own browser and complete any sign-in or "not a bot" check it shows. ` +
+        'Then choose "Show transcript" (on YouTube, below the video description) and paste the text into ' +
+        "this conversation. This server does not get past those checks, and no transcript was read from this video."
+      );
+    case "unavailable":
+      return `Open ${videoUrl} in your browser to see whether the video was removed or made private.`;
+    case "fetch_failed":
+      return `Try again in a moment. If it keeps failing, open ${videoUrl} in your browser.`;
+  }
+}
+
+type FetchOutcome =
+  | { result: TranscriptResult }
+  | { unsupported: string }
+  | { noTranscript: string }
+  | { failed: string; reason: TranscriptFailureReason };
+
 async function fetchTranscript(
   platform: VideoPlatform,
   videoUrl: string,
   fetchImpl: FetchLike
-): Promise<{ result: TranscriptResult } | { unsupported: string } | { noTranscript: string } | { failed: string }> {
+): Promise<FetchOutcome> {
   switch (platform) {
     case "kaltura": {
       const ids = extractKalturaIds(videoUrl);
       if (!ids) {
         return {
           failed: `Could not find a Kaltura entry ID and partner ID in this URL: ${stripD2lSessionParams(videoUrl)}`,
+          reason: "fetch_failed",
         };
       }
       try {
@@ -94,6 +126,7 @@ async function fetchTranscript(
             failed:
               `${error.message} This can happen when the video needs an authenticated Kaltura ` +
               "session rather than an anonymous one. Open it in Brightspace directly.",
+            reason: error.reason,
           };
         }
         throw error;
@@ -102,13 +135,16 @@ async function fetchTranscript(
     case "youtube": {
       const videoId = extractYouTubeVideoId(videoUrl);
       if (!videoId) {
-        return { failed: `Could not find a YouTube video ID in this URL: ${stripD2lSessionParams(videoUrl)}` };
+        return {
+          failed: `Could not find a YouTube video ID in this URL: ${stripD2lSessionParams(videoUrl)}`,
+          reason: "fetch_failed",
+        };
       }
       try {
         return { result: await getYouTubeTranscript(videoId, fetchImpl) };
       } catch (error) {
         if (error instanceof NoTranscriptError) return { noTranscript: error.message };
-        if (error instanceof TranscriptFetchError) return { failed: error.message };
+        if (error instanceof TranscriptFetchError) return { failed: error.message, reason: error.reason };
         throw error;
       }
     }
@@ -148,7 +184,8 @@ export function registerGetVideoTranscript(
         "Call it with courseId and topicId from get_course_content (typeFilter: 'video' or 'other'), or with videoUrl " +
         "directly if you already have the link. Returns transcript text with timestamps, plus title and duration when " +
         "available. Currently supports Kaltura (e.g. BoilerCast, including its Brightspace LTI links) and YouTube; other platforms return a clear message " +
-        "naming what isn't supported yet. Each call returns at most maxChars characters (up to 100000); to read a whole " +
+        "naming what isn't supported yet. A failure returns its message plus a JSON block with reason (e.g. sign_in_required " +
+        "for a YouTube bot check) and recovery steps for the user; never present a failed call as a read transcript. Each call returns at most maxChars characters (up to 100000); to read a whole " +
         "transcript, call again with offset set to the returned nextOffset until truncated is false. Read only — this " +
         "never marks the video as watched.",
       inputSchema: GetVideoTranscriptSchema,
@@ -218,11 +255,27 @@ export function registerGetVideoTranscript(
             videoUrl: publicUrl,
             platform,
             hasTranscript: false,
+            reason: "no_captions",
             message: outcome.noTranscript,
           });
         }
         if ("failed" in outcome) {
-          return errorResponse(outcome.failed);
+          // The message stays the first block, as it always was; the second
+          // carries the same failure in a shape a caller can branch on.
+          const failure = errorResponse(outcome.failed);
+          failure.content.push({
+            type: "text",
+            text: JSON.stringify({
+              courseId,
+              topicId,
+              videoUrl: publicUrl,
+              platform,
+              hasTranscript: false,
+              reason: outcome.reason,
+              recovery: transcriptRecovery(outcome.reason, publicUrl),
+            }),
+          });
+          return failure;
         }
 
         const { result } = outcome;

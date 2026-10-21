@@ -12,9 +12,19 @@ export class NoTranscriptError extends Error {
   }
 }
 
+/**
+ * Why a transcript could not be read, for callers that act on it rather than
+ * read the message: a sign-in or bot check needs a person in a browser, an
+ * unavailable video needs nothing, and anything else may pass on a retry.
+ */
+export type TranscriptFailureReason = "sign_in_required" | "access_blocked" | "unavailable" | "fetch_failed";
+
 /** The platform's API could not be reached or rejected the request. */
 export class TranscriptFetchError extends Error {
-  constructor(message: string) {
+  constructor(
+    message: string,
+    readonly reason: TranscriptFailureReason = "fetch_failed",
+  ) {
     super(message);
     this.name = "TranscriptFetchError";
   }
