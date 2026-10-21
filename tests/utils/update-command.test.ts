@@ -48,6 +48,17 @@ function commandFailure(stderr: string): Error {
   return Object.assign(new Error("Command failed"), { stderr });
 }
 
+/**
+ * What execSync throws when `npm run build` fails: tsc prints its errors on
+ * stdout, and npm adds only its lifecycle summary on stderr.
+ */
+function buildFailure(tscOutput: string): Error {
+  return Object.assign(new Error("Command failed: npm run build"), {
+    stdout: tscOutput,
+    stderr: "npm error Lifecycle script `build` failed with error:\nnpm error code 2\n",
+  });
+}
+
 function printed(): string {
   const calls = [
     ...vi.mocked(console.log).mock.calls,
@@ -151,7 +162,7 @@ describe("update command", () => {
 
   it("finishes the install and build on the next run after the build failed", () => {
     behindBy("2");
-    git.replies.set("npm run build", commandFailure("error TS2307: Cannot find module"));
+    git.replies.set("npm run build", buildFailure("error TS2307: Cannot find module"));
     expect(() => main()).toThrow(ExitCalled);
 
     // The pull moved HEAD, so the retry sees nothing new to fetch.
@@ -185,7 +196,7 @@ describe("update command", () => {
 
   it("keeps reporting the update as unfinished while the retry still fails", () => {
     behindBy("2");
-    git.replies.set("npm run build", commandFailure("error TS1005"));
+    git.replies.set("npm run build", buildFailure("error TS1005"));
     expect(() => main()).toThrow(ExitCalled);
 
     git.replies.set("git rev-list --count HEAD..origin/main", "0");
@@ -212,10 +223,24 @@ describe("update command", () => {
     expect(output).not.toMatch(/\x1b\[3[0-9]mnpm ERR/);
   });
 
+  it("shows the TypeScript error when the build fails", () => {
+    behindBy("2");
+    git.replies.set(
+      "npm run build",
+      buildFailure("src/update.ts(12,5): error TS2322: Type 'string' is not assignable to type 'number'.\n"),
+    );
+
+    expect(() => main()).toThrow(ExitCalled);
+    const output = printed();
+    expect(output).toContain("Build failed");
+    expect(output).toContain("src/update.ts(12,5): error TS2322");
+    expect(output).toContain("Lifecycle script `build` failed");
+  });
+
   it("shows only the end of a long failure log", () => {
     behindBy("2");
     const lines = Array.from({ length: 200 }, (_, i) => `line ${i}`);
-    git.replies.set("npm run build", commandFailure(lines.join("\n")));
+    git.replies.set("npm run build", buildFailure(lines.join("\n")));
 
     expect(() => main()).toThrow(ExitCalled);
     const output = printed();

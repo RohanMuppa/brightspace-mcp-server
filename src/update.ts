@@ -32,8 +32,11 @@ function run(cmd: string, opts?: { silent?: boolean }): string {
       stdio: opts?.silent ? ["pipe", "pipe", "pipe"] : ["pipe", "pipe", "inherit"],
     }).trim();
   } catch (err: unknown) {
-    const error = err as { stderr?: string; message?: string };
-    throw new Error(error.stderr || error.message || "Command failed");
+    // tsc reports compile errors on stdout and npm adds its summary on
+    // stderr, so a failure keeps both.
+    const error = err as { stdout?: string; stderr?: string; message?: string };
+    const output = [error.stdout, error.stderr].filter((s) => s?.trim()).join("\n");
+    throw new Error(output || error.message || "Command failed");
   }
 }
 
