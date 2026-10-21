@@ -252,6 +252,14 @@ describe("setup --prepare", () => {
     expect(result.next.instructions).toContain("isn't a valid Brightspace address");
   });
 
+  it("is blocked on Node 20, which 5.0.0 no longer supports", async () => {
+    const h = harness();
+    h.deps.nodeVersion = "v20.19.0";
+    const result = await runPrepare(args("--purdue"), h.deps);
+    expect(result.state).toBe("blocked");
+    expect(result.steps.find((s) => s.id === "node")?.line).toContain("install Node 22 or newer");
+  });
+
   it("is blocked when the credential store isn't usable", async () => {
     const h = harness();
     h.deps.probeCredentialStore = () => ({ ok: false, line: "secret-tool is not installed" });
