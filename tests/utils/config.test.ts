@@ -46,6 +46,23 @@ describe("resolved authentication configuration", () => {
     expect(config.legacyBrowserStateMigrated).toBe(true);
   });
 
+  it("announces each credential-store lookup before awaiting it, without naming the account", async () => {
+    fake.store = { baseUrl: "https://school.example", username: "alice" };
+    const printed = vi.spyOn(console, "error").mockImplementation(() => {});
+    const lines = () => printed.mock.calls.map((c) => c.join(" "));
+    let beforePassword: string[] = [];
+    let beforeTotp: string[] = [];
+    fake.password.mockImplementation(async () => { beforePassword = lines(); return "native-password"; });
+    fake.totp.mockImplementation(async () => { beforeTotp = lines(); return null; });
+    await loadConfig();
+    expect(beforePassword.at(-1)).toContain("Startup: reading the saved password from the OS credential store...");
+    expect(beforeTotp.at(-1)).toContain("Startup: reading the saved authenticator key from the OS credential store...");
+    const all = lines().join("\n");
+    expect(all).not.toContain("alice");
+    expect(all).not.toContain("native-password");
+    printed.mockRestore();
+  });
+
   it("uses the setup MFA preference when no environment override is present", async () => {
     fake.store = { baseUrl: "https://school.example", username: "alice", headless: false };
     expect(await loadConfig()).toMatchObject({ headless: false });

@@ -12,6 +12,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { enableStdoutGuard, log } from "./utils/logger.js";
 import { guardServerProcess } from "./utils/process-guard.js";
 import { loadConfig } from "./utils/config.js";
+import { startupPhase } from "./utils/startup-phase.js";
 import { setActiveShortcuts } from "./utils/two-factor-shortcuts.js";
 import { startUpdateChecks } from "./utils/update-checker.js";
 import { configureDevActivity } from "./utils/dev-activity.js";
@@ -56,8 +57,11 @@ if (subcommand === 'setup') {
 
   async function main(): Promise<void> {
     try {
-      // Load configuration
-      const config = await loadConfig();
+      // Announce startup before any await: loading the configuration reads the
+      // OS credential store, which can stall, and a client that times out
+      // needs these timestamped lines to see where. No account details.
+      log("INFO", `Brightspace MCP Server v${PKG_VERSION} starting (Node ${process.version}, ${process.platform}, ${http ? "http" : "stdio"})`);
+      const config = await startupPhase("loading configuration", loadConfig);
       configureDevActivity(config.sessionDir);
       // Lets the MFA approval message mention the setup options only to users
       // who have neither turned on. Booleans only; the key is never passed.
