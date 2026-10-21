@@ -463,6 +463,35 @@ describe("get_my_grades quiz feedback source", () => {
     const payload = parse(await call({ courseId: COURSE_A.Id }));
 
     expect(payload.grades.map((g: { name: string }) => g.name)).toEqual(["Midterm"]);
+    expect(payload.quizzesUnavailable).toBe(true);
+    expect(payload.notice).toContain(String(COURSE_A.Id));
+  });
+
+  it("names the course whose quiz list failed in the all-courses result", async () => {
+    const { call } = setup((path) => {
+      if (path.includes("/enrollments/")) return enrollmentPage(COURSE_A, true);
+      if (path.includes("/quizzes/")) throw Object.assign(new Error("Bad Gateway"), { status: 502 });
+      return [quizGrade];
+    });
+
+    const payload = parse(await call({}));
+
+    expect(payload.courses[0]).toMatchObject({ courseId: COURSE_A.Id, quizzesUnavailable: true });
+    expect(payload.courses[0].grades.map((g: { name: string }) => g.name)).toEqual(["Midterm"]);
+    expect(payload.notice).toContain("quiz list");
+    expect(payload.notice).toContain(String(COURSE_A.Id));
+  });
+
+  it("adds no quiz notice when the quiz list loads", async () => {
+    const { call } = setup(respond([quizGrade]));
+
+    const single = parse(await call({ courseId: COURSE_A.Id }));
+    const all = parse(await call({}));
+
+    expect(single.quizzesUnavailable).toBeUndefined();
+    expect(single.notice).toBeUndefined();
+    expect(all.courses[0].quizzesUnavailable).toBeUndefined();
+    expect(all.notice).toBeUndefined();
   });
 });
 
