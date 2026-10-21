@@ -41,7 +41,9 @@ beforeEach(() => {
   git.replies = new Map([
     ["git rev-parse --show-toplevel", projectRoot],
     ["git status --porcelain", ""],
+    ["git branch --show-current", "main"],
     ["git fetch origin main", ""],
+    ["git rev-list --count origin/main..HEAD", "0"],
     ["git rev-list --count HEAD..origin/main", "0"],
   ]);
   vi.spyOn(console, "log").mockImplementation(() => {});
@@ -83,14 +85,14 @@ describe("update command", () => {
   it("stops early when the checkout is already current", () => {
     expect(() => main()).not.toThrow();
     expect(git.commands).toContain("git fetch origin main");
-    expect(git.commands.some((c) => c.startsWith("git pull"))).toBe(false);
+    expect(git.commands.some((c) => c.startsWith("git merge"))).toBe(false);
     expect(git.commands.some((c) => c.startsWith("npm "))).toBe(false);
   });
 
   it("pulls, installs and builds only a real checkout that is behind", () => {
     git.replies.set("git rev-list --count HEAD..origin/main", "2");
     git.replies.set("git log HEAD..origin/main --oneline", "abc feat: one\ndef fix: two");
-    git.replies.set("git pull origin main", "");
+    git.replies.set("git merge --ff-only origin/main", "");
     git.replies.set("npm install", "");
     git.replies.set("npm run build", "");
 
@@ -98,10 +100,12 @@ describe("update command", () => {
     expect(git.commands).toEqual([
       "git rev-parse --show-toplevel",
       "git status --porcelain",
+      "git branch --show-current",
       "git fetch origin main",
+      "git rev-list --count origin/main..HEAD",
       "git rev-list --count HEAD..origin/main",
       "git log HEAD..origin/main --oneline",
-      "git pull origin main",
+      "git merge --ff-only origin/main",
       "npm install",
       "npm run build",
     ]);
@@ -111,5 +115,59 @@ describe("update command", () => {
     git.replies.set("git rev-parse --show-toplevel", path.join(os.tmpdir(), "somewhere-else"));
     expect(() => main()).toThrow(ExitCalled);
     expect(git.commands).not.toContain("git fetch origin main");
+  });
+
+  describe("refuses to modify a checkout that holds local work", () => {
+    /** Anything that rewrites the branch, the working tree or the install. */
+    const mutating = (c: string) =>
+      c.startsWith("git pull") ||
+      c.startsWith("git merge") ||
+      c.startsWith("git rebase") ||
+      c.startsWith("git reset") ||
+      c.startsWith("git checkout") ||
+      c.startsWith("npm ");
+
+    beforeEach(() => {
+      // Behind origin/main, so only the guard stands between the user and an update.
+      git.replies.set("git rev-list --count HEAD..origin/main", "2");
+      git.replies.set("git log HEAD..origin/main --oneline", "abc feat: one\ndef fix: two");
+      git.replies.set("git merge --ff-only origin/main", "");
+      git.replies.set("git pull", "");
+      git.replies.set("npm install", "");
+      git.replies.set("npm run build", "");
+    });
+
+    it("stops when there are uncommitted changes", () => {
+      git.replies.set("git status --porcelain", " M src/index.ts");
+      expect(() => main()).toThrow(ExitCalled);
+      expect(git.commands.filter(mutating)).toEqual([]);
+    });
+
+    it("stops when HEAD is detached", () => {
+      git.replies.set("git branch --show-current", "");
+      expect(() => main()).toThrow(ExitCalled);
+      expect(git.commands.filter(mutating)).toEqual([]);
+    });
+
+    it("stops on a branch other than main", () => {
+      git.replies.set("git branch --show-current", "my-feature");
+      expect(() => main()).toThrow(ExitCalled);
+      expect(git.commands.filter(mutating)).toEqual([]);
+    });
+
+    it("stops when main has local commits origin/main lacks", () => {
+      git.replies.set("git rev-list --count origin/main..HEAD", "1");
+      expect(() => main()).toThrow(ExitCalled);
+      expect(git.commands.filter(mutating)).toEqual([]);
+    });
+
+    it("stops without installing when the fast-forward fails", () => {
+      // No reply registered: the fake git fails the fast-forward. A pull
+      // fallback would still find its reply and be caught below.
+      git.replies.delete("git merge --ff-only origin/main");
+      expect(() => main()).toThrow(ExitCalled);
+      expect(git.commands).toContain("git merge --ff-only origin/main");
+      expect(git.commands.some((c) => c.startsWith("git pull") || c.startsWith("npm "))).toBe(false);
+    });
   });
 });
