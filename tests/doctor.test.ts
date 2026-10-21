@@ -19,7 +19,7 @@ const STORE = { baseUrl: "https://purdue.brightspace.com", username: "student42"
 
 function deps(overrides: Partial<DoctorDeps> = {}): Partial<DoctorDeps> {
   return {
-    nodeVersion: "v20.11.0",
+    nodeVersion: "v22.11.0",
     platform: "darwin",
     env: {},
     configStoreExists: () => true,
@@ -72,18 +72,18 @@ describe("doctor: all-pass path", () => {
 });
 
 describe("doctor: (a) Node version", () => {
-  it("fails on Node below 20 with an install link", async () => {
-    const result = await runDoctorChecks(deps({ nodeVersion: "v18.19.0" }));
+  it("fails on Node below 22 with an install link", async () => {
+    const result = await runDoctorChecks(deps({ nodeVersion: "v20.19.0" }));
     const check = idOf(result, "node");
     expect(check.ok).toBe(false);
-    expect(check.line).toContain("v18.19.0");
+    expect(check.line).toContain("v20.19.0");
     expect(check.line).toContain("too old");
     expect(check.line).toContain("https://nodejs.org/");
     expect(result.allOk).toBe(false);
   });
 
-  it("passes on exactly Node 20", async () => {
-    const result = await runDoctorChecks(deps({ nodeVersion: "v20.0.0" }));
+  it("passes on exactly Node 22", async () => {
+    const result = await runDoctorChecks(deps({ nodeVersion: "v22.0.0" }));
     expect(idOf(result, "node").ok).toBe(true);
   });
 });

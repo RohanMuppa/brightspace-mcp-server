@@ -12,6 +12,10 @@ Every tool name listed in `LLMs.md` ("Available tools") is stable, as is every f
 response carries today (defined in `src/tools/*.ts` and `src/tools/schemas.ts`). A field
 can be added; it is never removed, renamed, or repurposed to mean something else.
 
+## Runtime
+
+Node.js 22 or newer (`engines` in `package.json`). 5.0.0 dropped Node 20, because file-type 22 requires Node 22. CI tests Node 22 and 24 on macOS, Ubuntu and Windows.
+
 ## CLI subcommands
 
 - `setup` — interactive wizard. School-preset flags come from `SCHOOL_PRESETS` in
@@ -24,6 +28,9 @@ can be added; it is never removed, renamed, or repurposed to mean something else
     values and those fields follow the additive-only rule.
   - Since 4.0.0, an unknown flag is an error (exit 2) instead of being ignored. The wizard
     and `--sign-in` exit 2 when stdin is not a terminal, instead of waiting for typing.
+- `http` — since 4.1.0, one shared MCP server over Streamable HTTP on `127.0.0.1` (`/mcp`),
+  default port 18765 (`--port` or `D2L_HTTP_PORT`). Requires `D2L_HTTP_TOKEN` (at least 32
+  characters) as a bearer token on every request. Plain stdio stays the default.
 - `doctor` — `--json` prints `{checks: [{id, ok, line}], allOk, notes}`. Check ids may be
   added (4.0.0 added `browser`).
 - `auth` — manual re-authentication, no required flags. `--automatic` is internal
