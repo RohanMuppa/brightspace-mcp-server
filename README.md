@@ -4,7 +4,7 @@
 [![npm downloads](https://img.shields.io/npm/dm/brightspace-mcp-server.svg)](https://www.npmjs.com/package/brightspace-mcp-server)
 [![CI](https://img.shields.io/github/actions/workflow/status/RohanMuppa/brightspace-mcp-server/ci.yml?branch=main)](https://github.com/RohanMuppa/brightspace-mcp-server/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/github/license/RohanMuppa/brightspace-mcp-server.svg)](LICENSE)
-[![Node >= 20](https://img.shields.io/node/v/brightspace-mcp-server.svg)](package.json)
+[![Node >= 22](https://img.shields.io/node/v/brightspace-mcp-server.svg)](package.json)
 
 > **By [Rohan Muppa](https://github.com/rohanmuppa), ECE @ Purdue**
 
@@ -20,7 +20,7 @@ Works with Claude Desktop, Claude Code, Cursor, ChatGPT Desktop, Windsurf, and a
 
 ## Get started in 3 steps
 
-1. **Install [Node.js](https://nodejs.org/)** (version 20 or newer) if you don't have it. Download, run the installer, done.
+1. **Install [Node.js](https://nodejs.org/)** (version 22 or newer) if you don't have it. Download, run the installer, done.
 2. **Open a terminal and run the setup:**
    ```bash
    npx -y brightspace-mcp-server@latest setup

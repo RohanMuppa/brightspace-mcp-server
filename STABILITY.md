@@ -12,6 +12,10 @@ Every tool name listed in `LLMs.md` ("Available tools") is stable, as is every f
 response carries today (defined in `src/tools/*.ts` and `src/tools/schemas.ts`). A field
 can be added; it is never removed, renamed, or repurposed to mean something else.
 
+## Runtime
+
+Node.js 22 or newer (`engines` in `package.json`). 5.0.0 dropped Node 20, because file-type 22 requires Node 22. CI tests Node 22 and 24 on macOS, Ubuntu and Windows.
+
 ## CLI subcommands
 
 - `setup` — interactive wizard. School-preset flags come from `SCHOOL_PRESETS` in

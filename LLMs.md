@@ -18,7 +18,7 @@ Installing takes three stages: you do everything you can, the person signs in, t
 
 ### 1. Prepare everything yourself (no prompts)
 
-Check `node --version` first. If Node is missing or below v20, tell the user to install the LTS from https://nodejs.org/ and stop. Then ask the user, in chat, which school they're at and the username they sign in with. Don't ask for their password; only stage 2 takes it, typed by them.
+Check `node --version` first. If Node is missing or below v22, tell the user to install the LTS from https://nodejs.org/ and stop. Then ask the user, in chat, which school they're at and the username they sign in with. Don't ask for their password; only stage 2 takes it, typed by them.
 
 ```bash
 npx -y brightspace-mcp-server@latest setup --purdue --prepare --username <their username> --json
