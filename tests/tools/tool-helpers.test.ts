@@ -117,6 +117,16 @@ describe("sanitizeError", () => {
     expect(textOf(result)).toContain("Don't run other Brightspace calls in parallel");
   });
 
+  // Behind the shared HTTP server the call that got the number may belong to
+  // another chat, so the short answer must not claim it is in this batch.
+  it.each(["mfaPending", "automaticPending"] as const)("answers a duplicate %s briefly without placing the details in this batch", (kind) => {
+    const text = textOf(sanitizeError(new AuthProcessError(kind, "internal detail", kind === "mfaPending" ? "47" : undefined, true)));
+
+    expect(text).toContain("possibly in another open chat");
+    expect(text).not.toContain("in this batch");
+    expect(text).not.toContain("47");
+  });
+
   describe("2FA shortcuts tip", () => {
     afterEach(() => resetActiveShortcuts());
 

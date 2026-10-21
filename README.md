@@ -117,12 +117,12 @@ Normally every chat starts its own copy of the server. With many Codex chats ope
    ```bash
    node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
    ```
-   Save it as a user environment variable named `D2L_HTTP_TOKEN`, where both the server and Codex can see it. On Windows: `setx D2L_HTTP_TOKEN <token>` (apps and terminals opened afterwards see it). On macOS or Linux: add `export D2L_HTTP_TOKEN=<token>` to your shell profile (`~/.zshrc`, `~/.bashrc`); a Codex app launched from the Dock or a desktop menu may not read that profile, so start it from a terminal. The server never prints the token.
+   Save it as a user environment variable named `D2L_HTTP_TOKEN`, where both the server and Codex can see it. On Windows: Start → "Edit environment variables for your account" → New, paste it as the value (apps and terminals opened afterwards see it). On macOS or Linux: add `export D2L_HTTP_TOKEN=<token>` to your shell profile (`~/.zshrc`, `~/.bashrc`); a Codex app launched from the Dock or a desktop menu may not read that profile, so start it from a terminal. The server never prints the token.
 2. **Start the server and leave it running** in a terminal of its own:
    ```bash
    npx -y brightspace-mcp-server@latest http
    ```
-   It listens on `http://127.0.0.1:18765/mcp`, on this computer only. Pick another port with `--port 18766` or `D2L_HTTP_PORT`. Start it once per login: chats do not start it, and a second copy on the same port stops at once with "already in use" rather than running alongside the first. Nothing signs in at startup.
+   This needs a release with HTTP support; to try it from a source checkout first, run `npm run build`, then `node build/index.js http`. It listens on `http://127.0.0.1:18765/mcp`, on this computer only. Pick another port with `--port 18766` or `D2L_HTTP_PORT`, and use that same port in the URL in step 3. Start it once per login: chats do not start it, and a second copy on the same port stops at once with "already in use" rather than running alongside the first. Nothing signs in at startup.
 3. **Point Codex at it.** In `~/.codex/config.toml`, replace the `command` and `args` lines of your `[mcp_servers.brightspace]` entry with:
    ```toml
    [mcp_servers.brightspace]
