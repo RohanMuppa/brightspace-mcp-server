@@ -73,13 +73,13 @@ export function classifyRegistration(
   platform: NodeJS.Platform = process.platform
 ): Registration {
   if (entry === undefined) return { state: "missing" };
-  if (entry === null || typeof entry !== "object") {
-    return { state: "different", current: "(an entry setup could not read)" };
-  }
+  const unreadable: Registration = { state: "different", current: "(an entry setup could not read)" };
+  if (entry === null || typeof entry !== "object") return unreadable;
 
   const { command, args } = entry as { command?: unknown; args?: unknown };
   if (typeof command !== "string") {
-    return { state: "different", current: JSON.stringify(entry) };
+    const transport = describeTransport(entry);
+    return transport === null ? unreadable : { state: "different", current: transport };
   }
   const argv = [command, ...(Array.isArray(args) ? args.map(String) : [])];
   const expected = serverCommand(platform);
@@ -87,6 +87,23 @@ export function classifyRegistration(
     return { state: "current" };
   }
   return { state: "different", current: argv.join(" ") };
+}
+
+/**
+ * A commandless (HTTP/SSE) entry, reduced to its transport label and its URL
+ * without user-info, query, or fragment. Everything else (headers, env,
+ * credential helpers, unknown fields) can carry secrets, so it never prints.
+ */
+function describeTransport(entry: object): string | null {
+  const { type, url } = entry as { type?: unknown; url?: unknown };
+  if (typeof url !== "string" || !URL.canParse(url)) return null;
+  const parsed = new URL(url);
+  parsed.username = "";
+  parsed.password = "";
+  parsed.search = "";
+  parsed.hash = "";
+  const label = typeof type === "string" && /^[\w-]+$/.test(type) ? { type } : {};
+  return JSON.stringify({ ...label, url: parsed.href });
 }
 
 function readJsonFile(filePath: string): unknown {

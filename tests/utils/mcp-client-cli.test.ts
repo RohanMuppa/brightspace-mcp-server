@@ -77,6 +77,47 @@ describe("classifyRegistration", () => {
     });
   });
 
+  it("never shows the headers of an HTTP entry", () => {
+    const entry = {
+      type: "streamable_http",
+      url: "https://mcp.example.com/mcp",
+      http_headers: { Authorization: "Bearer fake-secret-token" },
+      headers: { "X-Api-Key": "fake-secret-key" },
+    };
+    const result = classifyRegistration(entry, "darwin");
+    expect(result).toEqual({
+      state: "different",
+      current: '{"type":"streamable_http","url":"https://mcp.example.com/mcp"}',
+    });
+  });
+
+  it("drops credentials, query, and fragment from the URL it shows", () => {
+    const entry = { url: "https://user:fake-password@mcp.example.com/mcp?token=fake-secret#frag" };
+    expect(classifyRegistration(entry, "darwin")).toEqual({
+      state: "different",
+      current: '{"url":"https://mcp.example.com/mcp"}',
+    });
+  });
+
+  it("never shows env values, credential helpers, or unknown fields", () => {
+    const entry = {
+      url: "http://localhost:3000/mcp",
+      env: { BRIGHTSPACE_PASSWORD: "fake-secret-password" },
+      bearer_token_env_var: "FAKE_SECRET_VAR",
+      credentialHelper: "fake-secret-helper",
+      extra: { nested: "fake-secret-nested" },
+    };
+    const result = classifyRegistration(entry, "darwin");
+    expect(result.state).toBe("different");
+    expect(JSON.stringify(result)).not.toMatch(/fake-secret|FAKE_SECRET/);
+  });
+
+  it("describes a commandless entry with no readable URL without its contents", () => {
+    const entry = { url: "not a url fake-secret", type: { fake: "fake-secret" } };
+    const result = classifyRegistration(entry, "darwin");
+    expect(result).toEqual({ state: "different", current: "(an entry setup could not read)" });
+  });
+
   it("reports an entry it could not read as different", () => {
     expect(classifyRegistration(null, "darwin").state).toBe("different");
   });
