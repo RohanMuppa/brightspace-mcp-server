@@ -8,7 +8,7 @@
  */
 
 import { execSync } from "node:child_process";
-import { readFileSync, realpathSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import dotenv from "dotenv";
@@ -36,6 +36,43 @@ function run(cmd: string, opts?: { silent?: boolean }): string {
     throw new Error(error.stderr || error.message || "Command failed");
   }
 }
+
+/** How many trailing lines of a failed command's output are worth showing. */
+const FAILURE_TAIL_LINES = 20;
+
+/**
+ * The end of a failed command's output, fit for a terminal: escape sequences
+ * and control characters stripped, blank lines dropped, long logs cut to the
+ * last few lines (where npm and tsc put the actual error).
+ */
+export function failureDetail(err: unknown): string[] {
+  const text = err instanceof Error ? err.message : String(err);
+  const lines = text
+    .replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "")
+    .replace(/[\x00-\x08\x0b-\x1f\x7f]/g, "")
+    .split("\n")
+    .map((line) => line.trimEnd())
+    .filter((line) => line.trim() !== "");
+  return lines.slice(-FAILURE_TAIL_LINES);
+}
+
+/** Print a failed step with its cause and how to recover, then exit. */
+function fail(summary: string, err: unknown, recovery: string[]): void {
+  console.error(red(`  Error: ${summary}`));
+  const detail = failureDetail(err);
+  if (detail.length > 0) {
+    console.error("");
+    for (const line of detail) console.error(dim(`    ${line}`));
+    console.error("");
+  }
+  for (const line of recovery) console.error(`  ${line}`);
+  process.exit(1);
+}
+
+const RETRY_HINT = [
+  "The update is not finished. Fix the problem above, then run `npm run update` again;",
+  "it will redo the install and build even though the new code is already pulled.",
+];
 
 function getVersion(): string {
   const pkg = JSON.parse(readFileSync(join(projectRoot, "package.json"), "utf-8"));
@@ -102,58 +139,74 @@ export function main(): void {
   console.log(dim("  Fetching latest changes..."));
   try {
     run("git fetch origin main", { silent: true });
-  } catch {
-    console.error(red("  Error: Failed to fetch from remote."));
-    console.error("  Check your network connection and try again.");
-    process.exit(1);
+  } catch (err) {
+    fail("Failed to fetch from remote.", err, ["Check your network connection and try again."]);
+    return;
   }
 
-  // Check if we're behind
+  // A marker in the git directory records that the code was pulled but the
+  // install or build has not yet succeeded. Without it a retry would see no
+  // new commits and report "Already up to date" over a broken build.
+  const marker = resolve(projectRoot, run("git rev-parse --git-path brightspace-update-incomplete", { silent: true }));
+  const unfinished = existsSync(marker);
+
   const behindCount = run("git rev-list --count HEAD..origin/main", { silent: true });
-  if (behindCount === "0") {
+  if (behindCount === "0" && !unfinished) {
     console.log("");
     console.log(green("  Already up to date!"));
     console.log("");
     return;
   }
 
-  // Show what's new
-  console.log("");
-  console.log(bold(`  ${behindCount} new commit${behindCount === "1" ? "" : "s"}:`));
-  console.log("");
-  const log = run("git log HEAD..origin/main --oneline", { silent: true });
-  for (const line of log.split("\n")) {
-    console.log(`    ${dim("•")} ${line}`);
-  }
-  console.log("");
+  if (behindCount === "0") {
+    console.log(yellow("  The last update did not finish. Finishing it now."));
+  } else {
+    // Show what's new
+    console.log("");
+    console.log(bold(`  ${behindCount} new commit${behindCount === "1" ? "" : "s"}:`));
+    console.log("");
+    const log = run("git log HEAD..origin/main --oneline", { silent: true });
+    for (const line of log.split("\n")) {
+      console.log(`    ${dim("•")} ${line}`);
+    }
+    console.log("");
 
-  // Pull changes
-  console.log(dim("  Pulling changes..."));
-  try {
-    run("git pull origin main", { silent: true });
-  } catch {
-    console.error(red("  Error: Failed to pull changes."));
-    console.error("  You may have merge conflicts. Resolve them manually and try again.");
-    process.exit(1);
+    writeFileSync(marker, `${new Date().toISOString()}\n`);
+
+    // Pull changes
+    console.log(dim("  Pulling changes..."));
+    try {
+      run("git pull origin main", { silent: true });
+    } catch (err) {
+      fail("Failed to pull changes.", err, [
+        "You may have merge conflicts. Resolve them manually and try again.",
+      ]);
+      return;
+    }
   }
 
   // Install dependencies
   console.log(dim("  Installing dependencies..."));
   try {
     run("npm install", { silent: true });
-  } catch {
-    console.error(red("  Error: Failed to install dependencies."));
-    process.exit(1);
+  } catch (err) {
+    fail("Failed to install dependencies.", err, [
+      "If a file is locked (EBUSY/EPERM), close every MCP client using this server first.",
+      ...RETRY_HINT,
+    ]);
+    return;
   }
 
   // Build
   console.log(dim("  Building..."));
   try {
     run("npm run build", { silent: true });
-  } catch {
-    console.error(red("  Error: Build failed."));
-    process.exit(1);
+  } catch (err) {
+    fail("Build failed.", err, RETRY_HINT);
+    return;
   }
+
+  rmSync(marker, { force: true });
 
   // Show new version
   const newVersion = getVersion();
