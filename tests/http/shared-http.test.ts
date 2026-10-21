@@ -239,6 +239,37 @@ describe("shared localhost HTTP server", { timeout: 30_000 }, () => {
     expect((await raw(port, { headers: { ...headers, Accept: "application/json" }, body: initialize })).status).toBe(406);
   });
 
+  it("answers 413 to an oversized chunked body that declares no Content-Length", async () => {
+    const { port } = await listen();
+    const chunk = Buffer.alloc(64 * 1024, "a");
+    const chunks = Math.ceil(MAX_BODY_BYTES / chunk.length) + 1;
+
+    const response = await new Promise<{ status: number; sent: Record<string, unknown>; body: string }>((resolve, reject) => {
+      const req = request(
+        { host: "127.0.0.1", port, method: "POST", path: "/mcp", headers: { ...goodHeaders(port), "Transfer-Encoding": "chunked" } },
+        (res) => {
+          let body = "";
+          res.setEncoding("utf8");
+          res.on("data", (data) => { body += data; });
+          res.on("end", () => resolve({ status: res.statusCode ?? 0, sent: req.getHeaders(), body }));
+          res.on("error", reject);
+        },
+      );
+      req.on("error", reject);
+      for (let i = 0; i < chunks; i++) req.write(chunk);
+      req.end();
+    });
+
+    expect(response.sent["content-length"]).toBeUndefined();
+    expect(chunk.length * chunks).toBeGreaterThan(MAX_BODY_BYTES);
+    expect(response.status).toBe(413);
+    expect(JSON.parse(response.body)).toEqual({
+      jsonrpc: "2.0",
+      error: { code: -32000, message: `Request body exceeds ${MAX_BODY_BYTES} bytes` },
+      id: null,
+    });
+  });
+
   it("refuses to bind a port that is already taken instead of starting a second copy", async () => {
     const { port } = await listen();
     await expect(startHttpServer({ runtime: createRuntime(config, "test"), token: TOKEN, port }))
