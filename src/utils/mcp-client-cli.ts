@@ -26,11 +26,14 @@ export type CommandRunner = (
 /**
  * How an existing "brightspace" entry compares with the one setup writes.
  * `current` is a printable form of a different entry, so the user can see
- * what would be replaced and restore it later.
+ * what would be replaced and restore it later. `shared_http` is an entry that
+ * connects by URL to the shared server (`brightspace-mcp-server http`): a
+ * supported setup someone chose on purpose, not a stale one.
  */
 export type Registration =
   | { state: "missing" }
   | { state: "current" }
+  | { state: "shared_http"; url: string }
   | { state: "different"; current: string };
 
 function defaultRunCommand(
@@ -68,6 +71,23 @@ export function serverCommand(platform: NodeJS.Platform = process.platform): str
     : ["npx", "-y", `${PACKAGE_NAME}@latest`];
 }
 
+/**
+ * Whether a URL is where the shared server listens: plain http on this
+ * computer, at the MCP path (see HTTP_HOST and MCP_PATH in http-server.ts,
+ * which also accepts "localhost"). Any other URL is some other server.
+ */
+function isSharedServerUrl(url: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+  return parsed.protocol === "http:"
+    && (parsed.hostname === "127.0.0.1" || parsed.hostname === "localhost")
+    && parsed.pathname === "/mcp";
+}
+
 export function classifyRegistration(
   entry: unknown,
   platform: NodeJS.Platform = process.platform
@@ -77,7 +97,10 @@ export function classifyRegistration(
     return { state: "different", current: "(an entry setup could not read)" };
   }
 
-  const { command, args } = entry as { command?: unknown; args?: unknown };
+  const { command, args, url } = entry as { command?: unknown; args?: unknown; url?: unknown };
+  if (typeof command !== "string" && typeof url === "string") {
+    return isSharedServerUrl(url) ? { state: "shared_http", url } : { state: "different", current: url };
+  }
   if (typeof command !== "string") {
     return { state: "different", current: JSON.stringify(entry) };
   }

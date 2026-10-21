@@ -70,11 +70,25 @@ describe("classifyRegistration", () => {
   });
 
   it("describes an entry without a command as JSON", () => {
-    const entry = { url: "http://localhost:3000/mcp" };
+    const entry = { type: "sse", endpoint: "http://localhost:3000/mcp" };
     expect(classifyRegistration(entry, "darwin")).toEqual({
       state: "different",
-      current: '{"url":"http://localhost:3000/mcp"}',
+      current: '{"type":"sse","endpoint":"http://localhost:3000/mcp"}',
     });
+  });
+
+  it("recognizes a URL entry for the shared local server", () => {
+    // Codex's streamable_http transport and Claude Code's http entry.
+    const codex = { type: "streamable_http", url: "http://127.0.0.1:18765/mcp", bearer_token_env_var: "D2L_HTTP_TOKEN" };
+    const claude = { type: "http", url: "http://localhost:18766/mcp", headers: { Authorization: "Bearer x" } };
+    expect(classifyRegistration(codex, "darwin")).toEqual({ state: "shared_http", url: "http://127.0.0.1:18765/mcp" });
+    expect(classifyRegistration(claude, "win32")).toEqual({ state: "shared_http", url: "http://localhost:18766/mcp" });
+  });
+
+  it("treats a URL that isn't the shared local server as different", () => {
+    for (const url of ["https://example.com/mcp", "http://192.168.1.5:18765/mcp", "http://127.0.0.1:18765/other", "not a url"]) {
+      expect(classifyRegistration({ url }, "darwin")).toEqual({ state: "different", current: url });
+    }
   });
 
   it("reports an entry it could not read as different", () => {
@@ -106,6 +120,13 @@ describe("Codex registration lookup", () => {
       state: "different",
       current: "node /opt/bsp/build/index.js",
     });
+  });
+
+  it("recognizes a registration that uses the shared server by URL", () => {
+    const url = "http://127.0.0.1:18765/mcp";
+    const run: CommandRunner = () =>
+      ok(JSON.stringify({ name: "brightspace", enabled: true, transport: { type: "streamable_http", url, bearer_token_env_var: "D2L_HTTP_TOKEN" } }));
+    expect(inspectCliMcpClient(codex, run)).toEqual({ state: "shared_http", url });
   });
 
   it("reports a missing registration", () => {

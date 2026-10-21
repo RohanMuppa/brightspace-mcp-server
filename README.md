@@ -129,7 +129,7 @@ Normally every chat starts its own copy of the server. With many Codex chats ope
    url = "http://127.0.0.1:18765/mcp"
    bearer_token_env_var = "D2L_HTTP_TOKEN"
    ```
-   (`env_http_headers = { "Authorization" = "D2L_HTTP_AUTHORIZATION" }` also works, if that variable holds `Bearer <token>`.) A project's own `.codex/config.toml` overrides this one, so remove any `brightspace` entry there or change it the same way. If you rerun `setup` later, say no when it offers to replace the Codex entry.
+   (`env_http_headers = { "Authorization" = "D2L_HTTP_AUTHORIZATION" }` also works, if that variable holds `Bearer <token>`.) A project's own `.codex/config.toml` overrides this one, so remove any `brightspace` entry there or change it the same way. Rerunning `setup` recognizes this entry and keeps it, token settings included.
 4. **Restart Codex.** Chats that were already open keep the old per-chat server until Codex restarts. If you stop or restart the shared server, calls fail until it is back; if they still fail after that, start a new chat or restart Codex.
 
 Things that change:
@@ -137,7 +137,7 @@ Things that change:
 - **Sign-in messages show up in the server's terminal.** The number to approve still comes back in the chat's answer, and, in clients that show tool progress, while the question is running.
 - **Stopping it:** press Ctrl+C. Questions already running finish first; press Ctrl+C again to stop at once.
 
-Any other MCP client that can connect to a Streamable HTTP URL with a bearer token can share the same server. To go back to one copy per chat, put the `command`/`args` entry back (rerunning `setup` does it) and stop the shared server.
+Any other MCP client that can connect to a Streamable HTTP URL with a bearer token can share the same server. To go back to one copy per chat, put the `command`/`args` entry back (rerun `setup` and say yes when it offers to switch Codex back to its own copy per chat) and stop the shared server.
 
 ## When it asks you to sign in
 
