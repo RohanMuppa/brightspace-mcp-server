@@ -15,6 +15,7 @@ import { applyCourseFilter } from "../utils/course-filter.js";
 import { contentTopicUrl, gradebookUrl, quizUrl } from "../utils/deep-links.js";
 import { assignmentLinkResolver } from "./assignment-links.js";
 import { dueIn } from "../utils/due-in.js";
+import { decodeEntities } from "../utils/html-attributes.js";
 import { feedbackText, FEEDBACK_UNAVAILABLE_NOTE } from "../utils/feedback.js";
 import { fetchCurrentUserId } from "./group-membership.js";
 import { toOutputAssessment, type RubricAssessmentDto, type RubricDto } from "./get-assignment-rubric.js";
@@ -638,6 +639,16 @@ export async function fetchCourseAssignments(
   return (await fetchCourseInventory(apiClient, courseId, baseUrl)).assignments;
 }
 
+/**
+ * True when a dropbox feedback page lists at least one submission. A listed
+ * submission carries its numeric submission ID; the page's labels alone, a
+ * "no submissions" message, or a login page never match.
+ */
+function feedbackPageListsSubmission(html: string): boolean {
+  const text = html.replace(/<(script|style)\b[\s\S]*?<\/\1>/gi, " ").replace(/<[^>]*>/g, " ");
+  return /Submission\s+ID\s*:?\s*\d+/i.test(decodeEntities(text).replace(/\s+/g, " "));
+}
+
 /** A course's assignments and quizzes, with whether its quiz list is complete. */
 async function fetchCourseInventory(
   apiClient: D2LApiClient,
@@ -715,6 +726,22 @@ async function fetchCourseInventory(
         if (error?.status !== 404) {
           submissionsKnown = false;
           log("DEBUG", `Could not determine submission state for folder ${folder.Id}`, error);
+        }
+      }
+
+      // When the API refuses the list, the student's own feedback page may
+      // still show it. Only a listed submission counts: a page with none, or
+      // no page at all, leaves the state unknown rather than "not submitted".
+      let submissionSource: "feedbackPage" | null = null;
+      if (!submissionsKnown && (folder.GroupTypeId === null || folder.GroupTypeId === undefined)) {
+        try {
+          const html = await apiClient.getPage(
+            `/d2l/lms/dropbox/user/folder_user_view_feedback.d2l?db=${folder.Id}&grpid=0&ou=${courseId}`
+          );
+          if (html !== null && feedbackPageListsSubmission(html)) submissionSource = "feedbackPage";
+        } catch (error: any) {
+          if (isAuthUnavailable(error)) throw error;
+          log("DEBUG", `Feedback-page fallback failed for folder ${folder.Id}`, error);
         }
       }
 
@@ -816,12 +843,19 @@ async function fetchCourseInventory(
         // when nothing is known, but submissionStatus tells apart "nothing
         // was submitted" (404, a known answer) from "the answer is denied"
         // (any other error), so a caller never states real work as missing.
-        submissionStatus: !submissionsKnown
-          ? "unknown"
-          : submissions.length > 0
-            ? "submitted"
-            : "not_submitted",
-        ...(submissionsKnown ? {} : {
+        submissionStatus: submissionSource
+          ? "submitted"
+          : !submissionsKnown
+            ? "unknown"
+            : submissions.length > 0
+              ? "submitted"
+              : "not_submitted",
+        ...(submissionSource ? {
+          submissionSource,
+          submissionStatusNote:
+            "Brightspace did not return this assignment's submission list, but its feedback page lists a " +
+            "submission, so it was submitted. File details are only shown on that page.",
+        } : submissionsKnown ? {} : {
           submissionStatusNote:
             "Brightspace did not return this assignment's submission list, so whether it was submitted " +
             "is unknown. Do not report it as missing or unsubmitted - tell the user to check Brightspace directly.",

@@ -614,6 +614,79 @@ describe("fetchCourseAssignments submissionStatus", () => {
   });
 });
 
+/**
+ * Some tenants refuse mysubmissions to the student who owns the submissions,
+ * while the same student's feedback page in Brightspace still lists them with
+ * a submission ID. The page is read with the signed-in session as a fallback;
+ * anything short of a listed submission keeps the conservative "unknown".
+ */
+describe("fetchCourseAssignments submission fallback to the feedback page", () => {
+  const FEEDBACK_PAGE = `/d2l/lms/dropbox/user/folder_user_view_feedback.d2l?db=55&grpid=0&ou=${COURSE_ID}`;
+
+  function makeDeniedClient(pages: Record<string, string | null>, groupTypeId: number | null = null) {
+    return {
+      le: (orgUnitId: number, p: string) => `/d2l/api/le/1.0/${orgUnitId}${p}`,
+      get: vi.fn(async (path: string) => {
+        if (path.endsWith("/dropbox/folders/")) {
+          return [{ Id: 55, Name: "HW 1", DueDate: null, IsHidden: false, GroupTypeId: groupTypeId }];
+        }
+        if (path.includes("/mysubmissions/")) throw forbidden();
+        if (path.endsWith("/quizzes/") || path.endsWith("/grades/")) return [];
+        if (path.endsWith("/content/toc")) return { Modules: [] };
+        throw notFound();
+      }),
+      getPage: vi.fn(async (path: string) => (path in pages ? pages[path] : null)),
+    };
+  }
+
+  const submittedPage =
+    "<html><body><h2>Submissions</h2><table><tr><th>Submission ID</th><td>987654</td></tr>" +
+    "<tr><td><a href='#'>photo.jpg</a></td><td>Oct 20, 2026 11:58 PM</td><td>Late</td></tr></table></body></html>";
+
+  it("reports submitted when the feedback page lists a submission ID", async () => {
+    const apiClient = makeDeniedClient({ [FEEDBACK_PAGE]: submittedPage });
+    const [assignment] = await fetchCourseAssignments(apiClient as any, COURSE_ID);
+
+    expect(assignment.submissionStatus).toBe("submitted");
+  });
+
+  it("says the submitted state came from the feedback page", async () => {
+    const apiClient = makeDeniedClient({ [FEEDBACK_PAGE]: submittedPage });
+    const [assignment] = await fetchCourseAssignments(apiClient as any, COURSE_ID);
+
+    expect(assignment.submissionSource).toBe("feedbackPage");
+  });
+
+  it("stays unknown when the feedback page lists no submission", async () => {
+    const apiClient = makeDeniedClient({ [FEEDBACK_PAGE]: "<html><body><h2>Submissions</h2><p>No submissions</p></body></html>" });
+    const [assignment] = await fetchCourseAssignments(apiClient as any, COURSE_ID);
+
+    expect(assignment.submissionStatus).toBe("unknown");
+  });
+
+  it("stays unknown when no signed-in session can read the page", async () => {
+    const apiClient = makeDeniedClient({});
+    const [assignment] = await fetchCourseAssignments(apiClient as any, COURSE_ID);
+
+    expect(assignment.submissionStatus).toBe("unknown");
+  });
+
+  it("stays unknown when the page read fails", async () => {
+    const apiClient = makeDeniedClient({});
+    apiClient.getPage.mockRejectedValue(Object.assign(new Error("Server Error"), { status: 500 }));
+    const [assignment] = await fetchCourseAssignments(apiClient as any, COURSE_ID);
+
+    expect(assignment.submissionStatus).toBe("unknown");
+  });
+
+  it("does not read the individual feedback page for a group assignment", async () => {
+    const apiClient = makeDeniedClient({ [FEEDBACK_PAGE]: submittedPage }, 7);
+    const [assignment] = await fetchCourseAssignments(apiClient as any, COURSE_ID);
+
+    expect(assignment.submissionStatus).toBe("unknown");
+  });
+});
+
 describe("fetchCourseAssignments attemptStatus", () => {
   it("marks attempts unknown, not zero, when the tenant denies the attempts endpoint with 403", async () => {
     const { apiClient } = makeQuizClient(
