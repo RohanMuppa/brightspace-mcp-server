@@ -14,51 +14,52 @@ If a second app (say Claude Desktop and a terminal session) is signed in to the 
 
 **Duo:** sign-in auto-answers "Is this your device?" with **yes**, since a headless run has nobody to click it — this also makes Duo remember the device, so skip it on shared machines. Set `D2L_DUO_PASSCODE` to swap the push for a typed passcode.
 
-**Microsoft "Don't ask again":** answering yes to `setup`'s "Remember this device" question (saved as `rememberMfa` in `config.json`; `D2L_REMEMBER_MFA` overrides it) makes the server tick that box when your school offers it, so later sign-ins can skip the second factor; how long that lasts is the school's setting, not the server's. It is off by default — leave it off on a shared machine — and `get_server_info` shows whether the box was ticked, offered, or left alone. How often you're asked for MFA at all is your school's sign-in frequency setting, the same approval you'd see in a regular browser.
+To be asked less often, see [Fewer 2FA prompts](#fewer-2fa-prompts).
 
 ## Passwordless sign-in
 
-Answering yes to `setup`'s "Sign in without a saved password" question (saved as `passwordless` in `config.json`; `D2L_PASSWORDLESS` overrides it) skips the password prompt and saves no password: setup also removes one saved earlier for the same account. Sign-in then submits only your username, and Microsoft's passwordless phone approval — the number you type into Authenticator — is the whole sign-in. It is off by default, and Microsoft Entra only; the other school-specific sign-in flows still need a password.
+Setup no longer offers this; it always saves your password. It is still available for anyone who sets `D2L_PASSWORDLESS=true` in their AI client's config for this server: sign-in then submits only your username, no password is read, and Microsoft's passwordless phone approval (the number you type into Authenticator) is the whole sign-in. Microsoft Entra only, and passwordless phone sign-in must already be on in Microsoft Authenticator.
 
-The tradeoff: **every sign-in needs your phone**, because there is no password for the server to supply. That's fine when you're at your desk using an assistant, and bad for anything unattended (a scheduled job, a headless agent) — automatic re-sign-in after a session expires waits until someone approves. Passwordless phone sign-in must already be turned on for your account in Microsoft Authenticator. If Microsoft asks for a password anyway, sign-in stops with an error naming `D2L_PASSWORDLESS` instead of waiting out the timeout; turn passwordless off and rerun `setup` to save a password.
+Every sign-in then needs your phone, including automatic ones after a session expires, so it doesn't suit anything unattended. If Microsoft asks for a password anyway, sign-in stops with an error naming `D2L_PASSWORDLESS`; remove the setting and rerun `setup`.
 
-## Answering code challenges without your phone
+## Fewer 2FA prompts
 
-Some Microsoft Entra tenants ask for a **6-digit verification code** rather than a number to approve.
-If you save the authenticator **setup key** for that enrollment, sign-in switches Microsoft to its
-"Use a verification code" method and types a code it generates on this computer — so an automatic
-re-sign-in after your session expires finishes with nothing from your phone. Off unless you save a
-key; without one, nothing below runs and every challenge is handled exactly as it always was.
+`setup` asks one question: **How often do you want to approve sign-ins on your phone?** The default is the safest answer. The other two are opt-in, and neither is for a shared computer.
 
-Getting the key (Microsoft calls it a *software OATH token*):
+| | 1. Every time | 2. Remember this computer | 3. This computer answers code requests |
+|---|---|---|---|
+| What it does | Nothing is skipped. | Ticks Microsoft's **"Don't ask again"** box when your school offers it. | Types the 6-digit code for you when Microsoft asks for one. |
+| What you'll notice | You approve every sign-in Microsoft asks about. | Fewer prompts. How long it lasts is your school's setting, so you still approve now and then. | Automatic sign-ins finish with nothing from your phone. |
+| Needs | Nothing (default). | Nothing extra. | The authenticator **setup key** (steps below), about 2 minutes. |
+| Where it lives | | `rememberMfa` in `config.json` (`D2L_REMEMBER_MFA` overrides it). | Your operating system's credential store, next to your password (`D2L_TOTP_SECRET` for CI and containers with none). |
+
+Option 3 also turns option 2 on, so you get both. It only helps when Microsoft asks for a 6-digit code: if your school only sends a number to approve and offers no code option, sign-in falls back to your phone exactly as it does today. If you pick 3 and press Enter without pasting a key, `setup` says so and saves option 2.
+
+**Turn on:** run `npx -y brightspace-mcp-server@latest setup` again and pick 2 or 3. `setup` shows what is on now ("Currently: 2 — remember this computer") and Enter keeps it.
+
+**Turn off:** run `setup` again and pick **1**. If an authenticator key is saved, `setup` then asks whether to remove it from this computer's credential store (default yes); answering no keeps the key, which means Microsoft's code requests are still answered automatically. Check what is on any time with `npx -y brightspace-mcp-server@latest doctor`.
+
+**Shared computer:** pick 1. Option 2 lets anyone using your account here skip the second factor, and option 3 puts your password and second factor on the same machine.
+
+### Getting the setup key
+
+Microsoft calls it a *software OATH token*. Only the **setup key** works; a code showing in your app right now will not.
 
 1. Go to <https://mysignins.microsoft.com> → **Security info** → **Add sign-in method** → **Authenticator app**.
 2. Choose **I want to use a different authenticator app**, then **Next**.
-3. On the QR page, click **Can't scan image?** Microsoft shows a **secret key** — that string is what to save.
+3. On the QR page, click **Can't scan image?** Microsoft shows a **secret key**. Copy it.
 4. Finish enrollment in whatever app you normally use, so you still have the factor on your phone.
-5. Run `setup` and paste the key (or the whole `otpauth://` link) at the optional authenticator prompt.
-   A code showing on screen right now will not work; it has to be the enrollment key.
+5. Run `setup`, pick option 3, and paste the key (or the whole `otpauth://` link) at the authenticator prompt.
 
-Purdue allows this and documents it in its own knowledge base (KB 2219). Other schools may not —
-check your own IT policy before enrolling.
+Purdue allows this and documents it in its own knowledge base (KB 2219). Other schools may not, so check your own IT policy first.
 
-The key is kept in your operating system credential store, next to your password, and is never
-written to `config.json` and never logged (neither is any code generated from it). `D2L_TOTP_SECRET`
-does the same job from the environment, for CI and containers that have no credential store; it is
-weaker, because anything that can read this process's environment gets your second factor.
+### Details
 
-**The tradeoff, plainly:** a password and a second factor on the same computer are one factor on
-that computer. This still defeats someone who has only your password, from anywhere else, and it
-changes nothing about your other devices — but it defends against nothing already running as you on
-this machine. That is why it is opt-in and off by default. Don't do it on a shared computer.
-
-If your tenant offers no way to type a code, sign-in gives up on the code after half a minute and
-goes back to announcing the approval for you to tap, exactly as it does with no key saved. A Duo
-challenge is left alone (Duo codes come from a different enrollment), and so is Microsoft's
-passwordless approval view, where the phone *is* the first factor and no code can stand in for it.
-If Microsoft shows that approval view only because phone sign-in is turned on in your Authenticator
-app, and you have a password saved with the `passwordless` option off, sign-in takes "Use your
-password instead" so the code can answer the second factor that follows.
+- **Remember this device:** `get_server_info` shows whether the box was ticked, already on, not offered, or left alone. How often MFA is asked at all is your school's sign-in frequency setting, the same approval you'd see in a regular browser.
+- **Saved key:** it is never written to `config.json` and never logged (neither is any code generated from it). `D2L_TOTP_SECRET` is weaker, because anything that can read this process's environment gets your second factor.
+- **The tradeoff, plainly:** a password and a second factor on the same computer are one factor on that computer. This still defeats someone who has only your password, from anywhere else, and it changes nothing about your other devices, but it defends against nothing already running as you on this machine. That is why it is opt-in.
+- **If your tenant offers no way to type a code,** sign-in gives up on the code after half a minute and goes back to announcing the approval for you to tap, exactly as it does with no key saved. A Duo challenge is left alone (Duo codes come from a different enrollment), and so is Microsoft's passwordless approval view, where the phone *is* the first factor and no code can stand in for it. If Microsoft shows that approval view only because phone sign-in is turned on in your Authenticator app, and you have a password saved with the `passwordless` option off, sign-in takes "Use your password instead" so the code can answer the second factor that follows.
+- **Signing out early** keeps a saved key, so the next sign-in can finish without you; see [Signing out early](#signing-out-early).
 
 ## If it gets stuck
 
@@ -97,9 +98,9 @@ Other AI apps open on this computer are signed out too and will ask you to sign 
 | McGill University | `--mcgill` | Microsoft Entra; myCourses sends you straight to Entra via SAML. |
 | Javeriana Cali | `--javeriana` | MobilityGuard OneGate: password, then an authenticator code that `auth` prompts for in the terminal. Headless sign-in needs the terminal prompt; otherwise use the visible browser. |
 | Ngee Ann Polytechnic | `--ngeeann` | Plain Microsoft Entra, no extra steps. |
-| Any other D2L school | none | Run `setup` with no flag and paste your Brightspace URL (for example `https://yourschool.brightspace.com`). An unsupported login page falls back to a visible browser window you complete by hand. |
+| Any other D2L school | none | Run `setup` with no flag and paste your Brightspace URL (for example `https://yourschool.brightspace.com`). If the login page isn't recognized, answer 2 ("Another way") to setup's sign-in question: the page then opens for you to finish by hand when you sign in with `setup` or `auth`. With 1, an unrecognized page stops with an error. |
 
-The setup wizard saves your password in the native credential store and asks how you'll complete MFA: wait for approval or number matching, enter a terminal code from an authenticator app, or use a visible browser for other interactive methods. It can also configure Claude Desktop, Cursor, Codex Desktop and CLI, and Claude Code when installed — restart your AI client when it finishes.
+The setup wizard saves your password in the native credential store and asks how you confirm it's you: 1, a phone app (tap Approve or type a code in the terminal), or 2, another way such as a text message, which shows you the sign-in page to finish yourself. The page only opens when you sign in with `setup` or `auth`; automatic sign-ins later always run in the background. It can also configure Claude Desktop, Cursor, Codex Desktop and CLI, and Claude Code when installed — restart your AI client when it finishes.
 
 ## No browser? Paste a session cookie or token
 

@@ -55,13 +55,27 @@ export function registerGetMyGroups(
 
         const { courseId } = GetMyGroupsSchema.parse(args);
 
-        const { matches, categoriesUnavailable } = await fetchMyGroupMemberships(apiClient, courseId);
+        const { matches, categoriesUnavailable, unreadCategories } = await fetchMyGroupMemberships(apiClient, courseId);
         if (categoriesUnavailable) {
           return toolResponse({
             courseId,
             groups: [],
             note: "No groups are visible for this course (it may not use groups, or group info isn't accessible).",
           });
+        }
+
+        const unreadNote = unreadCategories.length === 0 ? undefined
+          : `Couldn't read the groups in ${unreadCategories.map((c) => `"${c.Name || c.GroupCategoryId}"`).join(", ")}, ` +
+            "so any group the current user has there is not listed.";
+        if (unreadNote) {
+          log("INFO", "get_my_groups: Some group categories could not be read", {
+            courseId,
+            categoryIds: unreadCategories.map((c) => c.GroupCategoryId),
+          });
+        }
+
+        if (matches.length === 0 && unreadNote) {
+          return toolResponse({ courseId, groups: [], note: unreadNote });
         }
 
         if (matches.length === 0) {
@@ -109,7 +123,7 @@ export function registerGetMyGroups(
         });
 
         log("INFO", `get_my_groups: Found ${groups.length} groups for course ${courseId}`);
-        return toolResponse({ courseId, groups });
+        return toolResponse({ courseId, groups, ...(unreadNote ? { note: unreadNote } : {}) });
       } catch (error) {
         return sanitizeError(error);
       }

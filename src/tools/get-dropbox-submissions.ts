@@ -153,23 +153,25 @@ export function registerGetDropboxSubmissions(
         const kept = truncated ? rawSubmissions.slice(0, limit) : rawSubmissions;
 
         // Optionally fetch feedback for each kept submitter, a bounded
-        // number at a time. Best-effort: a submitter with no feedback yet
-        // simply has none in the map.
+        // number at a time. A 404 means no feedback yet, so that submitter
+        // simply has none in the map. Any other failure leaves their grading
+        // status unknown rather than "not graded", and the note names them.
         const feedbackMap = new Map<string, D2LFeedback>();
+        const feedbackUnread = new Set<string>();
         if (!ignoreFeedback) {
           await mapWithConcurrency(kept, FEEDBACK_FETCH_CONCURRENCY, async (sub) => {
+            const userId = sub.SubmittedBy.Identifier;
             try {
-              const userId = sub.SubmittedBy.Identifier;
               const feedbackPath = apiClient.le(
                 courseId,
                 `/dropbox/folders/${folderId}/feedback/user/${userId}`
               );
               const fb = await apiClient.get<D2LFeedback>(feedbackPath);
               feedbackMap.set(userId, fb);
-            } catch {
-              // No feedback yet, or this submitter's feedback route
-              // otherwise failed — silently skip, matching the "not
-              // graded yet" default below.
+            } catch (error) {
+              if (!(error instanceof ApiError && error.status === 404)) {
+                feedbackUnread.add(userId);
+              }
             }
           });
         }
@@ -198,7 +200,9 @@ export function registerGetDropboxSubmissions(
           };
 
           if (!ignoreFeedback) {
-            entry.feedbackStatus = feedback
+            entry.feedbackStatus = feedbackUnread.has(userId)
+              ? null
+              : feedback
               ? {
                   isGraded: feedback.IsGraded,
                   score: feedback.Score,
@@ -211,11 +215,30 @@ export function registerGetDropboxSubmissions(
           return entry;
         });
 
-        // activeOnly: skip submissions that are already fully graded.
+        // activeOnly: skip submissions that are already fully graded. One
+        // whose feedback couldn't be read stays, since it may still need grading.
         const filtered =
           activeOnly && !ignoreFeedback
             ? submissions.filter((s) => !(s.feedbackStatus as any)?.isGraded)
             : submissions;
+
+        const unreadNames = kept
+          .filter((sub) => feedbackUnread.has(sub.SubmittedBy.Identifier))
+          .map((sub) => `"${sub.SubmittedBy.DisplayName || sub.SubmittedBy.Identifier}"`);
+        if (unreadNames.length > 0) {
+          log("INFO", "get_dropbox_submissions: Some submitters' feedback could not be read", {
+            courseId,
+            folderId,
+            userIds: [...feedbackUnread],
+          });
+        }
+        const notes = [
+          ...(truncated ? [`Showing ${kept.length} of ${total} submissions. Raise the limit argument to see more.`] : []),
+          ...(unreadNames.length > 0
+            ? [`Couldn't read the feedback for ${unreadNames.join(", ")}, so whether they are graded is unknown ` +
+               "(feedbackStatus is null)."]
+            : []),
+        ];
 
         log(
           "INFO",
@@ -232,9 +255,7 @@ export function registerGetDropboxSubmissions(
           totalSubmissions: total,
           returnedSubmissions: filtered.length,
           truncated,
-          ...(truncated
-            ? { note: `Showing ${kept.length} of ${total} submissions. Raise the limit argument to see more.` }
-            : {}),
+          ...(notes.length > 0 ? { note: notes.join(" ") } : {}),
           activeOnly,
           submissions: filtered,
         });

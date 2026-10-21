@@ -104,4 +104,32 @@ describe("get_dropbox_user_submissions", () => {
     const parsed = body(result);
     expect(parsed.feedbackStatus).toMatchObject({ isGraded: true, score: 88, feedbackText: "Good job" });
   });
+
+  it("reports no feedback yet (404) as not graded, with no note", async () => {
+    const { call } = setup((path) => {
+      if (path.endsWith(`/submissions/users/${USER_ID}`)) return [submission()];
+      throw notFound();
+    });
+
+    const parsed = body(await call({ courseId: COURSE_ID, folderId: FOLDER_ID, userId: USER_ID }));
+    expect(parsed.feedbackStatus).toMatchObject({ isGraded: false, score: null });
+    expect(parsed.note).toBeUndefined();
+  });
+
+  it("reports a failed feedback read as unknown, not as not graded", async () => {
+    const { call } = setup((path) => {
+      if (path.endsWith(`/submissions/users/${USER_ID}`)) return [submission()];
+      if (path.includes(`/feedback/user/${USER_ID}`)) {
+        throw new ApiError(500, "/feedback/user", "Internal Server Error");
+      }
+      throw notFound();
+    });
+
+    const result = await call({ courseId: COURSE_ID, folderId: FOLDER_ID, userId: USER_ID });
+    expect(result.isError).toBeUndefined();
+    const parsed = body(result);
+    expect(parsed.submissions).toHaveLength(1);
+    expect(parsed.feedbackStatus).toBeNull();
+    expect(parsed.note).toContain("Couldn't read this user's feedback");
+  });
 });

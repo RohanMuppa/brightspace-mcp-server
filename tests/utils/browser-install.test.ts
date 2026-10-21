@@ -1,5 +1,13 @@
 import { describe, it, expect } from "vitest";
-import { isMissingBrowserError, PLAYWRIGHT_INSTALL_HINT } from "../../src/utils/browser-install.js";
+import { EventEmitter } from "node:events";
+import {
+  chromiumReady,
+  chromiumStatus,
+  installChromium,
+  isMissingBrowserError,
+  playwrightCliPath,
+  PLAYWRIGHT_INSTALL_HINT,
+} from "../../src/utils/browser-install.js";
 
 /**
  * A global install done with --ignore-scripts, or under npm's allow-scripts
@@ -52,5 +60,74 @@ describe("PLAYWRIGHT_INSTALL_HINT", () => {
   it("explains why the browser is missing, not just what to run", () => {
     expect(PLAYWRIGHT_INSTALL_HINT).toMatch(/postinstall/i);
     expect(PLAYWRIGHT_INSTALL_HINT).toMatch(/ignore-scripts|allow-scripts/i);
+  });
+});
+
+describe("chromiumStatus", () => {
+  const missing = new Error("browserType.launch: Executable doesn't exist at /x/chrome-headless-shell");
+
+  it("is ready when both browsers are there", async () => {
+    const status = await chromiumStatus({ launchHeadless: async () => {}, executablePath: async () => "/x/chrome", existsSync: () => true });
+    expect(status).toEqual({ headless: "present", visible: true });
+    expect(chromiumReady(status)).toBe(true);
+  });
+
+  it("is not ready when only the visible browser is installed", async () => {
+    const status = await chromiumStatus({
+      launchHeadless: async () => { throw missing; },
+      executablePath: async () => "/x/chrome",
+      existsSync: () => true,
+    });
+    expect(status).toEqual({ headless: "missing", visible: true });
+    expect(chromiumReady(status)).toBe(false);
+  });
+
+  it("is not ready when only the headless shell is installed", async () => {
+    const status = await chromiumStatus({ launchHeadless: async () => {}, executablePath: async () => "/x/chrome", existsSync: () => false });
+    expect(chromiumReady(status)).toBe(false);
+  });
+
+  it("doesn't call a launch blocked for another reason a missing browser", async () => {
+    const status = await chromiumStatus({
+      launchHeadless: async () => { throw new Error("sandbox_host_linux.cc: Operation not permitted\nmore"); },
+      executablePath: async () => "/x/chrome",
+      existsSync: () => true,
+    });
+    expect(status).toEqual({ headless: "unknown", visible: true, detail: "sandbox_host_linux.cc: Operation not permitted" });
+    expect(chromiumReady(status)).toBe(true);
+  });
+});
+
+describe("installChromium", () => {
+  function fakeSpawn(code: number | null, error?: Error) {
+    const calls: { command: string; args: string[]; options: unknown }[] = [];
+    const spawnImpl = ((command: string, args: string[], options: unknown) => {
+      calls.push({ command, args, options });
+      const child = new EventEmitter();
+      queueMicrotask(() => (error ? child.emit("error", error) : child.emit("close", code)));
+      return child;
+    }) as unknown as typeof import("node:child_process").spawn;
+    return { spawnImpl, calls };
+  }
+
+  it("runs this package's own Playwright CLI with node, not npx or a shell", async () => {
+    const { spawnImpl, calls } = fakeSpawn(0);
+    const result = await installChromium({ spawnImpl, execPath: "/usr/bin/node", cliPath: "/pkg/node_modules/playwright/cli.js" });
+    expect(result).toEqual({ ok: true });
+    expect(calls).toEqual([{
+      command: "/usr/bin/node",
+      args: ["/pkg/node_modules/playwright/cli.js", "install", "chromium"],
+      options: { stdio: ["ignore", 2, 2] },
+    }]);
+  });
+
+  it("reports a failed install", async () => {
+    expect(await installChromium({ spawnImpl: fakeSpawn(1).spawnImpl, cliPath: "/cli.js" })).toMatchObject({ ok: false });
+    expect(await installChromium({ spawnImpl: fakeSpawn(null, new Error("ENOENT")).spawnImpl, cliPath: "/cli.js" }))
+      .toEqual({ ok: false, message: "ENOENT" });
+  });
+
+  it("finds the Playwright CLI this package depends on", () => {
+    expect(playwrightCliPath()).toMatch(/node_modules[\\/]playwright[\\/]cli\.js$/);
   });
 });

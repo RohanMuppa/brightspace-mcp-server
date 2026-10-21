@@ -76,7 +76,7 @@ describe("native session key stability", () => {
     const sessionDir = path.join(dir, "session");
     await fs.mkdir(codeDir);
     await fs.writeFile(path.join(codeDir, "package.json"), JSON.stringify({ type: "module" }));
-    for (const name of ["credential-store", "auth-lock"]) {
+    for (const name of ["credential-store", "auth-lock", "username"]) {
       const source = await fs.readFile(fileURLToPath(new URL(`../../src/auth/${name}.ts`, import.meta.url)), "utf8");
       const { outputText } = transpileModule(source, { compilerOptions: { target: ScriptTarget.ES2022, module: ModuleKind.ES2022 } });
       await fs.writeFile(path.join(codeDir, `${name}.js`), outputText);

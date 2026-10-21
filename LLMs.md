@@ -14,84 +14,80 @@ Distributed on npm as `brightspace-mcp-server`. Register it as `npx -y brightspa
 
 ## Installing it for a user
 
-Follow these steps in order. Stop and report back if any step fails.
+Installing takes three stages: you do everything you can, the person signs in, then you check it worked (issue #258). Only stage 2 needs the person. Stop and report back if a stage fails.
 
-### 1. Verify Node.js 20+ and native secure storage
+### 1. Prepare everything yourself (no prompts)
 
-```bash
-node --version
-```
-
-If Node is missing or below v20, tell the user to install the LTS from https://nodejs.org/ and stop. Require macOS Keychain, Windows Credential Manager, or an unlocked Linux Secret Service with `secret-tool` (`libsecret-tools` on Debian/Ubuntu). Linux uses libsecret directly; secrets pass through stdin, and temporary kernel-key storage is never used. v2 has no plaintext credential fallback.
-
-### 2. Run the setup wizard
+Check `node --version` first. If Node is missing or below v20, tell the user to install the LTS from https://nodejs.org/ and stop. Then ask the user, in chat, which school they're at and the username they sign in with. Don't ask for their password; only stage 2 takes it, typed by them.
 
 ```bash
-npx -y brightspace-mcp-server@latest setup
+npx -y brightspace-mcp-server@latest setup --purdue --prepare --username <their username> --json
 ```
 
-If the user is at Purdue, use the preset:
+How to run it:
+
+- **School:** use the school's flag: `--purdue`, `--suny`, `--western`, `--tudelft`, `--cuny`, `--leiden`, `--mcgill`, `--ngeeann` or `--javeriana`. For any other school, use `--url <their Brightspace address>` instead.
+- **SUNY campus:** add `--campus "<campus>"` if you know it. Otherwise stage 2 asks.
+- **Timeout:** allow several minutes. A first run can download Chromium (about 200 MB).
+
+What it does, all without a prompt:
+- checks Node, the native credential store, Chromium (downloading it when missing, unless `--no-browser-install`) and that the school is reachable;
+- saves the public settings to `~/.brightspace-mcp/config.json`, with no password. It only saves once the school is reachable, so a mistyped `--url` can't replace a working setup, and it leaves alone a config that still holds an older version's password;
+- registers the server in every AI app it finds: Claude Desktop, Cursor and Antigravity by editing their config files, and Codex and Claude Code through their own CLIs, at user scope.
+  - An existing `brightspace` entry that runs something else is left alone and reported. Pass `--replace` to change it.
+
+Running it again changes nothing that is already right.
+
+With `--json`, stdout is one JSON object. Progress lines go to stderr.
+- `state`:
+  - `ready_for_sign_in` (exit 0): go to stage 2.
+  - `signed_in` (exit 0): a saved sign-in already works; skip to stage 3.
+  - `needs_input` (exit 1): no school was given.
+  - `blocked` (exit 1): fix each step whose `ok` is false, then rerun.
+- `steps[]`: `{id, ok, blocking, line}`.
+- `apps[]`: one `outcome` per app: `added`, `current`, `replaced`, `different_left` or `failed`.
+- `restart[]`: the apps that need restarting to load the server.
+- `next`: `{command, needsHuman, instructions}`.
+
+For any other client (Windsurf, Copilot, Zed, Continue, etc.), register `npx -y brightspace-mcp-server@latest` yourself. On Windows that is `cmd /c npx -y brightspace-mcp-server@latest`. Config formats and paths differ per client and change over time, so check the client's current docs rather than guessing.
+
+### 2. Hand the sign-in to the person
+
+`next.command` is the person's step, for example:
 
 ```bash
-npx -y brightspace-mcp-server@latest setup --purdue
+npx -y brightspace-mcp-server@latest setup --purdue --sign-in
 ```
 
-If the user is at a SUNY campus, use the SUNY preset. It also asks which campus
-they attend, which lets sign-in skip SUNY's shared campus picker:
+It uses what stage 1 saved and asks only what needs them:
+- their username or SUNY campus, if you didn't pass them;
+- their password, or whether to keep one already saved;
+- how they confirm sign-in:
+  - 1: a phone app, either an approval or a code typed in the terminal. Chromium stays hidden.
+  - 2: another way, such as a text message. This saves `headless: false`, and the sign-in page opens for them to finish. Automatic re-auth later stays hidden either way.
+- how often to approve.
+
+Then it signs in and prints `Setup complete!`. If sign-in doesn't finish, it exits 1 and prints the same command to run again. Rerunning is always safe.
+
+It needs a terminal: without one it exits 2 rather than waiting for typing. So never run it in your own background shell; hand it over like this:
+
+- **Run it where the user can type.** That means a visible terminal they control: a terminal tab or panel your app shows them, or one they open themselves (Terminal on macOS, PowerShell on Windows).
+- **Say exactly where it is and what to do first.** Name the place the way they see it ("the terminal panel on the right, titled *brightspace setup*"), and link it if your app supports that. Tell them to click inside it before typing, because keystrokes go to the chat box until they do. Tell them to press Enter after each answer.
+- **Warn them about the password prompt.** Only asterisks appear as they type, and they still press Enter. Then it asks how they confirm sign-in and waits for the approval on their phone.
+- **Don't take "done" on faith.** Read the terminal yourself if you can. It is finished only when it prints `Setup complete!`. If it is still on a prompt, tell the user which question it is waiting on and where to answer it. Don't just ask again whether they are done. Don't offer a one-click "I'm done" reply: a beginner will click it before they have typed anything.
+- **If typing in your panel doesn't work,** give them the one command to paste into their own terminal app, and say how to open that app.
+
+The interactive wizard, `setup --purdue` with no mode flag, still works for a person setting up alone. It asks everything, registers apps before asking "Sign in now?", and also needs a terminal.
+
+### 3. Verify
 
 ```bash
-npx -y brightspace-mcp-server@latest setup --suny
+npx -y brightspace-mcp-server@latest doctor --json
 ```
 
-If the user is at a CUNY campus, use the CUNY preset. Their username is the
-full CUNY Login address, and sign-in asks in the terminal for the code from
-their authenticator app. CUNY requires that code on every full sign-in, so
-when the Brightspace session ends the user reruns `auth` in a terminal:
+`allOk: true` means the setup, the saved sign-in and one real course-list request all worked. Each failed check's `line` names its fix.
 
-```bash
-npx -y brightspace-mcp-server@latest setup --cuny
-```
-
-If the user is at McGill University, use the McGill preset. Sign-in goes
-through myCourses' SAML redirect straight to Microsoft Entra:
-
-```bash
-npx -y brightspace-mcp-server@latest setup --mcgill
-```
-
-If the user is at Pontificia Universidad Javeriana Cali, use the Javeriana
-preset. Sign-in goes through MobilityGuard OneGate, which asks in the
-terminal for a code from the user's authenticator app:
-
-```bash
-npx -y brightspace-mcp-server@latest setup --javeriana
-```
-
-The wizard:
-
-- prompts for the school's Brightspace URL (skipped with `--purdue`, `--suny`, `--western`, `--tudelft`, `--cuny`, `--leiden`, `--mcgill`, `--ngeeann`, or `--javeriana`)
-- asks whether MFA uses device approval, terminal code entry, or a visible browser, then authenticates accordingly
-- saves the password in the native credential store and public settings in `~/.brightspace-mcp/config.json` (0600)
-- writes the encrypted session below `~/.d2l-session/accounts/<account-hash>/` (AES-256-GCM)
-- auto-configures Claude Desktop, Cursor, and Antigravity, and uses their own CLIs to configure Codex and Claude Code when detected; an existing `brightspace` entry that runs anything other than `npx -y brightspace-mcp-server@latest` is printed and replaced only if the user says yes
-
-Wait for the user to finish login and MFA before continuing.
-
-### 3. Register the MCP server in the user's AI client
-
-The server command to register is:
-
-```
-npx -y brightspace-mcp-server@latest
-```
-
-On **Windows**, wrap with cmd: `cmd /c npx -y brightspace-mcp-server@latest`.
-
-Claude Desktop, Cursor, and Antigravity (`~/.gemini/antigravity/mcp_config.json`) are auto-configured by the setup wizard. When their CLIs are installed, Codex Desktop and CLI are configured together through `codex mcp add`, and Claude Code is configured at user scope through `claude mcp add --scope user`. Before writing, setup compares the existing entry's command with the expected one — Codex via `codex mcp get brightspace --json`, Claude Code by reading the user-scope `mcpServers` in `.claude.json` (so a project `.mcp.json` can't stand in for a missing user registration) — and asks before replacing one that differs. For any other client (Windsurf, Copilot, Zed, Continue, etc.), look up the client's current MCP config format and file path, then add an entry with the command above. Config formats and paths differ per client and change over time, so verify against current client docs rather than guessing.
-
-### 4. Restart the AI client
-
-Tell the user to fully quit and reopen their AI client so it picks up the new MCP server.
+Then tell the user to fully quit and reopen the apps in `restart`, and ask a question such as "What's due this week?". Calling `get_my_courses` from the restarted app is the end-to-end check.
 
 ## Auth
 
@@ -109,11 +105,11 @@ The number can change mid-wait: if the request times out or is denied before app
 
 On a Duo tenant, a device-trust prompt ("Is this your device?") gating the push is answered yes automatically, which also makes Duo skip its device check on later logins from this machine — worth mentioning to a user signing in from a shared computer. `D2L_DUO_PASSCODE` switches from waiting for a push to typing a Duo Mobile passcode.
 
-On Microsoft Entra's MFA page (number match or verification code, on `login.microsoftonline.com` only), the "Don't ask again for N days" checkbox is ticked once when remember-MFA is on, before the number is announced or a code is asked for, and an already-checked box is left alone. Remember-MFA is a `setup` question (default no) saved as `rememberMfa` in `config.json`; `D2L_REMEMBER_MFA` overrides it either way (env > config.json > `false`). This is opt-in and off by default: unless it is turned on the box is left alone and the outcome is recorded as `off`. The window is the tenant's setting; a tenant that never shows the box simply keeps asking. A sign-in that fails after Entra renewed its cookies still saves the browser state when those cookies are strictly newer than the saved ones; any other failure leaves the saved state untouched. `get_server_info` reports `microsoftSession` — `staySignedIn`, `staySignedInExpires`, `rememberMfa` (`ticked`, `already`, `absent`, `unknown`, or `off`), `rememberMfaAt` — read from a plain summary (`microsoft-session.json`, no cookie values) beside the browser state, and omits it when no browser state is saved.
+On Microsoft Entra's MFA page (number match or verification code, on `login.microsoftonline.com` only), the "Don't ask again for N days" checkbox is ticked once when remember-MFA is on, before the number is announced or a code is asked for, and an already-checked box is left alone. Remember-MFA is `setup` option 2 or 3 (default: option 1, off) saved as `rememberMfa` in `config.json`; `D2L_REMEMBER_MFA` overrides it either way (env > config.json > `false`). This is opt-in and off by default: unless it is turned on the box is left alone and the outcome is recorded as `off`. The window is the tenant's setting; a tenant that never shows the box simply keeps asking. A sign-in that fails after Entra renewed its cookies still saves the browser state when those cookies are strictly newer than the saved ones; any other failure leaves the saved state untouched. `get_server_info` reports `microsoftSession` — `staySignedIn`, `staySignedInExpires`, `rememberMfa` (`ticked`, `already`, `absent`, `unknown`, or `off`), `rememberMfaAt`, and `note`, a plain sentence saying that stay-signed-in alone doesn't skip 2FA and what the `rememberMfa` outcome means for it (#227) — read from a plain summary (`microsoft-session.json`, no cookie values) beside the browser state, and omits it when no browser state is saved.
 
-Passwordless sign-in is a `setup` question (default no) saved as `passwordless` in `config.json`; `D2L_PASSWORDLESS` overrides it (env > config.json > `false`). When on, `loadConfig` reads no saved password and `setup` saves none (it deletes the account's existing credential-store entry); the default Entra flow counts a username alone as credentials, submits only the username, and waits on Microsoft's passwordless approval view (the "Use your password instead" link or `#idRemoteNGC_*` markers) as an MFA challenge instead of clicking through to the password page, announcing its number like number match. A password page in this mode fails at once with an error naming `D2L_PASSWORDLESS`. Every sign-in then needs a phone approval, so it is for interactive use only.
+Passwordless sign-in is shelved: `setup` no longer asks about it, always saves a password, and drops a `passwordless` value carried over in `config.json`. Only `D2L_PASSWORDLESS` (or a hand-edited `passwordless` in `config.json`) turns it on (env > config.json > `false`). When on, `loadConfig` reads no saved password; the default Entra flow counts a username alone as credentials, submits only the username, and waits on Microsoft's passwordless approval view (the "Use your password instead" link or `#idRemoteNGC_*` markers) as an MFA challenge instead of clicking through to the password page, announcing its number like number match. A password page in this mode fails at once with an error naming `D2L_PASSWORDLESS`. Every sign-in then needs a phone approval, so it is for interactive use only.
 
-Automatic verification-code sign-in is opt-in per account: `setup` optionally takes an authenticator
+Automatic verification-code sign-in is opt-in per account: `setup` option 3 takes an authenticator
 setup key or `otpauth://` URI, `saveSecureConfig` normalizes and stores it in the native credential
 store under a `totp:`-prefixed account (never in `config.json` — `saveConfigStore` throws on it, as
 it does for a password), and `loadConfig` reads it back as `totpUri` whenever a username is
@@ -141,6 +137,14 @@ Visible mode applies to the manual `auth` command, whose window remains open for
 ```bash
 npx -y brightspace-mcp-server@latest auth
 ```
+
+### Fewer 2FA prompts (the two opt-in shortcuts)
+
+`setup` asks ONE multiple-choice question, "How often do you want to approve sign-ins on your phone?", right after the MFA-method question: **1** every time (default, safest), **2** remember this computer (`rememberMfa` / `D2L_REMEMBER_MFA`, ticks Microsoft's "Don't ask again" box), **3** this computer answers Microsoft's code requests itself (a **saved authenticator key** in the OS keychain, or `D2L_TOTP_SECRET`; the server types the 6-digit code itself; also sets `rememberMfa` true). Options 2 and 3 are opt-in and not for shared computers, and 3 only helps when Microsoft asks for a code (otherwise sign-in falls back to the phone). The detail is in one place: [docs/sign-in.md#fewer-2fa-prompts](docs/sign-in.md#fewer-2fa-prompts), including the steps for getting the key from https://mysignins.microsoft.com. Send users there rather than re-explaining. Turn on by rerunning `setup` and picking 2 or 3; turn off by rerunning it and picking 1. Wording and the question itself (`askShortcutQuestion`, driven through a small `ShortcutIO` so it is testable) live in `src/utils/two-factor-shortcuts.ts`, shared by `setup`, the MFA tip, and `doctor`:
+
+- Picking 1 or 2 while a key is saved asks "Remove the saved authenticator key from this computer? (yes/no) [yes]" and, on yes, deletes it after the config is saved (`deleteStoredTotpUri`). Picking 3 with no key saved shows a short how-to and the hidden key prompt; Enter with no key saves option 2 and says so. With a key already saved, an explicit 3 offers a replacement (Enter keeps it). On a rerun `setup` prints "Currently: N" and makes it the Enter default; a key saved without remember-this-device keeps remember off on Enter. The question is asked for every school and mode (no per-school gating exists: whether a code can be typed is only known at sign-in time); `askShortcutQuestion` takes an `applicable` pair and renumbers or skips if that ever changes. The key is never printed.
+- A pending MFA approval message (`mfaPending` in `src/tools/tool-helpers.ts`) ends with one "Tip for the user: to be asked less often, rerun `setup`" line carrying the docs link, only when both options are off. It is never added when either is on, to a duplicate in the same batch, or to any other failure kind. `src/index.ts` records the state at startup with `setActiveShortcuts`; until then no tip is shown.
+- `doctor` prints one `2FA shortcuts: remember this device on/off, authenticator key saved/not saved` line after its checks (informational: it never changes the exit code), plus the docs link when both are off. It only checks that a key exists and never reads the key into any output; if the credential store cannot be read it says "not checked".
 
 ## Sign out early (`sign_out` / `auth --logout`)
 
@@ -185,13 +189,13 @@ Registered in `src/tools/index.ts`, schemas in `src/tools/schemas.ts`:
 | `get_calendar_events` | Course calendar events (exams, labs, schedule changes, hand-made deadlines) in a window, default the next 7 days |
 | `get_announcements` | Recent course announcements, with each one's attached files (`attachments`). `body` is the full post as markdown converted from D2L's Html (links, lists, tables and embedded-content addresses kept), falling back to D2L's plain Text only for a text-only post; `pagination.truncated` means more posts remain, never that a body was cut |
 | `get_syllabus` | Syllabus document for a course |
-| `get_course_content` | Module tree and content topics; module descriptions are Markdown preserving embedded links (with plain-text fallback) |
+| `get_course_content` | Module tree and content topics; module descriptions are Markdown preserving embedded links (with plain-text fallback); a module that links course files from its description also carries `courseFiles`, the paths to pass to `download_file` as `coursePath` |
 | `get_discussions` | Discussion forums and recent posts |
 | `search_course` | Keyword search across a course's content (modules/topics/file names), announcements, and discussion forums/topics in one call |
 | `get_roster` | Classlist for a course |
 | `get_my_groups` | The current user's project/discussion groups in a course, with each group's members |
 | `get_classlist_emails` | Emails of classmates and instructors |
-| `download_file` | Get a file attachment — course content (`topicId`), a submission (`folderId` + `fileId`), or an announcement attachment (`newsId` + `fileId`). `downloadPath` is optional: omit it to get the file back inline in the tool response (extracted text for PDFs/Office docs, an image block for jpeg/png/gif/webp, capped at 10MB / 400k extracted characters), or pass an absolute host path to save it to disk (streamed, up to 2GB) |
+| `download_file` | Get a file attachment — course content (`topicId`), a file an instructor linked by path inside a module description rather than adding as a topic (`coursePath`: `Notes/Lecture 1.pdf` or the `quickLink.d2l?...type=coursefile` URL from `get_course_content`; fetched with the saved web session, so it needs a signed-in session), a submission (`folderId` + `fileId`), or an announcement attachment (`newsId` + `fileId`). `downloadPath` is optional: omit it to get the file back inline in the tool response (extracted text for PDFs/Office docs, an image block for jpeg/png/gif/webp, capped at 10MB / 400k extracted characters), or pass an absolute host path to save it to disk (streamed, up to 2GB) |
 | `get_assignment_files` | Read the files attached to an assignment (spec, rubric, starter workbook) and return their text |
 | `get_announcement_files` | Read the files attached to an announcement (prompts, rubric, updated schedule) and return their text |
 | `get_video_transcript` | Transcript of a video embedded in course content (Kaltura, YouTube), with timestamps |
@@ -255,7 +259,7 @@ A `get_my_grades` row scored from a quiz (matched by the quiz list's `GradeItemI
 
 `download_file`'s magic-byte allowlist (`ALLOWED_MIME_TYPES` in `src/utils/file-validator.ts`) also accepts archives beyond zip: `application/x-7z-compressed`, `application/gzip` (plus the legacy alias `application/x-gzip`, kept the way `application/x-zip-compressed` already sits beside `application/zip`), `application/x-tar`, and `application/x-bzip2` — so starter-code and resource archives in those formats download instead of being refused outright.
 
-`get_calendar_events` takes optional `courseId`, `from`/`to` (ISO 8601 with offset; default now → now + 7 days), and `includeGenerated` (default `false`). Each event is `{ id, title, courseId, courseName, start, end?, location?, description? (markdown), url, generatedFrom? }`, sorted by `start`; `generatedFrom: { type, id }` marks an event Brightspace generated from another item (`type` is `assignment`, `quiz`, `discussion`, `module`, `topic`, …) and those are hidden unless `includeGenerated` is true. It reads `/calendar/events/myEvents/`, the per-user feed that honours event visibility. A course whose calendar fails to load is skipped; the others still return.
+`get_calendar_events` takes optional `courseId`, `from`/`to` (ISO 8601 with offset; default now → now + 7 days), and `includeGenerated` (default `false`). Each event is `{ id, title, courseId, courseName, start, end?, location?, description? (markdown), url, generatedFrom? }`, sorted by `start`; `generatedFrom: { type, id }` marks an event Brightspace generated from another item (`type` is `assignment`, `quiz`, `discussion`, `module`, `topic`, …) and those are hidden unless `includeGenerated` is true. It reads `/calendar/events/myEvents/`, the per-user feed that honours event visibility. A course whose calendar fails to load still lets the others return, and a second text block in `content[1]` names its course id so the list is not read as complete.
 
 `get_course_content` topics and modules, and `get_announcements` items, carry a `lastModified` field (D2L's `LastModifiedDate`, or `null` when the tenant didn't send one). Both tools also accept an optional `modifiedSince` (ISO 8601 datetime, e.g. `2026-01-15T00:00:00Z`) that returns only items at or after that timestamp — useful for "what's new since I last checked" instead of re-fetching everything. A malformed value is a validation error naming the expected format, not a silently empty result. An item with no `lastModified` is always included rather than excluded, the same way a null due date is never treated as "not due" elsewhere in this server — dropping it silently would be indistinguishable from data loss. For `get_course_content`, a module is kept whenever any descendant topic matches, even if the module's own timestamp doesn't, so a matched topic never arrives with no surrounding context; the module's own `children` array reflects only the topics that matched. Passing `modifiedSince` adds `modifiedSince`, `returned`, and `filteredOut` to the response so a caller can tell "nothing changed" apart from "the filter was wrong"; omitting it leaves the response shape exactly as before (a bare array for `get_announcements`).
 
@@ -265,8 +269,16 @@ While a sign-in is still being worked on in the background, `get_assignments`, `
 
 ```
 src/
-  index.ts                  MCP server entrypoint, registers tools
-  setup.ts                  Setup wizard (CLI subcommand `setup`)
+  index.ts                  Entrypoint: subcommand routing, stdio server (default) or `http`
+  server.ts                 Shared runtime (session, sign-in, API client) and the McpServer factory that registers every tool and prompt
+  http-server.ts            `http`: stateless Streamable HTTP on 127.0.0.1 with Host/Origin, bearer token, and body checks
+  setup.ts                  `setup`: interactive wizard and `--sign-in`; routes `--prepare`
+  setup/
+    args.ts                 setup's flags and modes (wizard, --prepare, --sign-in)
+    presets.ts              School presets (`--purdue`, ...) and lookup by URL
+    config.ts               Saved-settings merge shared by every mode
+    clients.ts              AI apps setup registers in (one list for wizard and prepare)
+    prepare.ts              `setup --prepare`: no-prompt install steps for agents, JSON result
   auth-cli.ts               Manual reauth (CLI subcommand `auth`; `auth --logout` ends the saved session)
   doctor.ts                 Beginner diagnostic (CLI subcommand `doctor`)
   update.ts                 Self-update checker
@@ -315,12 +327,17 @@ src/
     config-store.ts         ~/.brightspace-mcp/config.json reader/writer
     config.ts               Resolved config (store + env fallback)
     course-filter.ts        Filter enrolled vs archived courses, and (currentOnly) vs out-of-term courses
+    course-files.ts         Course-file path rules shared by download_file (`coursePath`) and get_course_content (`courseFiles`)
     download-helpers.ts     Stream-to-disk with validation
+    browser-install.ts      Chromium check (prepare, doctor), install via the bundled Playwright, missing-browser hint
     file-validator.ts       Magic-byte file-type checks
+    saved-session.ts        Read-only saved sign-in checks shared by doctor and prepare
+    html-attributes.ts      Quote-aware tag attribute reading and entity decoding for raw D2L HTML
     html-converter.ts       HTML to Markdown via turndown
     pdf-extractor.ts        PDF text extraction via unpdf
     logger.ts               Structured logging
     update-checker.ts       npm version comparison
+    two-factor-shortcuts.ts The one "how often do you approve sign-ins" setup question, plus shared wording/state (setup, MFA tip, doctor)
     errors.ts               User-facing error taxonomy
   types/                    Shared TypeScript types
 ```
@@ -329,7 +346,10 @@ src/
 
 | Command | What it does |
 |---------|--------------|
-| `npx -y brightspace-mcp-server@latest setup` | Interactive setup wizard |
+| `npx -y brightspace-mcp-server@latest setup` | Interactive setup wizard (needs a terminal) |
+| `npx -y brightspace-mcp-server@latest setup --purdue --prepare --username <u> --json` | For AI agents: everything but the password and sign-in, with no prompts — checks, Chromium download, settings, registering AI apps. Takes `--url`, `--campus`, `--replace`, `--no-browser-install`. See [Installing it for a user](#installing-it-for-a-user) |
+| `npx -y brightspace-mcp-server@latest setup --purdue --sign-in` | The person's last install step: password, how they confirm sign-in, then sign-in. Uses what `--prepare` saved |
+| `npx -y brightspace-mcp-server@latest setup --help` | Every setup flag |
 | `npx -y brightspace-mcp-server@latest setup --purdue` | Setup with Purdue preset |
 | `npx -y brightspace-mcp-server@latest setup --suny` | Setup with SUNY preset (also asks for campus) |
 | `npx -y brightspace-mcp-server@latest setup --cuny` | Setup with CUNY preset |
@@ -338,12 +358,41 @@ src/
 | `npx -y brightspace-mcp-server@latest setup --javeriana` | Setup with Javeriana Cali preset |
 | `npx -y brightspace-mcp-server@latest auth` | Manual reauth |
 | `npx -y brightspace-mcp-server@latest auth --logout` | Delete this computer's saved session so the next call does a full sign-in. Keeps the password, `config.json`, and credential-store entries. Local only |
-| `npx -y brightspace-mcp-server@latest doctor` | Diagnose a broken setup — Node version, saved config, credential store, Brightspace reachability, saved sign-in, a real course-list call, and installed version, each as a ✓/✗ line with one plain-English next step |
+| `npx -y brightspace-mcp-server@latest doctor` | Diagnose a broken setup — Node version, Chromium, saved config, credential store, Brightspace reachability, saved sign-in, a real course-list call, and installed version, each as a ✓/✗ line with one plain-English next step, then one informational line on the 2FA shortcuts (remember this device, saved authenticator key). `--json` prints `{checks, allOk, notes}` instead |
 | `npx -y brightspace-mcp-server@latest` | Run the MCP server (registered in AI client config) |
+| `npx -y brightspace-mcp-server@latest http` | Opt-in: one shared Streamable HTTP server at `http://127.0.0.1:18765/mcp` for every client on the computer, instead of one stdio process per chat. Needs `D2L_HTTP_TOKEN`; takes `--port`. The user starts it and keeps it running; clients connect by URL and never start it, and a second copy on a taken port exits with an error. Ctrl+C lets calls in progress finish. Setup steps: [README](README.md#one-server-for-all-your-chats-optional) |
 | `npm run build` | Compile TypeScript to `build/` |
 | `npm run dev` | Watch-mode TypeScript compile |
 | `npm run test` | Run Vitest suite |
 | `npm run test:run` | Run Vitest once |
+
+## Environment variables
+
+Every setting the server reads from the environment. All are optional; `setup` writes the usual ones to `~/.brightspace-mcp/config.json`, and an environment value overrides the saved one (env > `config.json` > default, resolved in `src/utils/config.ts`). A `.env` file in the working directory is loaded too. Boolean settings accept `true`/`false`, `1`/`0`, `yes`/`no`, `on`/`off`; anything else is ignored with a `[config]` warning and the next source wins. `tests/release/env-docs.test.ts` fails if `src/` reads a `D2L_*` variable this table does not name.
+
+| Variable | Default | What it does |
+|----------|---------|--------------|
+| `D2L_BASE_URL` | `https://purdue.brightspace.com` | The school's Brightspace URL. Must be HTTPS with no embedded credentials; only the origin is kept |
+| `D2L_USERNAME` | from `config.json` | Sign-in username. Also selects the account's session directory (`accounts/<account-hash>/`) |
+| `D2L_PASSWORD` | none | Sign-in password. Copied into the OS credential store for the account on startup, never to a file. Ignored when passwordless sign-in is on |
+| `D2L_SESSION_DIR` | `~/.d2l-session` | Root of the per-account session directories. `~` is expanded |
+| `D2L_TOKEN_TTL` | `3600` | Seconds an access token is used before it is re-minted. Must be a whole positive number; anything else is ignored with a warning |
+| `D2L_HEADLESS` | `true` | `false` shows the browser during sign-in, for MFA methods that need a click. Automatic recovery stays headless unless this is set explicitly |
+| `D2L_REMEMBER_MFA` | `false` | Tick Microsoft Entra's "Don't ask again" box (see [Re-auth](#re-auth)) |
+| `D2L_PASSWORDLESS` | `false` | Microsoft Entra passwordless phone approval; no password is read or saved (see [Re-auth](#re-auth)) |
+| `D2L_TOTP_SECRET` | none | Authenticator setup key or `otpauth://` link for Entra code challenges. For CI and containers only; weaker than the keychain entry `setup` saves |
+| `D2L_DUO_PASSCODE` | unset | Any non-empty value makes Duo type a Duo Mobile passcode instead of waiting for a push |
+| `D2L_CAMPUS` | from `config.json` | Campus on a shared multi-campus instance (SUNY). `setup --suny` asks for it |
+| `D2L_ACCESS_TOKEN` | none | Pre-issued Bearer token; skips the browser (see [Browser-free sign-in](#browser-free-sign-in-d2l_session_cookie--d2l_access_token)) |
+| `D2L_SESSION_COOKIE` | none | Pasted `d2lSessionVal`/`d2lSecureSessionVal` cookies; skips the browser (same section) |
+| `D2L_INCLUDE_COURSES` | all | Comma-separated course (org unit) ids to keep. Applies to multi-course tools; an explicit `courseId` argument bypasses it |
+| `D2L_EXCLUDE_COURSES` | none | Comma-separated course ids to hide |
+| `D2L_ACTIVE_ONLY` | `true` | Hide inactive enrollments and courses D2L reports as closed (`CanAccess: false`) |
+| `D2L_CURRENT_ONLY` | `false` | Keep only courses whose `Access.StartDate`–`Access.EndDate` window contains now, like Brightspace's "Current Courses" widget. Courses with neither date are dropped |
+| `D2L_NO_UPDATE_CHECK` | unset | Any non-empty value turns off the npm new-version notice and the auth CLI's self-update re-exec |
+| `D2L_DEV_MODE` | unset | Exactly `true` writes a local, content-free activity log ([docs/dev-mode.md](docs/dev-mode.md)) |
+| `D2L_HTTP_TOKEN` | none | `http` only, and required there: the bearer token every request to the shared server must carry. At least 32 characters; never logged ([README](README.md#one-server-for-all-your-chats-optional)) |
+| `D2L_HTTP_PORT` | `18765` | `http` only: the port on 127.0.0.1. `--port` overrides it |
 
 ## Storage locations
 

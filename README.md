@@ -25,7 +25,7 @@ Works with Claude Desktop, Claude Code, Cursor, ChatGPT Desktop, Windsurf, and a
    ```bash
    npx -y brightspace-mcp-server@latest setup
    ```
-   It asks for your school's Brightspace address, your username and password, and how you normally do two-factor sign-in (phone approval, authenticator code, or a browser window). Your password goes into your computer's own password store (Keychain on Mac, Credential Manager on Windows), never into a file. At the end it connects itself to Claude Desktop, Cursor, Antigravity, Codex, or Claude Code if you have them. If one of them already has a `brightspace` entry pointing somewhere else (an old local build, a fork), setup shows you that entry and asks before replacing it.
+   It asks for your school's Brightspace address, your username and password, and how you confirm it's you when you sign in (a phone app, or another way like a text message). Your password goes into your computer's own password store (Keychain on Mac, Credential Manager on Windows), never into a file. Before signing you in, it connects itself to Claude Desktop, Cursor, Antigravity, Codex, or Claude Code if you have them. If one of them already has a `brightspace` entry pointing somewhere else (an old local build, a fork), setup shows you that entry and asks before replacing it.
 
    **On a Mac:** when Keychain asks whether `node` may use the saved Brightspace password, choose **Always Allow**, not just Allow. That lets later sign-ins (the `auth` command and questions from your AI app) read it without asking again.
 3. **Restart your AI app and ask it something** — the first question signs you in. If your phone asks you to approve a sign-in, approve it and ask again.
@@ -39,6 +39,8 @@ Install brightspace-mcp-server for me by following
 https://github.com/RohanMuppa/brightspace-mcp-server/blob/main/LLMs.md
 (use --purdue at Purdue, --suny at SUNY, --tudelft at TU Delft, --cuny at CUNY, --leiden at Leiden, --mcgill at McGill, --ngeeann at Ngee Ann Polytechnic, or --javeriana at Javeriana Cali).
 ```
+
+The AI does everything it can by itself: it checks your computer, downloads the browser sign-in uses, and connects your AI apps. Then it gives you one command to run in a terminal. That command asks for your password and waits for you to approve the sign-in on your phone. That's the only part that needs you. Afterwards the AI checks that it can see your courses.
 
 Using a different AI app? Add the command `npx -y brightspace-mcp-server@latest` to its MCP settings (on Windows: `cmd /c npx -y brightspace-mcp-server@latest`). Exact steps for each app: [docs/troubleshooting.md](docs/troubleshooting.md).
 
@@ -57,7 +59,7 @@ If your school uses D2L Brightspace, yes. These have automatic sign-in built in:
 | McGill University | Microsoft Entra | `--mcgill` |
 | Javeriana Cali | OneGate (password + authenticator code) | `--javeriana` |
 | Ngee Ann Polytechnic | Microsoft Entra | `--ngeeann` |
-| Any other D2L school | Paste your Brightspace address; if the login page isn't recognized, a browser window opens so you can sign in by hand | none |
+| Any other D2L school | Paste your Brightspace address. If the login page isn't recognized, pick option 2 at setup's sign-in question so the page opens for you to finish by hand | none |
 
 School-specific quirks: [docs/sign-in.md](docs/sign-in.md#per-school-notes).
 
@@ -96,16 +98,46 @@ All optional, set in your AI app's MCP `env` config or your shell. The full list
 
 | Setting | What it does |
 |---------|--------------|
-| `D2L_REMEMBER_MFA=true` | Tick Microsoft's "Don't ask again" box so later sign-ins skip the second factor (off by default; not for shared computers). `setup` asks this and saves it as `rememberMfa` in `config.json`; the env var overrides it |
-| `D2L_PASSWORDLESS=true` | Sign in with Microsoft Entra's passwordless phone approval, so no password is saved on the computer (off by default; Entra schools only). Every sign-in, including automatic ones, then waits for you to approve on your phone, so it suits interactive use, not unattended or scheduled jobs. `setup` asks this and saves it as `passwordless` in `config.json`; the env var overrides it ([details](docs/sign-in.md#passwordless-sign-in)) |
-| `D2L_TOTP_SECRET` | An authenticator setup key, so a Microsoft Entra "enter a code" challenge is answered on this computer instead of on your phone (off by default). Prefer `setup`, which keeps the key in your OS keychain; this variable is for CI and containers with no keychain and is weaker, because anything that can read the process environment gets your second factor ([details](docs/sign-in.md#answering-code-challenges-without-your-phone)) |
+| `D2L_REMEMBER_MFA=true` | Tick Microsoft's "Don't ask again" box so later sign-ins skip the second factor (off by default; not for shared computers). `setup` asks this as option 2 of its one "how often do you want to approve sign-ins" question and saves it as `rememberMfa` in `config.json`; the env var overrides it ([details](docs/sign-in.md#fewer-2fa-prompts)) |
+| `D2L_TOTP_SECRET` | An authenticator setup key, so a Microsoft Entra "enter a code" challenge is answered on this computer instead of on your phone (off by default). Prefer `setup` (option 3), which keeps the key in your OS keychain; this variable is for CI and containers with no keychain and is weaker, because anything that can read the process environment gets your second factor ([details](docs/sign-in.md#fewer-2fa-prompts)) |
 | `D2L_HEADLESS=false` | Show the browser window during sign-in, for MFA methods that need a click |
 | `D2L_DUO_PASSCODE=1` | On Duo, type a passcode instead of waiting for a push |
 | `D2L_SESSION_COOKIE` / `D2L_ACCESS_TOKEN` | Skip the browser entirely with a pasted cookie or token ([how](docs/sign-in.md#no-browser-paste-a-session-cookie-or-token)) |
 | `D2L_INCLUDE_COURSES` / `D2L_EXCLUDE_COURSES` | Limit which courses the AI sees, by course id |
 | `D2L_ACTIVE_ONLY=false` | Include courses whose enrollment has ended |
+| `D2L_CURRENT_ONLY=true` | Only show courses in their current enrollment window, like Brightspace's "Current Courses" widget |
 | `D2L_NO_UPDATE_CHECK=1` | Turn off the new-version notice |
 | `D2L_DEV_MODE=true` | Write a local, content-free log of tool calls and sign-in events, for debugging session problems ([how](docs/dev-mode.md)) |
+
+## One server for all your chats (optional)
+
+Normally every chat starts its own copy of the server. With many Codex chats open that is many copies, each roughly 70 MB of memory. Instead you can run **one** copy yourself and point every chat at it by URL. It uses the same saved password, saved session, and sign-in as before; a question that needs a sign-in still signs in once, for every chat.
+
+1. **Make a secret token, once.** Chats must present it, so other programs and web pages can't read your grades. Generate one:
+   ```bash
+   node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+   ```
+   Save it as a user environment variable named `D2L_HTTP_TOKEN`, where both the server and Codex can see it. On Windows: Start → "Edit environment variables for your account" → New, paste it as the value (apps and terminals opened afterwards see it). On macOS or Linux: add `export D2L_HTTP_TOKEN=<token>` to your shell profile (`~/.zshrc`, `~/.bashrc`); a Codex app launched from the Dock or a desktop menu may not read that profile, so start it from a terminal. The server never prints the token.
+2. **Start the server and leave it running** in a terminal of its own:
+   ```bash
+   npx -y brightspace-mcp-server@latest http
+   ```
+   This needs a release with HTTP support; to try it from a source checkout first, run `npm run build`, then `node build/index.js http`. It listens on `http://127.0.0.1:18765/mcp`, on this computer only. Pick another port with `--port 18766` or `D2L_HTTP_PORT`, and use that same port in the URL in step 3. Start it once per login: chats do not start it, and a second copy on the same port stops at once with "already in use" rather than running alongside the first. Nothing signs in at startup.
+3. **Point Codex at it.** In `~/.codex/config.toml`, replace the `command` and `args` lines of your `[mcp_servers.brightspace]` entry with:
+   ```toml
+   [mcp_servers.brightspace]
+   url = "http://127.0.0.1:18765/mcp"
+   bearer_token_env_var = "D2L_HTTP_TOKEN"
+   ```
+   (`env_http_headers = { "Authorization" = "D2L_HTTP_AUTHORIZATION" }` also works, if that variable holds `Bearer <token>`.) A project's own `.codex/config.toml` overrides this one, so remove any `brightspace` entry there or change it the same way. If you rerun `setup` later, say no when it offers to replace the Codex entry.
+4. **Restart Codex.** Chats that were already open keep the old per-chat server until Codex restarts. If you stop or restart the shared server, calls fail until it is back; if they still fail after that, start a new chat or restart Codex.
+
+Things that change:
+- **Settings go to the server, not to Codex.** A URL entry has no process to pass an `env` table to, so `D2L_*` settings (the [table above](#settings-you-might-want)) are set in the terminal that runs `http`, in a `.env` file in the directory you start it from, or saved by `setup`.
+- **Sign-in messages show up in the server's terminal.** The number to approve still comes back in the chat's answer, and, in clients that show tool progress, while the question is running.
+- **Stopping it:** press Ctrl+C. Questions already running finish first; press Ctrl+C again to stop at once.
+
+Any other MCP client that can connect to a Streamable HTTP URL with a bearer token can share the same server. To go back to one copy per chat, put the `command`/`args` entry back (rerunning `setup` does it) and stop the shared server.
 
 ## When it asks you to sign in
 
@@ -117,13 +149,7 @@ npx -y brightspace-mcp-server@latest auth
 
 **On a Mac,** sign-in first reads your saved password from Keychain. If you picked a one-time **Allow** at the Keychain prompt, a later sign-in from your AI app or another terminal can fail or hang waiting for an approval nobody sees; pick **Always Allow** instead. That permission only lets the local Brightspace server read its own saved sign-in password, nothing else in your Keychain.
 
-**If your school asks for a 6-digit code** rather than a phone approval, `setup` can save the
-authenticator **setup key** (not a code) you got when you enrolled the app. From then on automatic
-sign-ins generate the code on this computer and finish without you, which is what unattended and
-scheduled use needs. It is optional and off unless you paste a key. The tradeoff is real: the key
-sits beside your password, so on **this** computer your two factors become one. It still stops
-anyone who only has your password, and it changes nothing for your other devices. Full enrollment
-steps: [docs/sign-in.md](docs/sign-in.md#answering-code-challenges-without-your-phone).
+**Want fewer 2FA prompts?** `setup` asks one question, "How often do you want to approve sign-ins on your phone?": **1** every time (default), **2** remember this computer, or **3** let this computer answer Microsoft's code requests itself (needs an authenticator setup key). Options 2 and 3 are opt-in and not for shared computers; to turn them off, rerun `setup` and pick 1. The tradeoffs and the steps for getting the key are in [docs/sign-in.md](docs/sign-in.md#fewer-2fa-prompts).
 
 **To sign out early** (on a shared computer, say), just ask your AI app to sign you out of Brightspace, or run `npx -y brightspace-mcp-server@latest auth --logout` in a terminal. It deletes this computer's saved Brightspace session, so the next question does a full sign-in. Your saved password, authenticator key, and settings are kept, so with a saved authenticator key that sign-in can finish without you; on a shared computer, also delete the saved `brightspace-mcp-server` entries from your computer's password store (Keychain Access on a Mac, Credential Manager on Windows). Other AI apps open on this computer are signed out too and will ask you to sign in on their next question. (An app you opened before updating may keep answering for up to an hour; quit and reopen it to sign it out right away.) It only clears this computer; it does not sign you out of Microsoft or Brightspace anywhere else. If a sign-in is in progress, it refuses and deletes nothing.
 
@@ -131,7 +157,7 @@ How often you're asked is up to your school, not this tool. Everything else abou
 
 ## Something not working?
 
-- Run `npx -y brightspace-mcp-server@latest doctor` first — it checks your Node version, saved setup, credential store, Brightspace connectivity, saved sign-in, and installed version, and tells you exactly what to fix.
+- Run `npx -y brightspace-mcp-server@latest doctor` first — it checks your Node version, the sign-in browser, saved setup, credential store, Brightspace connectivity, saved sign-in, and installed version, and tells you exactly what to fix.
 - **`Authentication failed: The native credential store is locked or unavailable.`** Your password store is locked or hasn't let this server read the saved password. Unlock it (on a Mac, log in or unlock Keychain Access), then run `npx -y brightspace-mcp-server@latest auth` again, or `setup` if that still fails, and choose **Always Allow** when Keychain asks.
 - **It works in the terminal but not in the app:** the app starts it separately and may not see your password store yet — see [docs/troubleshooting.md](docs/troubleshooting.md).
 - **Which version do I have?** Ask your AI "which version of the Brightspace server am I running?"

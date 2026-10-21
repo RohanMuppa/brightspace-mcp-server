@@ -55,10 +55,11 @@ const QUIZ_FEEDBACK_NOTE =
   "this item as having no feedback.";
 
 /**
- * The course's quizzes, or none when the route refuses or fails. A missing
- * quiz list only costs the feedback links, never the grades themselves.
+ * The course's quizzes, or null when the route refuses or fails. A missing
+ * quiz list only costs the feedback links, never the grades themselves, but
+ * the caller is told so a gradebook link isn't read as "not a quiz" (#278).
  */
-async function fetchQuizzes(apiClient: D2LApiClient, courseId: number): Promise<QuizListItem[]> {
+async function fetchQuizzes(apiClient: D2LApiClient, courseId: number): Promise<QuizListItem[] | null> {
   try {
     // Quizzes are paged; a course with many of them spills past page one.
     return await fetchAllObjects<QuizListItem>(apiClient, apiClient.le(courseId, "/quizzes/"), {
@@ -66,7 +67,7 @@ async function fetchQuizzes(apiClient: D2LApiClient, courseId: number): Promise<
     });
   } catch (error) {
     log("DEBUG", `get_my_grades: quiz list unavailable for course ${courseId}`, error);
-    return [];
+    return null;
   }
 }
 
@@ -76,12 +77,12 @@ async function fetchQuizzes(apiClient: D2LApiClient, courseId: number): Promise<
  */
 function toGradeItems(
   gradeValues: GradeValue[],
-  quizzes: QuizListItem[],
+  quizzes: QuizListItem[] | null,
   baseUrl: string,
   courseId: number
 ) {
   const quizByGradeItem = new Map(
-    quizzes
+    (quizzes ?? [])
       .filter((q) => q.GradeItemId != null)
       .map((q) => [String(q.GradeItemId), q.QuizId])
   );
@@ -104,6 +105,14 @@ function toGradeItems(
       ...(quizId !== undefined && !comments ? { feedbackNote: QUIZ_FEEDBACK_NOTE } : {}),
     };
   });
+}
+
+function quizzesUnavailableNotice(courseIds: number[]): string {
+  return (
+    `The quiz list for ${courseIds.length} course(s) (${courseIds.join(", ")}) could not be read, so ` +
+    "quiz-scored grade items there link to the gradebook and lack the quiz feedback note. Quiz " +
+    "feedback may still exist on the quiz's own page; do not report those items as having no feedback."
+  );
 }
 
 interface EnrollmentItem {
@@ -192,9 +201,18 @@ export function registerGetMyGrades(
           }
 
           // Map to clean objects
-          const grades = toGradeItems(gradeValues, await quizzesPromise, config.baseUrl, courseId);
+          const quizzes = await quizzesPromise;
+          const grades = toGradeItems(gradeValues, quizzes, config.baseUrl, courseId);
 
           log("INFO", `get_my_grades: Retrieved ${grades.length} grade items for course ${courseId}`);
+          if (quizzes === null) {
+            return toolResponse({
+              courseId,
+              grades,
+              quizzesUnavailable: true,
+              notice: quizzesUnavailableNotice([courseId]),
+            });
+          }
           return toolResponse({ courseId, grades });
         }
 
@@ -248,6 +266,7 @@ export function registerGetMyGrades(
               courseId: item.OrgUnit.Id,
               courseName: item.OrgUnit.Name,
               grades,
+              ...(quizzes === null ? { quizzesUnavailable: true as const } : {}),
             };
           } catch (error: any) {
             // A 403 means the tenant restricts the grade API for this course
@@ -315,7 +334,12 @@ export function registerGetMyGrades(
           .map(({ failed: _failed, ...rest }) => rest);
         const courses = settled
           .filter((c) => !c.authPending && !c.restricted && !c.failed)
-          .map(({ courseId, courseName, grades }) => ({ courseId, courseName, grades }));
+          .map(({ courseId, courseName, grades, quizzesUnavailable }) => ({
+            courseId,
+            courseName,
+            grades,
+            ...(quizzesUnavailable ? { quizzesUnavailable } : {}),
+          }));
 
         log(
           "INFO",
@@ -363,6 +387,8 @@ export function registerGetMyGrades(
             "having no grades: open each gradeUrl, or call get_my_grades again for that courseId."
           );
         }
+        const quizGaps = courses.filter((c) => c.quizzesUnavailable).map((c) => c.courseId);
+        if (quizGaps.length > 0) notices.push(quizzesUnavailableNotice(quizGaps));
         if (notices.length > 0) response.notice = notices.join(" ");
         return toolResponse(response);
       } catch (error) {

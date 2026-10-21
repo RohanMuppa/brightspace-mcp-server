@@ -63,6 +63,7 @@ export function registerGetCalendarEvents(
         // have gone out independently. Collect it rather than failing the
         // whole call and losing every course that *did* answer.
         const pendingCourseIds: number[] = [];
+        const failedCourseIds: number[] = [];
         let firstAuthError: unknown = null;
         const events = results
           .flatMap((result, i) => {
@@ -73,7 +74,11 @@ export function registerGetCalendarEvents(
               log("DEBUG", `get_calendar_events: sign-in pending for course ${courses[i].id}`, result.reason);
               return [];
             }
-            log("DEBUG", `get_calendar_events: skipping course ${courses[i].id} after fetch failure`, result.reason);
+            // Anything else (a 404, a 5xx, a dropped connection) still must
+            // not make the course vanish: an exam missing from a list that
+            // looks complete reads as "no exam" (#262).
+            failedCourseIds.push(courses[i].id);
+            log("DEBUG", `get_calendar_events: calendar unavailable for course ${courses[i].id}`, result.reason);
             return [];
           })
           .filter((event) => includeGenerated || !event.generatedFrom)
@@ -82,22 +87,33 @@ export function registerGetCalendarEvents(
         log(
           "INFO",
           `get_calendar_events: Retrieved ${events.length} events across ${courses.length} courses` +
-          (pendingCourseIds.length > 0 ? ` (${pendingCourseIds.length} pending sign-in)` : "")
+          (pendingCourseIds.length > 0 ? ` (${pendingCourseIds.length} pending sign-in)` : "") +
+          (failedCourseIds.length > 0 ? ` (${failedCourseIds.length} failed)` : "")
         );
 
         // The response is always a bare array, pending sign-in or not — a
-        // shape change would break every existing caller. A pending course
-        // instead adds a second content block carrying the notice, which
-        // names which course ids are unavailable.
-        if (pendingCourseIds.length === 0) {
+        // shape change would break every existing caller. A pending or failed
+        // course instead adds a second content block carrying the notice,
+        // which names which course ids are unavailable.
+        const notices: string[] = [];
+        if (pendingCourseIds.length > 0) {
+          notices.push(
+            "Sign-in to Brightspace is still in progress, so calendar events for " +
+              `${pendingCourseIds.length} course(s) (${pendingCourseIds.join(", ")}) could not be fetched ` +
+              `yet. ${authPendingNotice(firstAuthError)} Call get_calendar_events again once sign-in finishes.`
+          );
+        }
+        if (failedCourseIds.length > 0) {
+          notices.push(
+            `Calendar events for ${failedCourseIds.length} course(s) (${failedCourseIds.join(", ")}) ` +
+              "could not be read from Brightspace, so they are missing from this list. Do not report " +
+              "these courses as having no events: call get_calendar_events again with that courseId."
+          );
+        }
+        if (notices.length === 0) {
           return toolResponse(events);
         }
-        return toolResponseWithNotice(
-          events,
-          "Sign-in to Brightspace is still in progress, so calendar events for " +
-            `${pendingCourseIds.length} course(s) (${pendingCourseIds.join(", ")}) could not be fetched ` +
-            `yet. ${authPendingNotice(firstAuthError)} Call get_calendar_events again once sign-in finishes.`
-        );
+        return toolResponseWithNotice(events, notices.join(" "));
       } catch (error) {
         return sanitizeError(error);
       }

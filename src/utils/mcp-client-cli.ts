@@ -46,6 +46,20 @@ function defaultRunCommand(
   return { status: result.error ? null : result.status, stdout: result.stdout ?? "" };
 }
 
+/**
+ * For `setup --prepare`, which an agent runs and reads as JSON: the client CLIs
+ * get no stdin, so they can never stop to ask anything, and what they print
+ * goes to stderr, so it can't corrupt the JSON on stdout.
+ */
+export const runCommandWithoutPrompts: CommandRunner = (command, args, stdio) => {
+  const result = spawnSync(command, args, {
+    stdio: stdio === "pipe" ? ["ignore", "pipe", "ignore"] : stdio === "inherit" ? ["ignore", 2, 2] : "ignore",
+    encoding: "utf-8",
+    shell: process.platform === "win32",
+  });
+  return { status: result.error ? null : result.status, stdout: result.stdout ?? "" };
+};
+
 /** The command every client is registered with. */
 export function serverCommand(platform: NodeJS.Platform = process.platform): string[] {
   // On Windows, npx is a .cmd shim that must be invoked through cmd.exe

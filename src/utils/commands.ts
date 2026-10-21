@@ -15,6 +15,8 @@
  * source for untagged forms and fails the build if one reappears.
  */
 
+import { presetForBaseUrl } from "../setup/presets.js";
+
 export const PACKAGE_NAME = "brightspace-mcp-server";
 
 /** Re-authenticate. Always runs the current published release. */
@@ -34,3 +36,32 @@ export const GLOBAL_INSTALL_COMMAND = `npm install -g ${PACKAGE_NAME}@latest`;
 
 /** Drop cached npx copies so the next `@latest` genuinely refetches. */
 export const CLEAR_NPX_CACHE_COMMAND = "npx clear-npx-cache";
+
+/**
+ * The school's flag for a setup command, or `--url <origin>` for a school
+ * with no preset. An unreadable URL gives no school at all, which `setup`
+ * then fills from the saved configuration.
+ */
+function schoolArgument(baseUrl: string | undefined): string {
+  if (!baseUrl) return "";
+  const match = presetForBaseUrl(baseUrl);
+  if (match) return ` --${match.flag}`;
+  try {
+    return ` --url ${new URL(baseUrl).origin}`;
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * The person's last setup step: enter the password, approve sign-in. Always
+ * runs the current published release.
+ */
+export function signInCommand(baseUrl?: string): string {
+  return `${SETUP_COMMAND}${schoolArgument(baseUrl)} --sign-in`;
+}
+
+/** The no-prompt setup an agent runs before handing over. Always runs the current published release. */
+export function prepareCommand(baseUrl?: string): string {
+  return `${SETUP_COMMAND}${schoolArgument(baseUrl)} --prepare`;
+}

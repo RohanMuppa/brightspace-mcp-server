@@ -32,22 +32,29 @@ export async function fetchMyGroupMemberships(apiClient: D2LApiClient, courseId:
       ? await apiClient.get<GroupCategoryDto[]>(apiClient.lp(`/${courseId}/groupcategories/`), { ttl: DEFAULT_CACHE_TTLS.roster })
       : [{ GroupCategoryId: categoryId, Name: "" }];
   } catch (error) {
-    if (inaccessible(error)) return { matches: [] as GroupMembership[], categoriesUnavailable: true };
+    if (inaccessible(error)) {
+      return { matches: [] as GroupMembership[], categoriesUnavailable: true, unreadCategories: [] as GroupCategoryDto[] };
+    }
     throw error;
   }
   const matches: GroupMembership[] = [];
+  // Categories whose groups answered 403/404: membership there is unknown, not "none".
+  const unreadCategories: GroupCategoryDto[] = [];
   for (const category of categories) {
     let groups: GroupDto[];
     try {
       groups = await apiClient.get<GroupDto[]>(
         apiClient.lp(`/${courseId}/groupcategories/${category.GroupCategoryId}/groups/`), { ttl: DEFAULT_CACHE_TTLS.roster });
     } catch (error) {
-      if (inaccessible(error)) continue;
+      if (inaccessible(error)) {
+        unreadCategories.push(category);
+        continue;
+      }
       throw error;
     }
     for (const group of groups) {
       if (group.Enrollments?.some((id) => Number(id) === myId)) matches.push({ category, group });
     }
   }
-  return { matches, categoriesUnavailable: false };
+  return { matches, categoriesUnavailable: false, unreadCategories };
 }

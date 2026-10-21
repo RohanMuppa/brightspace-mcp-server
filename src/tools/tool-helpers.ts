@@ -12,6 +12,7 @@ import { AuthProcessError, type AuthFailureKind } from "../auth/auth-runner.js";
 import { log } from "../utils/logger.js";
 import { AUTH_COMMAND } from "../utils/commands.js";
 import { getUpdateNotice } from "../utils/update-checker.js";
+import { mfaShortcutTip } from "../utils/two-factor-shortcuts.js";
 import {
   DownloadError,
   isSafeDetail,
@@ -152,21 +153,35 @@ const AUTH_FAILURE_GUIDANCE: Record<AuthFailureKind, string> = {
  * arbitrary child output, so it is safe to interpolate here.
  */
 const MFA_ALREADY_REPORTED =
-  "Brightspace sign-in is already in progress; another call in this batch has the number to " +
-  "approve. Retry this call once the sign-in completes.";
+  "Brightspace sign-in is already in progress; another call, possibly in another open chat, has the " +
+  "number to approve. Retry this call once the sign-in completes.";
 
 const AUTOMATIC_ALREADY_REPORTED =
-  "Brightspace sign-in is already in progress, answering its own verification code; another call " +
-  "in this batch has the details. Retry this call once the sign-in completes. Don't ask the user " +
-  "to approve anything.";
+  "Brightspace sign-in is already in progress, answering its own verification code; another call, " +
+  "possibly in another open chat, has the details. Retry this call once the sign-in completes. " +
+  "Don't ask the user to approve anything.";
 
 function authFailureMessage(error: AuthProcessError): string {
-  // Another call in this parallel batch already carries the number and the
+  // Another call in this parallel batch (which, behind the shared HTTP
+  // server, may be another chat's) already carries the number and the
   // instructions (issue #212). Repeating them in every response made a batch
   // unreadable; one short line is enough for this call.
   if (error.kind === "mfaPending" && error.duplicate) return MFA_ALREADY_REPORTED;
   if (error.kind === "automaticPending" && error.duplicate) return AUTOMATIC_ALREADY_REPORTED;
-  if (error.kind === "mfaPending" && error.numberMatch) {
+  if (error.kind === "mfaPending") {
+    return withShortcutTip(mfaPendingMessage(error));
+  }
+  return AUTH_FAILURE_GUIDANCE[error.kind];
+}
+
+/** Appends the one-line "ask for 2FA less often" tip, when it applies (see two-factor-shortcuts.ts). */
+function withShortcutTip(message: string): string {
+  const tip = mfaShortcutTip();
+  return tip ? `${message} ${tip}` : message;
+}
+
+function mfaPendingMessage(error: AuthProcessError): string {
+  if (error.numberMatch) {
     return `Open Microsoft Authenticator and enter ${error.numberMatch} within 5 minutes. ` +
       "Show the user that number now, as text in your reply, before you make any other tool call: " +
       "they can't see tool results, and some apps show nothing until you write it. Then call this " +

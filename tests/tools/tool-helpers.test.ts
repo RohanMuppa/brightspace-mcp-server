@@ -14,6 +14,9 @@ vi.mock("../../src/utils/update-checker.js", () => ({ getUpdateNotice: vi.fn(() 
 
 const { getUpdateNotice } = await import("../../src/utils/update-checker.js");
 const { sanitizeError, toolResponse, errorResponse } = await import("../../src/tools/tool-helpers.js");
+const {
+  SHORTCUTS_DOCS_URL, mfaShortcutTip, resetActiveShortcuts, setActiveShortcuts,
+} = await import("../../src/utils/two-factor-shortcuts.js");
 
 const textOf = (result: { content: Array<{ type: string; text?: string }> }) =>
   result.content.map(part => part.text ?? "").join("\n");
@@ -112,6 +115,50 @@ describe("sanitizeError", () => {
     const result = sanitizeError(new AuthProcessError("mfaPending", "internal detail", numberMatch));
 
     expect(textOf(result)).toContain("Don't run other Brightspace calls in parallel");
+  });
+
+  // Behind the shared HTTP server the call that got the number may belong to
+  // another chat, so the short answer must not claim it is in this batch.
+  it.each(["mfaPending", "automaticPending"] as const)("answers a duplicate %s briefly without placing the details in this batch", (kind) => {
+    const text = textOf(sanitizeError(new AuthProcessError(kind, "internal detail", kind === "mfaPending" ? "47" : undefined, true)));
+
+    expect(text).toContain("possibly in another open chat");
+    expect(text).not.toContain("in this batch");
+    expect(text).not.toContain("47");
+  });
+
+  describe("2FA shortcuts tip", () => {
+    afterEach(() => resetActiveShortcuts());
+
+    it.each([undefined, "47"])("is appended to a pending MFA approval when neither option is on (number: %s)", (numberMatch) => {
+      setActiveShortcuts({ rememberMfa: false, keySaved: false });
+      const text = textOf(sanitizeError(new AuthProcessError("mfaPending", "internal detail", numberMatch)));
+
+      expect(text).toContain(mfaShortcutTip());
+      expect(text).toContain(SHORTCUTS_DOCS_URL);
+      // Additive: the existing guidance is still there, and the tip comes last.
+      expect(text).toContain("call this tool again right away");
+      expect(text.endsWith(mfaShortcutTip())).toBe(true);
+    });
+
+    it.each([
+      [{ rememberMfa: true, keySaved: false }],
+      [{ rememberMfa: false, keySaved: true }],
+    ])("is left out when an option is on (%j)", (state) => {
+      setActiveShortcuts(state);
+      expect(textOf(sanitizeError(new AuthProcessError("mfaPending", "x", "47")))).not.toContain(SHORTCUTS_DOCS_URL);
+    });
+
+    it("is left out when startup never recorded the state", () => {
+      expect(textOf(sanitizeError(new AuthProcessError("mfaPending", "x", "47")))).not.toContain(SHORTCUTS_DOCS_URL);
+    });
+
+    it("is not added to other sign-in errors or to a duplicate in the same batch", () => {
+      setActiveShortcuts({ rememberMfa: false, keySaved: false });
+      const duplicate = new AuthProcessError("mfaPending", "x", "47", true);
+      expect(textOf(sanitizeError(duplicate))).not.toContain(SHORTCUTS_DOCS_URL);
+      expect(textOf(sanitizeError(new AuthProcessError("timeout", "x")))).not.toContain(SHORTCUTS_DOCS_URL);
+    });
   });
 
   it("never repeats the raw failure text back to the caller", () => {
