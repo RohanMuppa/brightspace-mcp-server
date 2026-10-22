@@ -18,7 +18,6 @@ dotenv.config({ quiet: true } as Parameters<typeof dotenv.config>[0]);
 // ANSI color helpers
 const bold = (s: string) => `\x1b[1m${s}\x1b[0m`;
 const green = (s: string) => `\x1b[32m${s}\x1b[0m`;
-const yellow = (s: string) => `\x1b[33m${s}\x1b[0m`;
 const red = (s: string) => `\x1b[31m${s}\x1b[0m`;
 const dim = (s: string) => `\x1b[2m${s}\x1b[0m`;
 
@@ -54,6 +53,13 @@ export function samePath(a: string, b: string): boolean {
     return process.platform === "win32" ? full.toLowerCase() : full;
   };
   return canonical(a) === canonical(b);
+}
+
+/** Stop before anything is modified, saying why and what to do. */
+function refuse(reason: string, remedy: string): never {
+  console.error(red(`  Error: ${reason}`));
+  console.error(`  ${remedy}`);
+  process.exit(1);
 }
 
 export type ReleaseChoice =
@@ -163,12 +169,18 @@ export function main(): void {
   console.log(`  Current version: ${bold(currentVersion)}`);
   console.log("");
 
-  // Check for uncommitted changes
+  // The update fast-forwards the checked-out branch to origin/main, so it only
+  // runs where that cannot touch local work: a clean working tree on main.
   const status = run("git status --porcelain", { silent: true });
   if (status) {
-    console.log(yellow("  Warning: You have uncommitted changes."));
-    console.log(dim("  The update will proceed, but your local changes may conflict."));
-    console.log("");
+    refuse("You have uncommitted changes.", "Commit or stash them, then run the update again.");
+  }
+  const branch = run("git branch --show-current", { silent: true });
+  if (branch !== "main") {
+    refuse(
+      branch ? `You are on branch '${branch}', not main.` : "HEAD is detached, not on main.",
+      "Run 'git switch main', then run the update again.",
+    );
   }
 
   // Resolve the latest published release: the checkout follows what npm
@@ -205,6 +217,15 @@ export function main(): void {
     return;
   }
 
+  // Local commits on main that origin/main lacks would need a merge or rebase.
+  const aheadCount = run("git rev-list --count origin/main..HEAD", { silent: true });
+  if (aheadCount !== "0") {
+    refuse(
+      `Your main has ${aheadCount} commit${aheadCount === "1" ? "" : "s"} that origin/main does not.`,
+      "Move them to another branch or reconcile main with origin/main yourself, then run the update again.",
+    );
+  }
+
   // Check if we're behind
   const behindCount = run(`git rev-list --count HEAD..${commit}`, { silent: true });
   if (behindCount === "0") {
@@ -224,15 +245,13 @@ export function main(): void {
   }
   console.log("");
 
-  // Move to the release
+  // Fast-forward only, to the verified release: never a merge or rebase,
+  // whatever git's pull settings say, and no pull fallback if it fails.
   console.log(dim(`  Updating to ${targetVersion}...`));
   try {
     run(`git merge --ff-only ${commit}`, { silent: true });
   } catch {
-    fail(
-      `Failed to update to ${targetVersion}.`,
-      "Your checkout has local commits or changes in the way. Resolve them and try again.",
-    );
+    fail(`Could not fast-forward to ${targetVersion}.`, "Nothing was changed. Check 'git status' and try again.");
     return;
   }
 
