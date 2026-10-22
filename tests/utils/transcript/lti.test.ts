@@ -44,3 +44,15 @@ describe("readLtiLaunchPage with an origin", () => {
     expect(readLtiLaunchPage(html, ORIGIN)).toBeNull();
   });
 });
+
+describe("readLtiLaunchPage with a d2l-lti-launch element (#281)", () => {
+  it("follows the element's lti-launch-url as a Brightspace page", () => {
+    const html = '<d2l-lti-launch lti-launch-url="/d2l/le/lti/101/toolLaunch/4315971/533620995" inside-page="true"></d2l-lti-launch>';
+    expect(readLtiLaunchPage(html, "https://purdue.brightspace.com")).toEqual({ nextPath: "/d2l/le/lti/101/toolLaunch/4315971/533620995" });
+  });
+
+  it("doesn't follow an lti-launch-url that leaves Brightspace", () => {
+    const html = '<d2l-lti-launch lti-launch-url="https://evil.example/d2l/le/lti/101/toolLaunch/1/2"></d2l-lti-launch>';
+    expect(readLtiLaunchPage(html, "https://purdue.brightspace.com")).toBeNull();
+  });
+});
