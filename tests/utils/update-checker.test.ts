@@ -225,6 +225,13 @@ describe("notice for the transport the server runs on", () => {
 
   const kinds = ["npx-cache", "npm-install", "source-checkout"] as const;
 
+  it("starts with the restart when an npx install had no stale cache to clear (no dangling Then)", async () => {
+    // noticeFor clears 0 caches, so nothing comes before the restart step.
+    expect(await noticeFor("npx-cache", "http")).toMatch(/^Update available: v1\.0\.0 to v2\.0\.0\. Restart the shared HTTP server/);
+    expect(await noticeFor("npx-cache", "stdio")).toMatch(/^Update available: v1\.0\.0 to v2\.0\.0\. Restart your MCP client/);
+    expect(await noticeFor("npm-install", "http")).toContain("npx clear-npx-cache. Then restart the shared HTTP server");
+  });
+
   it.each(kinds)("tells a stdio %s server to restart the MCP client", async (kind) => {
     const notice = await noticeFor(kind, "stdio");
     expect(notice).toMatch(/restart your MCP client/i);

@@ -214,9 +214,12 @@ const HTTP_START_COMMAND: Record<InstallKind, string> = {
  * old process, so the server itself has to be restarted, with the token and
  * port its clients already use.
  */
-function reloadStep(installKind: InstallKind, transport: Transport, to: string): string {
-  if (transport === "stdio") return `Then restart your MCP client to pick up v${to}.`;
-  return `Then restart the shared HTTP server to pick up v${to}: restarting an MCP client only reconnects it ` +
+function reloadStep(installKind: InstallKind, transport: Transport, to: string, afterAStep: boolean): string {
+  // "Then" only follows an update step; an npx install with no stale cache to
+  // clear has none, so the restart is the first thing to do.
+  const restart = afterAStep ? "Then restart" : "Restart";
+  if (transport === "stdio") return `${restart} your MCP client to pick up v${to}.`;
+  return `${restart} the shared HTTP server to pick up v${to}: restarting an MCP client only reconnects it ` +
     `to this running server. Stop it (Ctrl+C where it runs, or stop its service), then start it again with ` +
     `${HTTP_START_COMMAND[installKind]}, using the same D2L_HTTP_TOKEN, port, and D2L_* settings, ` +
     `and reconnect any client that does not reconnect on its own.`;
@@ -266,7 +269,7 @@ export async function initUpdateChecker(deps: UpdateCheckDeps = {}): Promise<voi
     const optOut = installKind === "source-checkout"
       ? " If it is a fork you maintain, set D2L_NO_UPDATE_CHECK=1 to turn off upstream update notices."
       : "";
-    const text = [headline, update, `${reloadStep(installKind, transport, to)}${optOut}`]
+    const text = [headline, update, `${reloadStep(installKind, transport, to, update !== "")}${optOut}`]
       .filter(Boolean)
       .join(" ");
 
