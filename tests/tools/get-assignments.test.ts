@@ -614,6 +614,105 @@ describe("fetchCourseAssignments submissionStatus", () => {
   });
 });
 
+/**
+ * Some tenants refuse mysubmissions to the student who owns the submissions,
+ * while the same student's feedback page in Brightspace still lists them with
+ * a submission ID. The page is read with the signed-in session as a fallback;
+ * anything short of a listed submission keeps the conservative "unknown".
+ */
+describe("fetchCourseAssignments submission fallback to the feedback page", () => {
+  const FEEDBACK_PAGE = `/d2l/lms/dropbox/user/folder_user_view_feedback.d2l?db=55&grpid=0&ou=${COURSE_ID}`;
+
+  function makeDeniedClient(pages: Record<string, string | null>, groupTypeId: number | null = null) {
+    return {
+      le: (orgUnitId: number, p: string) => `/d2l/api/le/1.0/${orgUnitId}${p}`,
+      get: vi.fn(async (path: string) => {
+        if (path.endsWith("/dropbox/folders/")) {
+          return [{ Id: 55, Name: "HW 1", DueDate: null, IsHidden: false, GroupTypeId: groupTypeId }];
+        }
+        if (path.includes("/mysubmissions/")) throw forbidden();
+        if (path.endsWith("/quizzes/") || path.endsWith("/grades/")) return [];
+        if (path.endsWith("/content/toc")) return { Modules: [] };
+        throw notFound();
+      }),
+      getPage: vi.fn(async (path: string) => (path in pages ? pages[path] : null)),
+    };
+  }
+
+  // Shaped like Purdue's real folder_user_view_feedback.d2l page (#282), with
+  // the IDs, file names and dates replaced: a submitted-files grid whose rows
+  // start with the numeric submission ID.
+  const submissionRow = (id: number, file: string) =>
+    `<tr><td class="d_gn d_gt"><label>${id}</label></td><td class="d_gt"><span class="di_s di_s_icon"><d2l-icon icon="tier1:email-read" role="img" class="di_i" alt="Read by user"></d2l-icon></span>` +
+    `<span class="dfl"><a href="/d2l/common/viewFile.d2lfile/Database/fixture/${file}" title="${file}"><img src="/d2l/img/0/Framework.File.ImageGeneric.gif" width="16" height="16" alt="" /><span>${file}</span></a><span>&nbsp;(1.2 MB)</span></span>` +
+    `<div class="dco d2l-htmlblock-assignments-comments"><div class="dco_c"><d2l-html-block html="" inline></d2l-html-block></div></div></td>` +
+    `<td class="d_gn d_gt"><label>Oct 20, 2026 11:58 PM</label><br/></td></tr>`;
+  const submittedGrid = (rows: string) =>
+    `<table id="z_t" class="d2l-table d2l-grid d_gl" type="list" summary="Lists the files that were submitted to this submission folder">` +
+    `<tr class="d_gh" header><th scope="col" class="d_hch d_gl">Submission ID</th><th scope="col" class="d_hch d_gl">Submission(s)</th>` +
+    `<th scope="col" class="d_hch d_gl"><d2l-table-col-sort-button data-fieldname="date" desc>Date Submitted</d2l-table-col-sort-button></th></tr>${rows}</table>`;
+  const submittedPage = `<html><head><title>Feedback for HW 1</title></head><body>${submittedGrid(submissionRow(12345678, "photo.jpg"))}</body></html>`;
+  const emptyPage = "<html><head><title>Feedback for HW 1</title></head><body><h1>Feedback for HW 1</h1><p>No submissions made for this assignment</p></body></html>";
+
+  it("finds a submission on the real page layout, where Submission ID is only a column title", async () => {
+    const page = `<html><body>${submittedGrid(submissionRow(12345678, "a.jpg") + submissionRow(12345679, "b.pdf"))}</body></html>`;
+    const apiClient = makeDeniedClient({ [FEEDBACK_PAGE]: page });
+    const [assignment] = await fetchCourseAssignments(apiClient as any, COURSE_ID);
+
+    expect(assignment.submissionStatus).toBe("submitted");
+  });
+
+  it("does not count the grid's column titles alone as a submission", async () => {
+    const apiClient = makeDeniedClient({ [FEEDBACK_PAGE]: `<html><body>${submittedGrid("")}</body></html>` });
+    const [assignment] = await fetchCourseAssignments(apiClient as any, COURSE_ID);
+
+    expect(assignment.submissionStatus).toBe("unknown");
+  });
+
+  it("reports submitted when the feedback page lists a submission ID", async () => {
+    const apiClient = makeDeniedClient({ [FEEDBACK_PAGE]: submittedPage });
+    const [assignment] = await fetchCourseAssignments(apiClient as any, COURSE_ID);
+
+    expect(assignment.submissionStatus).toBe("submitted");
+  });
+
+  it("says the submitted state came from the feedback page", async () => {
+    const apiClient = makeDeniedClient({ [FEEDBACK_PAGE]: submittedPage });
+    const [assignment] = await fetchCourseAssignments(apiClient as any, COURSE_ID);
+
+    expect(assignment.submissionSource).toBe("feedbackPage");
+  });
+
+  it("stays unknown when the feedback page lists no submission", async () => {
+    const apiClient = makeDeniedClient({ [FEEDBACK_PAGE]: emptyPage });
+    const [assignment] = await fetchCourseAssignments(apiClient as any, COURSE_ID);
+
+    expect(assignment.submissionStatus).toBe("unknown");
+  });
+
+  it("stays unknown when no signed-in session can read the page", async () => {
+    const apiClient = makeDeniedClient({});
+    const [assignment] = await fetchCourseAssignments(apiClient as any, COURSE_ID);
+
+    expect(assignment.submissionStatus).toBe("unknown");
+  });
+
+  it("stays unknown when the page read fails", async () => {
+    const apiClient = makeDeniedClient({});
+    apiClient.getPage.mockRejectedValue(Object.assign(new Error("Server Error"), { status: 500 }));
+    const [assignment] = await fetchCourseAssignments(apiClient as any, COURSE_ID);
+
+    expect(assignment.submissionStatus).toBe("unknown");
+  });
+
+  it("does not read the individual feedback page for a group assignment", async () => {
+    const apiClient = makeDeniedClient({ [FEEDBACK_PAGE]: submittedPage }, 7);
+    const [assignment] = await fetchCourseAssignments(apiClient as any, COURSE_ID);
+
+    expect(assignment.submissionStatus).toBe("unknown");
+  });
+});
+
 describe("fetchCourseAssignments attemptStatus", () => {
   it("marks attempts unknown, not zero, when the tenant denies the attempts endpoint with 403", async () => {
     const { apiClient } = makeQuizClient(

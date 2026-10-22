@@ -18,6 +18,7 @@ import { checkTopicAvailability } from "./topic-availability.js";
 import {
   validateContentId,
   validateFileType,
+  nameForType,
   MAX_FILE_SIZE,
   DISK_MAX_FILE_SIZE,
 } from "../utils/file-validator.js";
@@ -143,7 +144,7 @@ async function respondInline(
   // validateFileTypeOfFile internally); inline mode never writes to disk, so it has
   // to call this itself. Throws DownloadError on an unsupported or
   // undetectable type, handled by the caller's sanitizeError.
-  const { mime } = await validateFileType(buffer, undefined, effectiveFilename);
+  const { mime } = await validateFileType(buffer, undefined, effectiveFilename, originalFilename);
 
   const metadata: Record<string, unknown> = {
     mode: "inline",
@@ -268,6 +269,7 @@ async function finishDownload(
   const result = await secureStreamDownload({
     targetDir: downloadPath,
     filename: effectiveFilename,
+    originalFilename,
     body: response.body,
     maxBytes: DISK_MAX_FILE_SIZE,
   });
@@ -285,7 +287,28 @@ async function finishDownload(
     mimeType: result.mime,
     originalFilename,
     message: `File downloaded successfully to ${result.path}`,
+    ...extensionNote(effectiveFilename, result),
   });
+}
+
+/**
+ * When the file was saved under a different extension than requested — a
+ * legacy .xls asked for as "Grades.xlsx" (#280) — say why, so the caller
+ * picks a reader for the format it really is. The saved extension comes from
+ * this package's own legacy Office table, never from the remote name.
+ */
+function extensionNote(
+  requestedFilename: string,
+  saved: { path: string; mime: string }
+): { note?: string } {
+  const savedExt = path.extname(saved.path).toLowerCase();
+  const type = { mime: saved.mime, ext: savedExt.slice(1) };
+  if (nameForType(requestedFilename, type) === requestedFilename) return {};
+  return {
+    note:
+      `Saved with the ${savedExt} extension: this is a legacy Office 97-2003 file (${saved.mime}), ` +
+      `not the format the requested name implied. Open it with an application that reads ${savedExt} files.`,
+  };
 }
 
 /**
