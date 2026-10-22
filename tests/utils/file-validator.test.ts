@@ -76,6 +76,23 @@ describe("validateFileType: legacy Office containers", () => {
     expect(error.detail).toBe("application/x-cfb");
   });
 
+  it("reconciles against the original name when the caller's name is not a legacy Office one (#280)", async () => {
+    // A caller asking for "Grades.xlsx" does not make a legacy .xls OOXML;
+    // Brightspace's own name still says what the file is.
+    await expect(
+      validateFileType(cfbBuffer(), undefined, "Grades.xlsx", "grades_2009.xls")
+    ).resolves.toMatchObject({ mime: "application/vnd.ms-excel", ext: "xls" });
+  });
+
+  it("still refuses an installer whatever the caller names it (#280)", async () => {
+    await expect(
+      validateFileType(cfbBuffer(), undefined, "Grades.xls", "setup.msi")
+    ).resolves.toMatchObject({ mime: "application/vnd.ms-excel" });
+    await expect(
+      validateFileType(cfbBuffer(), undefined, "Grades.xlsx", "setup.msi")
+    ).rejects.toBeInstanceOf(DownloadError);
+  });
+
   it("leaves ordinary detection alone", async () => {
     await expect(validateFileType(pdfBuffer())).resolves.toMatchObject({
       mime: "application/pdf",

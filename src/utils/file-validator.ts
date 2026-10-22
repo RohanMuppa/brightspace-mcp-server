@@ -22,6 +22,11 @@ import { DownloadError } from "./download-errors.js";
  * magic-byte allowlist exists to prevent. Reconcile against the declared
  * extension instead, which admits the formats the allowlist already intended
  * and still refuses everything else.
+ *
+ * The declared extension is the caller's customFilename when there is one, and
+ * that name is only a label: asking for "Grades.xlsx" does not make a legacy
+ * .xls OOXML (#280). So Brightspace's own name for the file is consulted too,
+ * and either one naming a legacy Office format admits it.
  */
 // file-type v21 is ESM-only and costs ~50ms; defer the import to first use
 // since validateFileType is already async.
@@ -169,7 +174,8 @@ export function validateDownloadPath(
 export async function validateFileType(
   buffer: Buffer,
   allowedTypes: string[] = ALLOWED_MIME_TYPES,
-  filename?: string
+  filename?: string,
+  originalFilename?: string
 ): Promise<{ mime: string; ext: string }> {
   // An empty body is not a text file. It reaches here when a fetch was
   // truncated or the server answered with nothing, and the UTF-8 fallback
@@ -183,7 +189,7 @@ export async function validateFileType(
   const { fileTypeFromBuffer } = await getFileType();
   const detected = await fileTypeFromBuffer(buffer);
 
-  if (detected) return allowDetectedType(detected, allowedTypes, filename);
+  if (detected) return allowDetectedType(detected, allowedTypes, [filename, originalFilename]);
   return allowTextType(buffer, allowedTypes);
 }
 
@@ -197,7 +203,8 @@ export async function validateFileType(
 export async function validateFileTypeOfFile(
   filePath: string,
   allowedTypes: string[] = ALLOWED_MIME_TYPES,
-  filename?: string
+  filename?: string,
+  originalFilename?: string
 ): Promise<{ mime: string; ext: string }> {
   const { size } = await fs.stat(filePath);
   if (size === 0) {
@@ -207,31 +214,30 @@ export async function validateFileTypeOfFile(
   const { fileTypeFromFile } = await getFileType();
   const detected = await fileTypeFromFile(filePath);
 
-  if (detected) return allowDetectedType(detected, allowedTypes, filename);
+  if (detected) return allowDetectedType(detected, allowedTypes, [filename, originalFilename]);
   return allowTextTypeOfFile(filePath, allowedTypes);
 }
 
-/** The allowlist decision for a type file-type recognised from magic bytes. */
+/**
+ * The allowlist decision for a type file-type recognised from magic bytes.
+ * `names` are the file's candidate names, most authoritative first; only their
+ * extensions are read, and only to disambiguate a CFB or XML container.
+ */
 function allowDetectedType(
   detected: { mime: string; ext: string },
   allowedTypes: string[],
-  filename: string | undefined
+  names: Array<string | undefined>
 ): { mime: string; ext: string } {
   if (detected.mime === XML_MIME) {
-    const ext = filename ? path.extname(filename).toLowerCase() : "";
-    const resolved = XML_EXTENSION_MIMES[ext];
-    if (resolved && allowedTypes.includes(resolved)) {
-      return { mime: resolved, ext: ext.slice(1) };
-    }
+    const resolved = reconcileByExtension(XML_EXTENSION_MIMES, names, allowedTypes);
+    if (resolved) return resolved;
     // Anything else falls through to the allowlist check, which refuses
     // application/xml the way it always has.
   }
   if (detected.mime === CFB_MIME) {
-    const ext = filename ? path.extname(filename).toLowerCase() : "";
-    const resolved = CFB_EXTENSION_MIMES[ext];
-    if (resolved && allowedTypes.includes(resolved)) {
-      return { mime: resolved, ext: ext.slice(1) };
-    }
+    const resolved = reconcileByExtension(CFB_EXTENSION_MIMES, names, allowedTypes);
+    if (resolved) return resolved;
+    const ext = names[0] ? path.extname(names[0]).toLowerCase() : "";
     throw new DownloadError(
       "unsupportedType",
       `Compound File Binary with extension '${ext || "none"}' is not an allowed Office format`,
@@ -246,6 +252,35 @@ function allowDetectedType(
     );
   }
   return { mime: detected.mime, ext: detected.ext };
+}
+
+/** The first of `names` whose extension maps, through `table`, to an allowed type. */
+function reconcileByExtension(
+  table: Record<string, string>,
+  names: Array<string | undefined>,
+  allowedTypes: string[]
+): { mime: string; ext: string } | undefined {
+  for (const name of names) {
+    const ext = name ? path.extname(name).toLowerCase() : "";
+    const resolved = table[ext];
+    if (resolved && allowedTypes.includes(resolved)) {
+      return { mime: resolved, ext: ext.slice(1) };
+    }
+  }
+  return undefined;
+}
+
+/**
+ * The name to save a validated file under. Normally `filename` unchanged; but
+ * a legacy Office file whose requested name does not carry a matching
+ * extension (a .xls asked for as "Grades.xlsx", #280) gets its true extension,
+ * so nothing opens it expecting a format it is not.
+ */
+export function nameForType(filename: string, type: { mime: string; ext: string }): string {
+  const isLegacyOffice = Object.values(CFB_EXTENSION_MIMES).includes(type.mime);
+  const ext = path.extname(filename);
+  if (!isLegacyOffice || CFB_EXTENSION_MIMES[ext.toLowerCase()] === type.mime) return filename;
+  return `${filename.slice(0, filename.length - ext.length)}.${type.ext}`;
 }
 
 /**

@@ -376,6 +376,71 @@ describe("download_file: filenames from Brightspace stay inside the download dir
   });
 });
 
+/**
+ * Issue #280: a released legacy Excel original was refused as
+ * application/x-cfb because the type check only looked at customFilename.
+ */
+describe("download_file: legacy Office originals under a modern customFilename", () => {
+  function cfbBuffer(): Buffer {
+    const buf = Buffer.alloc(2048);
+    Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]).copy(buf, 0);
+    return buf;
+  }
+
+  it("saves a legacy .xls under its true extension and says a compatible reader is needed", async () => {
+    const { call } = setup({ disposition: 'attachment; filename="grades_2009.xls"', body: cfbBuffer() });
+
+    const result = await call({
+      courseId: COURSE,
+      topicId: 7,
+      downloadPath: targetDir,
+      customFilename: "Grades.xlsx",
+    });
+
+    expect(result.isError).toBeFalsy();
+    const payload = parse(result);
+    expect(payload.filePath).toBe(path.join(targetDir, "Grades.xls"));
+    expect(payload.mimeType).toBe("application/vnd.ms-excel");
+    expect(payload.originalFilename).toBe("grades_2009.xls");
+    expect(payload.note).toContain(".xls");
+    expect(await walk(root)).toEqual(["a/b/Grades.xls"]);
+  });
+
+  it("keeps the caller's name when it already matches the legacy type", async () => {
+    const { call } = setup({ disposition: 'attachment; filename="grades_2009.xls"', body: cfbBuffer() });
+
+    const payload = parse(
+      await call({ courseId: COURSE, topicId: 7, downloadPath: targetDir, customFilename: "Grades.xls" })
+    );
+
+    expect(payload.filePath).toBe(path.join(targetDir, "Grades.xls"));
+    expect(payload.note).toBeUndefined();
+  });
+
+  it("still refuses a CFB installer however the caller names it", async () => {
+    const { call } = setup({ disposition: 'attachment; filename="setup.msi"', body: cfbBuffer() });
+
+    const result = await call({
+      courseId: COURSE,
+      topicId: 7,
+      downloadPath: targetDir,
+      customFilename: "Grades.xlsx",
+    });
+
+    expect(result.isError).toBe(true);
+    expect(await walk(root)).toEqual([]);
+  });
+
+  it("identifies the legacy type inline too", async () => {
+    const { call } = setup({ disposition: 'attachment; filename="grades_2009.xls"', body: cfbBuffer() });
+
+    const result = await call({ courseId: COURSE, topicId: 7, customFilename: "Grades.xlsx" });
+
+    expect(result.isError).toBeFalsy();
+    expect(parse(result).mimeType).toBe("application/vnd.ms-excel");
+  });
+});
+
 describe("download_file: dropbox submissions", () => {
   const submission = (id: number, files: unknown[]) => ({ Id: id, Files: files });
   const file = (fileId: number, fileName: string, size = 1024) => ({
