@@ -189,6 +189,34 @@ describe("get_video_transcript — Brightspace LTI quickLinks", () => {
     expect(body.hasTranscript).toBe(true);
   });
 
+  // #281: Purdue's BoilerCast, as Brightspace serves it today. The quickLink
+  // page renders a <d2l-lti-launch> element (no form, no iframe), and the tool
+  // launch it points at is an LTI 1.3 login form to the school's hosted KAF,
+  // whose target_link_uri names only the entry. The partner ID is in the host.
+  it("follows a d2l-lti-launch element to an LTI 1.3 Kaltura launch and returns the transcript (#281)", async () => {
+    const toolLaunch = "/d2l/le/lti/101/toolLaunch/4315971/533620995";
+    const { call, getPage } = setupLti({
+      [QUICKLINK]:
+        `<html><body><d2l-lti-launch lti-launch-url="${toolLaunch}" inside-page="true" link-title="Lecture 1" style="line-height:0"></d2l-lti-launch>` +
+        `<script src="https://s.brightspace.com/lib/bsi/2026.9.217/unbundled/lti-launch.js"></script></body></html>`,
+      [toolLaunch]: launchPage(
+        `<form method='post' id='LtiRequestForm' name='LtiRequestForm' action='https://123456-6.kaf.kaltura.com/hosted/index/oidc-init' enctype='application/x-www-form-urlencoded'>` +
+          `<input type='hidden' name='iss' value='https://purdue.brightspace.com' />` +
+          `<input type='hidden' name='login_hint' value='fixture-login-hint' />` +
+          `<input type='hidden' name='target_link_uri' value='https://123456-6.kaf.kaltura.com/browseandembed/index/media/entryid/1_abcdefg/showDescription/false/showTitle/false/playerSize/608x342/' />` +
+          `<input type='hidden' name='lti_deployment_id' value='fixture-deployment' />` +
+          `<input type='hidden' name='client_id' value='fixture-client' />` +
+          `<input type='hidden' name='lti_message_hint' value='fixture-message-hint' /></form>`
+      ),
+    });
+    const body = JSON.parse((await call({ courseId: COURSE_ID, topicId: 55 })).content[0].text);
+
+    expect(getPage.mock.calls.map(([path]) => path)).toEqual([QUICKLINK, toolLaunch]);
+    expect(body.platform).toBe("kaltura");
+    expect(body.hasTranscript).toBe(true);
+    expect(body.transcript).toContain("Welcome back to lecture seven.");
+  });
+
   it("says the LTI link could not be resolved when the page can't be read with the session cookie", async () => {
     const { call } = setupLti({ [QUICKLINK]: null });
     const body = JSON.parse((await call({ courseId: COURSE_ID, topicId: 55 })).content[0].text);
@@ -323,5 +351,58 @@ describe("get_video_transcript — absolute same-origin quickLinks (#190)", () =
     expect(getPage).not.toHaveBeenCalled();
     expect(body.hasTranscript).toBe(false);
     expect(body.platform).toBe("unknown");
+  });
+});
+
+describe("get_video_transcript — YouTube refusals carry an actionable reason (#283)", () => {
+  const WATCH_URL = "https://www.youtube.com/watch?v=jZLtbye--sg";
+  const BOT_CHECK = { playabilityStatus: { status: "LOGIN_REQUIRED", reason: "Sign in to confirm you're not a bot" } };
+
+  function youtubeFetch(player: unknown, caption = ""): FetchLike {
+    return vi.fn(async (url: string) =>
+      url.includes("youtubei/v1/player") ? jsonResponse(player) : textResponse(caption)
+    ) as unknown as FetchLike;
+  }
+
+  /** The structured block that follows the human-readable error text. */
+  function details(result: any) {
+    return JSON.parse(result.content[1].text);
+  }
+
+  it("labels a sign-in/bot check as such, with the source URL and a browser recovery path", async () => {
+    const { call } = setup(youtubeFetch(BOT_CHECK), null);
+    const result = await call({ videoUrl: WATCH_URL });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toMatch(/sign-in/i);
+    const body = details(result);
+    expect(body.reason).toBe("sign_in_required");
+    expect(body.platform).toBe("youtube");
+    expect(body.videoUrl).toBe(WATCH_URL);
+    expect(body.hasTranscript).toBe(false);
+    expect(body.recovery).toContain(WATCH_URL);
+    expect(body.recovery).toMatch(/Show transcript/);
+  });
+
+  it("labels a caption download YouTube blocked as access_blocked, not as missing captions", async () => {
+    const tracks = [{ baseUrl: "https://www.youtube.com/api/timedtext?v=vid&exp=xpe&fmt=srv3", languageCode: "en" }];
+    const player = { playabilityStatus: { status: "OK" }, captions: { playerCaptionsTracklistRenderer: { captionTracks: tracks } } };
+    const { call } = setup(youtubeFetch(player), null);
+    const result = await call({ videoUrl: WATCH_URL });
+
+    expect(result.isError).toBe(true);
+    expect(details(result).reason).toBe("access_blocked");
+  });
+
+  it("labels a video with no caption tracks as no_captions, still a non-error answer", async () => {
+    const player = { playabilityStatus: { status: "OK" }, captions: { playerCaptionsTracklistRenderer: { captionTracks: [] } } };
+    const { call } = setup(youtubeFetch(player), null);
+    const result = await call({ videoUrl: WATCH_URL });
+    const body = JSON.parse(result.content[0].text);
+
+    expect(result.isError).toBeUndefined();
+    expect(body.hasTranscript).toBe(false);
+    expect(body.reason).toBe("no_captions");
+    expect(body.videoUrl).toBe(WATCH_URL);
   });
 });
