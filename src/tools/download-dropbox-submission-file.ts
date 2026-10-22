@@ -177,6 +177,7 @@ export function registerDownloadDropboxSubmissionFile(
         const result = await secureStreamDownload({
           targetDir: downloadPath,
           filename: effectiveFilename,
+          originalFilename,
           body: response.body,
           maxBytes: DISK_MAX_FILE_SIZE,
         });

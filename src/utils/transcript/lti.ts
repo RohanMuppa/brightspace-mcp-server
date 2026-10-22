@@ -99,6 +99,10 @@ export function readLtiLaunchPage(html: string, origin?: string): LaunchPageFind
   const consumerKey = inputs.find(input => input.get("name") === "oauth_consumer_key")?.get("value");
   const candidates = [
     ...tagAttributes(html, "form").map(form => form.get("action")),
+    // Brightspace's own quickLink page renders the tool as a web component
+    // whose lti-launch-url is the tool launch (/d2l/le/lti/…/toolLaunch/…),
+    // not a form or an iframe.
+    ...tagAttributes(html, "d2l-lti-launch").map(element => element.get("lti-launch-url")),
     ...tagAttributes(html, "iframe").map(frame => frame.get("src")),
     ...inputs.map(input => input.get("value")),
   ].filter((candidate): candidate is string => Boolean(candidate));
