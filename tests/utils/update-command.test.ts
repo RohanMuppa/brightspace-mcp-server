@@ -49,10 +49,12 @@ beforeEach(() => {
   git.replies = new Map([
     ["git rev-parse --show-toplevel", projectRoot],
     ["git status --porcelain", ""],
+    ["git branch --show-current", "main"],
     [NPM_VIEW, registry()],
     ["git fetch origin main", ""],
     [`git merge-base --is-ancestor ${RELEASE_SHA} origin/main`, ""],
     [`git show ${RELEASE_SHA}:package.json`, JSON.stringify({ version: "4.1.0" })],
+    ["git rev-list --count origin/main..HEAD", "0"],
     [`git rev-list --count HEAD..${RELEASE_SHA}`, "0"],
   ]);
   vi.spyOn(console, "log").mockImplementation(() => {});
@@ -109,10 +111,12 @@ describe("update command", () => {
     expect(git.commands).toEqual([
       "git rev-parse --show-toplevel",
       "git status --porcelain",
+      "git branch --show-current",
       NPM_VIEW,
       "git fetch origin main",
       `git merge-base --is-ancestor ${RELEASE_SHA} origin/main`,
       `git show ${RELEASE_SHA}:package.json`,
+      "git rev-list --count origin/main..HEAD",
       `git rev-list --count HEAD..${RELEASE_SHA}`,
       `git log HEAD..${RELEASE_SHA} --oneline`,
       `git merge --ff-only ${RELEASE_SHA}`,
@@ -150,6 +154,63 @@ describe("update command", () => {
     git.replies.set("git rev-parse --show-toplevel", path.join(os.tmpdir(), "somewhere-else"));
     expect(() => main()).toThrow(ExitCalled);
     expect(git.commands).not.toContain("git fetch origin main");
+  });
+
+  describe("refuses to modify a checkout that holds local work", () => {
+    /** Anything that rewrites the branch, the working tree or the install. */
+    // Commands that change the checkout or the install. git merge-base and
+    // npm view only read, so they don't count.
+    const mutating = (c: string) =>
+      c.startsWith("git pull") ||
+      /^git merge(?!-base)/.test(c) ||
+      c.startsWith("git rebase") ||
+      c.startsWith("git reset") ||
+      c.startsWith("git checkout") ||
+      c.startsWith("git switch") ||
+      /^npm (install|ci|run)\b/.test(c);
+
+    beforeEach(() => {
+      // Behind the release, so only the guard stands between the user and an update.
+      git.replies.set(`git rev-list --count HEAD..${RELEASE_SHA}`, "2");
+      git.replies.set(`git log HEAD..${RELEASE_SHA} --oneline`, "abc feat: one\ndef fix: two");
+      git.replies.set(`git merge --ff-only ${RELEASE_SHA}`, "");
+      git.replies.set("git pull", "");
+      git.replies.set("npm install", "");
+      git.replies.set("npm run build", "");
+    });
+
+    it("stops when there are uncommitted changes", () => {
+      git.replies.set("git status --porcelain", " M src/index.ts");
+      expect(() => main()).toThrow(ExitCalled);
+      expect(git.commands.filter(mutating)).toEqual([]);
+    });
+
+    it("stops when HEAD is detached", () => {
+      git.replies.set("git branch --show-current", "");
+      expect(() => main()).toThrow(ExitCalled);
+      expect(git.commands.filter(mutating)).toEqual([]);
+    });
+
+    it("stops on a branch other than main", () => {
+      git.replies.set("git branch --show-current", "my-feature");
+      expect(() => main()).toThrow(ExitCalled);
+      expect(git.commands.filter(mutating)).toEqual([]);
+    });
+
+    it("stops when main has local commits origin/main lacks", () => {
+      git.replies.set("git rev-list --count origin/main..HEAD", "1");
+      expect(() => main()).toThrow(ExitCalled);
+      expect(git.commands.filter(mutating)).toEqual([]);
+    });
+
+    it("stops without installing when the fast-forward fails", () => {
+      // No reply registered: the fake git fails the fast-forward. A pull
+      // fallback would still find its reply and be caught below.
+      git.replies.delete(`git merge --ff-only ${RELEASE_SHA}`);
+      expect(() => main()).toThrow(ExitCalled);
+      expect(git.commands).toContain(`git merge --ff-only ${RELEASE_SHA}`);
+      expect(git.commands.some((c) => c.startsWith("git pull") || /^npm (install|ci|run)\b/.test(c))).toBe(false);
+    });
   });
 });
 
