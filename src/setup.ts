@@ -195,35 +195,49 @@ export function planQuestions(mode: "wizard" | "sign-in", known: KnownAnswers): 
 
 /**
  * Registers Brightspace in one app, never silently replacing an entry
- * that points somewhere else: a matching entry is left alone, and a different
- * one is printed (so it can be restored) and replaced only on a yes.
- * Resolves true when the app ends up running the expected entry.
+ * that points somewhere else: a matching entry is left alone, an entry using
+ * the shared server by URL is kept unless the person asks to switch back, and
+ * a different one is printed (so it can be restored) and replaced only on a yes.
+ * Resolves true when the app ends up set up.
  */
-async function registerWithClient(rl: readline.Interface, target: McpClientTarget): Promise<boolean> {
+export async function registerWithClient(
+  target: McpClientTarget,
+  askLine: (question: string) => Promise<string>,
+  log: (line: string) => void = console.log,
+): Promise<boolean> {
   const existing = target.inspect();
   if (existing.state === "current") {
-    console.log(green(`  ${target.name} already has Brightspace configured.`));
+    log(green(`  ${target.name} already has Brightspace configured.`));
     return true;
   }
 
+  if (existing.state === "shared_http") {
+    log(green(`  ${target.name} uses the shared Brightspace server at ${existing.url}.`));
+    const switchBack = await askLine(`  Switch it back to its own copy per chat (${serverCommand().join(" ")})? (yes/no): `);
+    if (!/^y(es)?$/i.test(switchBack)) {
+      log(dim(`  Kept ${target.name} on the shared server.`));
+      return true;
+    }
+  }
+
   if (existing.state === "different") {
-    console.log(yellow(`  ${target.name} has "brightspace" pointing at:`));
-    console.log(`    ${existing.current}`);
-    const replace = await ask(rl, `  Replace it with ${serverCommand().join(" ")}? (yes/no): `);
+    log(yellow(`  ${target.name} has "brightspace" pointing at:`));
+    log(`    ${existing.current}`);
+    const replace = await askLine(`  Replace it with ${serverCommand().join(" ")}? (yes/no): `);
     if (!/^y(es)?$/i.test(replace)) {
-      console.log(dim(`  Left ${target.name} unchanged.`));
+      log(dim(`  Left ${target.name} unchanged.`));
       return false;
     }
   }
 
   try {
-    if (target.write(existing.state === "different")) {
-      console.log(green(`  ${target.name} configured!`));
+    if (target.write(existing.state !== "missing")) {
+      log(green(`  ${target.name} configured!`));
       return true;
     }
-    console.log(yellow(`  Could not configure ${target.name}. See README.md for the manual command.`));
+    log(yellow(`  Could not configure ${target.name}. See README.md for the manual command.`));
   } catch (err) {
-    console.log(
+    log(
       yellow(`  Could not configure ${target.name}: ${err instanceof Error ? err.message : String(err)}`),
     );
   }
@@ -538,7 +552,7 @@ async function interactive(args: SetupArgs): Promise<void> {
   if (plan.registerApps) {
     for (const target of detectMcpClients()) {
       const answer = await ask(rl2, target.question);
-      if (/^y(es)?$/i.test(answer) && await registerWithClient(rl2, target)) {
+      if (/^y(es)?$/i.test(answer) && await registerWithClient(target, (question) => ask(rl2, question))) {
         configuredClients.push(target.name);
       }
       console.log("");

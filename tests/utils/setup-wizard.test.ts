@@ -22,6 +22,7 @@ vi.mock("node:fs", async (importOriginal) => {
 const fs = await vi.importActual<typeof import("node:fs")>("node:fs");
 const {
   SCHOOL_PRESETS, buildConfigToSave, configureMcpClient, inspectMcpClient, planQuestions, presetForArgv, readPasswordInput,
+  registerWithClient,
 } = await import("../../src/setup.js");
 const { signInCommand, prepareCommand } = await import("../../src/utils/commands.js");
 const { createSSOFlow } = await import("../../src/auth/sso-flow.js");
@@ -311,6 +312,68 @@ describe("existing client registration", () => {
   it("reports no entry when the config cannot be parsed", () => {
     fs.writeFileSync(configPath, "{ not json");
     expect(inspectMcpClient(configPath)).toEqual({ state: "missing" });
+  });
+});
+
+describe("registering one app in the wizard", () => {
+  type Target = import("../../src/setup/clients.js").McpClientTarget;
+  type Registration = import("../../src/utils/mcp-client-cli.js").Registration;
+
+  function target(initial: Registration) {
+    const writes: boolean[] = [];
+    const app: Target = {
+      id: "codex",
+      name: "Codex",
+      detected: true,
+      question: "",
+      inspect: () => initial,
+      write: (replace) => {
+        writes.push(replace);
+        return true;
+      },
+    };
+    return { app, writes };
+  }
+
+  function answering(answer: string) {
+    const questions: string[] = [];
+    const lines: string[] = [];
+    const ask = async (question: string) => {
+      questions.push(question);
+      return answer;
+    };
+    return { ask, questions, lines, log: (line: string) => lines.push(line) };
+  }
+
+  const url = "http://127.0.0.1:18765/mcp";
+
+  it("keeps a shared-server URL entry as set up unless the person asks to switch back", async () => {
+    for (const answer of ["", "no"]) {
+      const { app, writes } = target({ state: "shared_http", url });
+      const io = answering(answer);
+
+      expect(await registerWithClient(app, io.ask, io.log)).toBe(true);
+      expect(writes).toEqual([]);
+      expect(io.lines.join("\n")).toContain(url);
+      expect(io.questions.join("\n")).not.toMatch(/^\s*Replace/m);
+    }
+  });
+
+  it("switches a shared-server URL entry back to its own copy only on a yes", async () => {
+    const { app, writes } = target({ state: "shared_http", url });
+    const io = answering("yes");
+
+    expect(await registerWithClient(app, io.ask, io.log)).toBe(true);
+    expect(writes).toEqual([true]);
+  });
+
+  it("still asks before replacing an entry that runs something else", async () => {
+    const { app, writes } = target({ state: "different", current: "node /old.js" });
+    const io = answering("no");
+
+    expect(await registerWithClient(app, io.ask, io.log)).toBe(false);
+    expect(io.questions[0]).toMatch(/Replace it with/);
+    expect(writes).toEqual([]);
   });
 });
 
