@@ -56,6 +56,79 @@ export function samePath(a: string, b: string): boolean {
   return canonical(a) === canonical(b);
 }
 
+export type ReleaseChoice =
+  | { ok: true; version: string; commit: string }
+  | { ok: false; reason: string };
+
+const STABLE_VERSION = /^(\d+)\.(\d+)\.(\d+)$/;
+const COMMIT_SHA = /^[0-9a-f]{40}$/;
+
+function versionTriple(version: string): [number, number, number] | null {
+  const m = STABLE_VERSION.exec(version.trim().replace(/^v/, ""));
+  return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
+}
+
+function compareTriples(a: [number, number, number], b: [number, number, number]): number {
+  for (let i = 0; i < 3; i++) {
+    if (a[i] !== b[i]) return a[i] - b[i];
+  }
+  return 0;
+}
+
+/**
+ * Whether `nodeVersion` meets an `engines.node` range. Only plain
+ * comparator sets (">=20.0.0", ">=20 <23") are understood; anything else
+ * yields null so the caller refuses instead of guessing.
+ */
+function satisfiesNodeRange(range: string, nodeVersion: string): boolean | null {
+  const have = versionTriple(nodeVersion);
+  const comparators = range.trim().split(/\s+/);
+  if (!have || comparators.length === 0) return null;
+  for (const comparator of comparators) {
+    const m = /^(>=|<=|>|<|=)?v?(\d+)(?:\.(\d+))?(?:\.(\d+))?$/.exec(comparator);
+    if (!m) return null;
+    const want: [number, number, number] = [Number(m[2]), Number(m[3] ?? 0), Number(m[4] ?? 0)];
+    const cmp = compareTriples(have, want);
+    const ok = { ">=": cmp >= 0, "<=": cmp <= 0, ">": cmp > 0, "<": cmp < 0, "=": cmp === 0 }[m[1] ?? "="];
+    if (!ok) return false;
+  }
+  return true;
+}
+
+/**
+ * Decide which commit a checkout should move to, from what npm reports as the
+ * `latest` release. Only a stable version, published from a known commit, whose
+ * Node.js requirement this runtime meets, is a target; anything else is refused
+ * so the update fails closed.
+ */
+export function chooseRelease(registry: unknown, nodeVersion: string): ReleaseChoice {
+  const info = (registry ?? {}) as { version?: unknown; gitHead?: unknown; engines?: { node?: unknown } };
+  const { version, gitHead } = info;
+  if (typeof version !== "string" || !versionTriple(version)) {
+    return { ok: false, reason: "npm did not report a stable release version." };
+  }
+  if (typeof gitHead !== "string" || !COMMIT_SHA.test(gitHead)) {
+    return { ok: false, reason: `npm does not record which commit ${version} was published from.` };
+  }
+  const nodeRange = info.engines?.node;
+  if (nodeRange !== undefined) {
+    const satisfied = typeof nodeRange === "string" ? satisfiesNodeRange(nodeRange, nodeVersion) : null;
+    if (satisfied === null) {
+      return { ok: false, reason: `Cannot check ${version}'s Node.js requirement (${String(nodeRange)}).` };
+    }
+    if (!satisfied) {
+      return { ok: false, reason: `${version} requires Node.js ${nodeRange}; this is Node.js ${nodeVersion}.` };
+    }
+  }
+  return { ok: true, version, commit: gitHead };
+}
+
+function fail(...lines: string[]): void {
+  console.error(red(`  Error: ${lines[0]}`));
+  for (const line of lines.slice(1)) console.error(`  ${line}`);
+  process.exit(1);
+}
+
 export function main(): void {
   console.log("");
   console.log(bold("=== Brightspace MCP Server — Update ==="));
@@ -98,18 +171,42 @@ export function main(): void {
     console.log("");
   }
 
-  // Fetch latest from remote
-  console.log(dim("  Fetching latest changes..."));
+  // Resolve the latest published release: the checkout follows what npm
+  // ships, never the unreleased tip of main.
+  console.log(dim("  Checking the latest release on npm..."));
+  let registry: unknown;
+  try {
+    registry = JSON.parse(run("npm view brightspace-mcp-server@latest version gitHead engines --json", { silent: true }));
+  } catch {
+    fail("Could not read the latest release from npm.", "Check your network connection and try again.");
+    return;
+  }
+  const release = chooseRelease(registry, process.version);
+  if (!release.ok) {
+    fail("No release this checkout can safely update to.", release.reason);
+    return;
+  }
+  const { version: targetVersion, commit } = release;
+
+  // Fetch, then confirm the published commit really is that release on main.
+  console.log(dim(`  Fetching release ${targetVersion}...`));
   try {
     run("git fetch origin main", { silent: true });
   } catch {
-    console.error(red("  Error: Failed to fetch from remote."));
-    console.error("  Check your network connection and try again.");
-    process.exit(1);
+    fail("Failed to fetch from remote.", "Check your network connection and try again.");
+    return;
+  }
+  try {
+    run(`git merge-base --is-ancestor ${commit} origin/main`, { silent: true });
+    const released = JSON.parse(run(`git show ${commit}:package.json`, { silent: true })) as { version?: unknown };
+    if (released.version !== targetVersion) throw new Error("version mismatch");
+  } catch {
+    fail(`Could not verify release ${targetVersion} (commit ${commit.slice(0, 7)}) on origin/main.`, "Nothing was changed.");
+    return;
   }
 
   // Check if we're behind
-  const behindCount = run("git rev-list --count HEAD..origin/main", { silent: true });
+  const behindCount = run(`git rev-list --count HEAD..${commit}`, { silent: true });
   if (behindCount === "0") {
     console.log("");
     console.log(green("  Already up to date!"));
@@ -119,22 +216,24 @@ export function main(): void {
 
   // Show what's new
   console.log("");
-  console.log(bold(`  ${behindCount} new commit${behindCount === "1" ? "" : "s"}:`));
+  console.log(bold(`  ${behindCount} new commit${behindCount === "1" ? "" : "s"} in ${targetVersion}:`));
   console.log("");
-  const log = run("git log HEAD..origin/main --oneline", { silent: true });
+  const log = run(`git log HEAD..${commit} --oneline`, { silent: true });
   for (const line of log.split("\n")) {
     console.log(`    ${dim("•")} ${line}`);
   }
   console.log("");
 
-  // Pull changes
-  console.log(dim("  Pulling changes..."));
+  // Move to the release
+  console.log(dim(`  Updating to ${targetVersion}...`));
   try {
-    run("git pull origin main", { silent: true });
+    run(`git merge --ff-only ${commit}`, { silent: true });
   } catch {
-    console.error(red("  Error: Failed to pull changes."));
-    console.error("  You may have merge conflicts. Resolve them manually and try again.");
-    process.exit(1);
+    fail(
+      `Failed to update to ${targetVersion}.`,
+      "Your checkout has local commits or changes in the way. Resolve them and try again.",
+    );
+    return;
   }
 
   // Install dependencies
