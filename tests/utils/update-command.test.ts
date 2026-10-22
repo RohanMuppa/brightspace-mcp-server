@@ -147,9 +147,9 @@ describe("update command", () => {
   });
 
   it("tells both stdio and shared HTTP users how to load the new build", () => {
-    git.replies.set("git rev-list --count HEAD..origin/main", "1");
-    git.replies.set("git log HEAD..origin/main --oneline", "abc feat: one");
-    git.replies.set("git pull origin main", "");
+    git.replies.set(`git rev-list --count HEAD..${RELEASE_SHA}`, "1");
+    git.replies.set(`git log HEAD..${RELEASE_SHA} --oneline`, "abc feat: one");
+    git.replies.set(`git merge --ff-only ${RELEASE_SHA}`, "");
     git.replies.set("npm install", "");
     git.replies.set("npm run build", "");
 
