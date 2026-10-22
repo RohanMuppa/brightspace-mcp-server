@@ -8,7 +8,7 @@
  */
 
 import { execSync } from "node:child_process";
-import { readFileSync, realpathSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import dotenv from "dotenv";
@@ -32,10 +32,51 @@ function run(cmd: string, opts?: { silent?: boolean }): string {
       stdio: opts?.silent ? ["pipe", "pipe", "pipe"] : ["pipe", "pipe", "inherit"],
     }).trim();
   } catch (err: unknown) {
-    const error = err as { stderr?: string; message?: string };
-    throw new Error(error.stderr || error.message || "Command failed");
+    // tsc reports compile errors on stdout and npm adds its summary on
+    // stderr, so a failure keeps both.
+    const error = err as { stdout?: string; stderr?: string; message?: string };
+    const output = [error.stdout, error.stderr].filter((s) => s?.trim()).join("\n");
+    throw new Error(output || error.message || "Command failed");
   }
 }
+
+/** How many trailing lines of a failed command's output are worth showing. */
+const FAILURE_TAIL_LINES = 20;
+
+/**
+ * The end of a failed command's output, fit for a terminal: escape sequences
+ * and control characters stripped, blank lines dropped, long logs cut to the
+ * last few lines (where npm and tsc put the actual error).
+ */
+export function failureDetail(err: unknown): string[] {
+  if (err === undefined || err === null) return [];
+  const text = err instanceof Error ? err.message : String(err);
+  const lines = text
+    .replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "")
+    .replace(/[\x00-\x08\x0b-\x1f\x7f]/g, "")
+    .split("\n")
+    .map((line) => line.trimEnd())
+    .filter((line) => line.trim() !== "");
+  return lines.slice(-FAILURE_TAIL_LINES);
+}
+
+/** Print a failed step with its cause and how to recover, then exit. */
+function fail(summary: string, err: unknown, recovery: string[]): void {
+  console.error(red(`  Error: ${summary}`));
+  const detail = failureDetail(err);
+  if (detail.length > 0) {
+    console.error("");
+    for (const line of detail) console.error(dim(`    ${line}`));
+    console.error("");
+  }
+  for (const line of recovery) console.error(`  ${line}`);
+  process.exit(1);
+}
+
+const RETRY_HINT = [
+  "The update is not finished. Fix the problem above, then run `npm run update` again;",
+  "it will redo the install and build even though the new code is already pulled.",
+];
 
 function getVersion(): string {
   const pkg = JSON.parse(readFileSync(join(projectRoot, "package.json"), "utf-8"));
@@ -54,6 +95,13 @@ export function samePath(a: string, b: string): boolean {
     return process.platform === "win32" ? full.toLowerCase() : full;
   };
   return canonical(a) === canonical(b);
+}
+
+/** Stop before anything is modified, saying why and what to do. */
+function refuse(reason: string, remedy: string): never {
+  console.error(red(`  Error: ${reason}`));
+  console.error(`  ${remedy}`);
+  process.exit(1);
 }
 
 export type ReleaseChoice =
@@ -123,11 +171,6 @@ export function chooseRelease(registry: unknown, nodeVersion: string): ReleaseCh
   return { ok: true, version, commit: gitHead };
 }
 
-function fail(...lines: string[]): void {
-  console.error(red(`  Error: ${lines[0]}`));
-  for (const line of lines.slice(1)) console.error(`  ${line}`);
-  process.exit(1);
-}
 
 export function main(): void {
   console.log("");
@@ -163,12 +206,18 @@ export function main(): void {
   console.log(`  Current version: ${bold(currentVersion)}`);
   console.log("");
 
-  // Check for uncommitted changes
+  // The update fast-forwards the checked-out branch to origin/main, so it only
+  // runs where that cannot touch local work: a clean working tree on main.
   const status = run("git status --porcelain", { silent: true });
   if (status) {
-    console.log(yellow("  Warning: You have uncommitted changes."));
-    console.log(dim("  The update will proceed, but your local changes may conflict."));
-    console.log("");
+    refuse("You have uncommitted changes.", "Commit or stash them, then run the update again.");
+  }
+  const branch = run("git branch --show-current", { silent: true });
+  if (branch !== "main") {
+    refuse(
+      branch ? `You are on branch '${branch}', not main.` : "HEAD is detached, not on main.",
+      "Run 'git switch main', then run the update again.",
+    );
   }
 
   // Resolve the latest published release: the checkout follows what npm
@@ -178,12 +227,12 @@ export function main(): void {
   try {
     registry = JSON.parse(run("npm view brightspace-mcp-server@latest version gitHead engines --json", { silent: true }));
   } catch {
-    fail("Could not read the latest release from npm.", "Check your network connection and try again.");
+    fail("Could not read the latest release from npm.", undefined, ["Check your network connection and try again."]);
     return;
   }
   const release = chooseRelease(registry, process.version);
   if (!release.ok) {
-    fail("No release this checkout can safely update to.", release.reason);
+    fail("No release this checkout can safely update to.", undefined, [release.reason]);
     return;
   }
   const { version: targetVersion, commit } = release;
@@ -192,8 +241,8 @@ export function main(): void {
   console.log(dim(`  Fetching release ${targetVersion}...`));
   try {
     run("git fetch origin main", { silent: true });
-  } catch {
-    fail("Failed to fetch from remote.", "Check your network connection and try again.");
+  } catch (err) {
+    fail("Failed to fetch from remote.", err, ["Check your network connection and try again."]);
     return;
   }
   try {
@@ -201,58 +250,84 @@ export function main(): void {
     const released = JSON.parse(run(`git show ${commit}:package.json`, { silent: true })) as { version?: unknown };
     if (released.version !== targetVersion) throw new Error("version mismatch");
   } catch {
-    fail(`Could not verify release ${targetVersion} (commit ${commit.slice(0, 7)}) on origin/main.`, "Nothing was changed.");
+    fail(`Could not verify release ${targetVersion} (commit ${commit.slice(0, 7)}) on origin/main.`, undefined, ["Nothing was changed."]);
     return;
   }
 
-  // Check if we're behind
+  // Local commits on main that origin/main lacks would need a merge or rebase.
+  const aheadCount = run("git rev-list --count origin/main..HEAD", { silent: true });
+  if (aheadCount !== "0") {
+    refuse(
+      `Your main has ${aheadCount} commit${aheadCount === "1" ? "" : "s"} that origin/main does not.`,
+      "Move them to another branch or reconcile main with origin/main yourself, then run the update again.",
+    );
+  }
+
+  // A marker in the git directory records that the code was updated but the
+  // install or build has not yet succeeded. Without it a retry would see no
+  // new commits and report "Already up to date" over a broken build.
+  const marker = resolve(projectRoot, run("git rev-parse --git-path brightspace-update-incomplete", { silent: true }));
+  const unfinished = existsSync(marker);
+
   const behindCount = run(`git rev-list --count HEAD..${commit}`, { silent: true });
-  if (behindCount === "0") {
+  if (behindCount === "0" && !unfinished) {
     console.log("");
     console.log(green("  Already up to date!"));
     console.log("");
     return;
   }
 
-  // Show what's new
-  console.log("");
-  console.log(bold(`  ${behindCount} new commit${behindCount === "1" ? "" : "s"} in ${targetVersion}:`));
-  console.log("");
-  const log = run(`git log HEAD..${commit} --oneline`, { silent: true });
-  for (const line of log.split("\n")) {
-    console.log(`    ${dim("•")} ${line}`);
-  }
-  console.log("");
+  if (behindCount === "0") {
+    console.log(yellow("  The last update did not finish. Finishing it now."));
+  } else {
+    // Show what's new
+    console.log("");
+    console.log(bold(`  ${behindCount} new commit${behindCount === "1" ? "" : "s"} in ${targetVersion}:`));
+    console.log("");
+    const log = run(`git log HEAD..${commit} --oneline`, { silent: true });
+    for (const line of log.split("\n")) {
+      console.log(`    ${dim("•")} ${line}`);
+    }
+    console.log("");
 
-  // Move to the release
-  console.log(dim(`  Updating to ${targetVersion}...`));
-  try {
-    run(`git merge --ff-only ${commit}`, { silent: true });
-  } catch {
-    fail(
-      `Failed to update to ${targetVersion}.`,
-      "Your checkout has local commits or changes in the way. Resolve them and try again.",
-    );
-    return;
+    // Recorded before HEAD moves, and cleared only after the build succeeds.
+    writeFileSync(marker, `${new Date().toISOString()}\n`);
+
+    // Fast-forward only, to the verified release: never a merge or rebase,
+    // whatever git's pull settings say, and no pull fallback if it fails.
+    console.log(dim(`  Updating to ${targetVersion}...`));
+    try {
+      run(`git merge --ff-only ${commit}`, { silent: true });
+    } catch (err) {
+      // HEAD did not move, so this run left nothing unfinished.
+      if (!unfinished) rmSync(marker, { force: true });
+      fail(`Could not fast-forward to ${targetVersion}.`, err, ["Nothing was changed. Check 'git status' and try again."]);
+      return;
+    }
   }
 
   // Install dependencies
   console.log(dim("  Installing dependencies..."));
   try {
     run("npm install", { silent: true });
-  } catch {
-    console.error(red("  Error: Failed to install dependencies."));
-    process.exit(1);
+  } catch (err) {
+    fail("Failed to install dependencies.", err, [
+      "If a file is locked (EBUSY/EPERM), close every MCP client using this server first.",
+      ...RETRY_HINT,
+    ]);
+    return;
   }
 
   // Build
   console.log(dim("  Building..."));
   try {
     run("npm run build", { silent: true });
-  } catch {
-    console.error(red("  Error: Build failed."));
-    process.exit(1);
+  } catch (err) {
+    fail("Build failed.", err, RETRY_HINT);
+    return;
   }
+
+  rmSync(marker, { force: true });
 
   // Show new version
   const newVersion = getVersion();
