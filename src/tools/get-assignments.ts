@@ -15,7 +15,6 @@ import { applyCourseFilter } from "../utils/course-filter.js";
 import { contentTopicUrl, gradebookUrl, quizUrl } from "../utils/deep-links.js";
 import { assignmentLinkResolver } from "./assignment-links.js";
 import { dueIn } from "../utils/due-in.js";
-import { decodeEntities } from "../utils/html-attributes.js";
 import { feedbackText, FEEDBACK_UNAVAILABLE_NOTE } from "../utils/feedback.js";
 import { fetchCurrentUserId } from "./group-membership.js";
 import { toOutputAssessment, type RubricAssessmentDto, type RubricDto } from "./get-assignment-rubric.js";
@@ -640,13 +639,20 @@ export async function fetchCourseAssignments(
 }
 
 /**
- * True when a dropbox feedback page lists at least one submission. A listed
- * submission carries its numeric submission ID; the page's labels alone, a
- * "no submissions" message, or a login page never match.
+ * True when a student's own dropbox feedback page lists at least one
+ * submission. Brightspace renders each submission as a row of its
+ * submitted-files grid: the numeric submission ID in a <label>, then the
+ * submitted file links (span.dfl), then the date. This reads that structure,
+ * not the column titles, which are translated and are present even as headers
+ * of an otherwise empty grid. A page with "No submissions made for this
+ * assignment", a login page, or any other page has no such row.
  */
 function feedbackPageListsSubmission(html: string): boolean {
-  const text = html.replace(/<(script|style)\b[\s\S]*?<\/\1>/gi, " ").replace(/<[^>]*>/g, " ");
-  return /Submission\s+ID\s*:?\s*\d+/i.test(decodeEntities(text).replace(/\s+/g, " "));
+  for (const row of html.matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr>/gi)) {
+    const cells = row[1];
+    if (/^\s*<td\b[^>]*>\s*<label>\s*\d+\s*<\/label>\s*<\/td>/i.test(cells) && /class="dfl"/i.test(cells)) return true;
+  }
+  return false;
 }
 
 /** A course's assignments and quizzes, with whether its quiz list is complete. */
