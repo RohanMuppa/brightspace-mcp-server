@@ -84,6 +84,17 @@ export interface KalturaIds {
   entryId: string;
 }
 
+/**
+ * Kaltura's hosted KAF front ends are named after the school's partner ID:
+ * `983291-6.kaf.kaltura.com` is partner 983291 (instance 6). An LTI 1.3
+ * launch's target_link_uri points there with only the entry ID in the path,
+ * so the host is the one place the partner ID appears.
+ */
+function kafHostPartnerId(hostname: string): string | null {
+  const match = /^(\d+)(?:-\d+)?\.kaf\.kaltura\.com$/i.exec(hostname);
+  return match ? match[1] : null;
+}
+
 /** Kaltura embeds carry the entry and partner ID as query params or path segments; naming varies by embed generator. */
 export function extractKalturaIds(url: string): KalturaIds | null {
   let parsed: URL;
@@ -110,7 +121,7 @@ export function extractKalturaIds(url: string): KalturaIds | null {
     params.get("pid") ??
     pathSegmentParam(pathname, "wid") ??
     pathSegmentParam(pathname, "partner_id");
-  const partnerId = widParam ? widParam.replace(/^_/, "") : null;
+  const partnerId = widParam ? widParam.replace(/^_/, "") : kafHostPartnerId(parsed.hostname);
 
   if (!entryId || !partnerId) return null;
   return { partnerId, entryId };
