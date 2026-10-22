@@ -28,7 +28,7 @@ vi.mock("node:child_process", async (importOriginal) => {
   };
 });
 
-const { main, samePath } = await import("../../src/update.js");
+const { main, samePath, chooseRelease } = await import("../../src/update.js");
 
 /** build/update.js sits one level below the package root, like src/update.ts. */
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -37,6 +37,14 @@ class ExitCalled extends Error {
   constructor(readonly code: number) {
     super(`process.exit(${code})`);
   }
+}
+
+/** The commit npm's `latest` was published from -- behind origin/main. */
+const RELEASE_SHA = "4c0ff4c8c5bfb64498166de3ceb411d5e48a6f88";
+const NPM_VIEW = "npm view brightspace-mcp-server@latest version gitHead engines --json";
+
+function registry(overrides: Record<string, unknown> = {}): string {
+  return JSON.stringify({ version: "4.1.0", gitHead: RELEASE_SHA, engines: { node: ">=20.0.0" }, ...overrides });
 }
 
 const MARKER_COMMAND = "git rev-parse --git-path brightspace-update-incomplete";
@@ -68,9 +76,9 @@ function printed(): string {
 }
 
 function behindBy(count: string): void {
-  git.replies.set("git rev-list --count HEAD..origin/main", count);
-  git.replies.set("git log HEAD..origin/main --oneline", "abc feat: one\ndef fix: two");
-  git.replies.set("git pull origin main", "");
+  git.replies.set(`git rev-list --count HEAD..${RELEASE_SHA}`, count);
+  git.replies.set(`git log HEAD..${RELEASE_SHA} --oneline`, "abc feat: one\ndef fix: two");
+  git.replies.set(`git merge --ff-only ${RELEASE_SHA}`, "");
   git.replies.set("npm install", "");
   git.replies.set("npm run build", "");
 }
@@ -82,9 +90,14 @@ beforeEach(() => {
   git.replies = new Map<string, string | Error>([
     ["git rev-parse --show-toplevel", projectRoot],
     ["git status --porcelain", ""],
+    ["git branch --show-current", "main"],
+    [NPM_VIEW, registry()],
     ["git fetch origin main", ""],
+    [`git merge-base --is-ancestor ${RELEASE_SHA} origin/main`, ""],
+    [`git show ${RELEASE_SHA}:package.json`, JSON.stringify({ version: "4.1.0" })],
+    ["git rev-list --count origin/main..HEAD", "0"],
+    [`git rev-list --count HEAD..${RELEASE_SHA}`, "0"],
     [MARKER_COMMAND, markerPath],
-    ["git rev-list --count HEAD..origin/main", "0"],
   ]);
   vi.spyOn(console, "log").mockImplementation(() => {});
   vi.spyOn(console, "error").mockImplementation(() => {});
@@ -123,28 +136,58 @@ describe("update command", () => {
     expect(git.commands).toEqual(["git rev-parse --show-toplevel"]);
   });
 
-  it("stops early when the checkout is already current", () => {
+  it("stops early when the checkout already contains the latest release", () => {
     expect(() => main()).not.toThrow();
     expect(git.commands).toContain("git fetch origin main");
-    expect(git.commands.some((c) => c.startsWith("git pull"))).toBe(false);
-    expect(git.commands.some((c) => c.startsWith("npm "))).toBe(false);
+    expect(git.commands.some((c) => c.startsWith("git merge --ff-only"))).toBe(false);
+    expect(git.commands.some((c) => c.startsWith("npm install") || c.startsWith("npm run"))).toBe(false);
   });
 
-  it("pulls, installs and builds only a real checkout that is behind", () => {
+  it("moves to the published npm release, not the unreleased tip of main", () => {
     behindBy("2");
 
     expect(() => main()).not.toThrow();
     expect(git.commands).toEqual([
       "git rev-parse --show-toplevel",
       "git status --porcelain",
+      "git branch --show-current",
+      NPM_VIEW,
       "git fetch origin main",
+      `git merge-base --is-ancestor ${RELEASE_SHA} origin/main`,
+      `git show ${RELEASE_SHA}:package.json`,
+      "git rev-list --count origin/main..HEAD",
       MARKER_COMMAND,
-      "git rev-list --count HEAD..origin/main",
-      "git log HEAD..origin/main --oneline",
-      "git pull origin main",
+      `git rev-list --count HEAD..${RELEASE_SHA}`,
+      `git log HEAD..${RELEASE_SHA} --oneline`,
+      `git merge --ff-only ${RELEASE_SHA}`,
       "npm install",
       "npm run build",
     ]);
+    expect(git.commands.some((c) => c.includes("pull") || c.includes("HEAD..origin/main"))).toBe(false);
+  });
+
+  it("changes nothing when the registry cannot be reached", () => {
+    git.replies.delete(NPM_VIEW);
+    expect(() => main()).toThrow(ExitCalled);
+    expect(git.commands.some((c) => c.startsWith("git fetch") || c.startsWith("git merge"))).toBe(false);
+  });
+
+  it("changes nothing when the release commit is not on origin/main", () => {
+    git.replies.delete(`git merge-base --is-ancestor ${RELEASE_SHA} origin/main`);
+    expect(() => main()).toThrow(ExitCalled);
+    expect(git.commands.some((c) => c.startsWith("git merge --ff-only"))).toBe(false);
+  });
+
+  it("changes nothing when the release commit carries a different version", () => {
+    git.replies.set(`git show ${RELEASE_SHA}:package.json`, JSON.stringify({ version: "5.0.0" }));
+    expect(() => main()).toThrow(ExitCalled);
+    expect(git.commands.some((c) => c.startsWith("git merge --ff-only"))).toBe(false);
+  });
+
+  it("changes nothing when the release needs a newer Node.js than this one", () => {
+    git.replies.set(NPM_VIEW, registry({ engines: { node: ">=99.0.0" } }));
+    expect(() => main()).toThrow(ExitCalled);
+    expect(git.commands.some((c) => c.startsWith("git fetch") || c.startsWith("git merge"))).toBe(false);
   });
 
   it("does not reach the network before the repository is known to be ours", () => {
@@ -166,7 +209,7 @@ describe("update command", () => {
     expect(() => main()).toThrow(ExitCalled);
 
     // The pull moved HEAD, so the retry sees nothing new to fetch.
-    git.replies.set("git rev-list --count HEAD..origin/main", "0");
+    git.replies.set(`git rev-list --count HEAD..${RELEASE_SHA}`, "0");
     git.replies.set("npm run build", "");
     git.commands = [];
     vi.mocked(console.log).mockClear();
@@ -184,7 +227,7 @@ describe("update command", () => {
     git.replies.set("npm install", commandFailure("npm ERR! EBUSY: resource busy or locked"));
     expect(() => main()).toThrow(ExitCalled);
 
-    git.replies.set("git rev-list --count HEAD..origin/main", "0");
+    git.replies.set(`git rev-list --count HEAD..${RELEASE_SHA}`, "0");
     git.replies.set("npm install", "");
     git.commands = [];
 
@@ -199,7 +242,7 @@ describe("update command", () => {
     git.replies.set("npm run build", buildFailure("error TS1005"));
     expect(() => main()).toThrow(ExitCalled);
 
-    git.replies.set("git rev-list --count HEAD..origin/main", "0");
+    git.replies.set(`git rev-list --count HEAD..${RELEASE_SHA}`, "0");
     expect(() => main()).toThrow(ExitCalled);
     git.replies.set("npm run build", "");
     git.commands = [];
@@ -247,5 +290,93 @@ describe("update command", () => {
     expect(output).toContain("line 199");
     expect(output).not.toContain("line 0\n");
     expect(output).not.toMatch(/line 0$/m);
+  });
+
+  describe("refuses to modify a checkout that holds local work", () => {
+    /** Anything that rewrites the branch, the working tree or the install. */
+    // Commands that change the checkout or the install. git merge-base and
+    // npm view only read, so they don't count.
+    const mutating = (c: string) =>
+      c.startsWith("git pull") ||
+      /^git merge(?!-base)/.test(c) ||
+      c.startsWith("git rebase") ||
+      c.startsWith("git reset") ||
+      c.startsWith("git checkout") ||
+      c.startsWith("git switch") ||
+      /^npm (install|ci|run)\b/.test(c);
+
+    beforeEach(() => {
+      // Behind the release, so only the guard stands between the user and an update.
+      git.replies.set(`git rev-list --count HEAD..${RELEASE_SHA}`, "2");
+      git.replies.set(`git log HEAD..${RELEASE_SHA} --oneline`, "abc feat: one\ndef fix: two");
+      git.replies.set(`git merge --ff-only ${RELEASE_SHA}`, "");
+      git.replies.set("git pull", "");
+      git.replies.set("npm install", "");
+      git.replies.set("npm run build", "");
+    });
+
+    it("stops when there are uncommitted changes", () => {
+      git.replies.set("git status --porcelain", " M src/index.ts");
+      expect(() => main()).toThrow(ExitCalled);
+      expect(git.commands.filter(mutating)).toEqual([]);
+    });
+
+    it("stops when HEAD is detached", () => {
+      git.replies.set("git branch --show-current", "");
+      expect(() => main()).toThrow(ExitCalled);
+      expect(git.commands.filter(mutating)).toEqual([]);
+    });
+
+    it("stops on a branch other than main", () => {
+      git.replies.set("git branch --show-current", "my-feature");
+      expect(() => main()).toThrow(ExitCalled);
+      expect(git.commands.filter(mutating)).toEqual([]);
+    });
+
+    it("stops when main has local commits origin/main lacks", () => {
+      git.replies.set("git rev-list --count origin/main..HEAD", "1");
+      expect(() => main()).toThrow(ExitCalled);
+      expect(git.commands.filter(mutating)).toEqual([]);
+    });
+
+    it("stops without installing when the fast-forward fails", () => {
+      // No reply registered: the fake git fails the fast-forward. A pull
+      // fallback would still find its reply and be caught below.
+      git.replies.delete(`git merge --ff-only ${RELEASE_SHA}`);
+      expect(() => main()).toThrow(ExitCalled);
+      expect(git.commands).toContain(`git merge --ff-only ${RELEASE_SHA}`);
+      expect(git.commands.some((c) => c.startsWith("git pull") || /^npm (install|ci|run)\b/.test(c))).toBe(false);
+    });
+  });
+});
+
+describe("chooseRelease", () => {
+  const latest = { version: "4.1.0", gitHead: RELEASE_SHA, engines: { node: ">=20.0.0" } };
+
+  it("targets the published version and the commit it was built from", () => {
+    expect(chooseRelease(latest, "v20.11.0")).toEqual({ ok: true, version: "4.1.0", commit: RELEASE_SHA });
+  });
+
+  it("accepts a release that states no Node.js requirement", () => {
+    expect(chooseRelease({ version: "4.1.0", gitHead: RELEASE_SHA }, "v20.11.0").ok).toBe(true);
+  });
+
+  it("refuses a release whose Node.js requirement this runtime does not meet", () => {
+    expect(chooseRelease({ ...latest, engines: { node: ">=22.0.0" } }, "v20.11.0").ok).toBe(false);
+    expect(chooseRelease({ ...latest, engines: { node: ">=22.0.0" } }, "v22.0.0").ok).toBe(true);
+  });
+
+  it("refuses a Node.js requirement it cannot evaluate rather than guessing", () => {
+    expect(chooseRelease({ ...latest, engines: { node: "^20 || ^22" } }, "v22.1.0").ok).toBe(false);
+  });
+
+  it("refuses a release it cannot tie to a commit", () => {
+    expect(chooseRelease({ ...latest, gitHead: undefined }, "v22.1.0").ok).toBe(false);
+    expect(chooseRelease({ ...latest, gitHead: "main; rm -rf ~" }, "v22.1.0").ok).toBe(false);
+  });
+
+  it("refuses a version that is not a plain stable release", () => {
+    expect(chooseRelease({ ...latest, version: "5.0.0-beta.1" }, "v22.1.0").ok).toBe(false);
+    expect(chooseRelease(null, "v22.1.0").ok).toBe(false);
   });
 });
