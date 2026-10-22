@@ -35,6 +35,7 @@ What it does, all without a prompt:
 - saves the public settings to `~/.brightspace-mcp/config.json`, with no password. It only saves once the school is reachable, so a mistyped `--url` can't replace a working setup, and it leaves alone a config that still holds an older version's password;
 - registers the server in every AI app it finds: Claude Desktop, Cursor and Antigravity by editing their config files, and Codex and Claude Code through their own CLIs, at user scope.
   - An existing `brightspace` entry that runs something else is left alone and reported. Pass `--replace` to change it.
+  - An entry that connects by URL to the shared local server (`http://127.0.0.1:<port>/mcp`, see the README's "One server for all your chats") is a deliberate setup: it is reported as set up (`shared_http`, with its `url`) and kept, auth settings included. Don't pass `--replace` for it unless the person asks to go back to one copy per chat.
 
 Running it again changes nothing that is already right.
 
@@ -45,7 +46,7 @@ With `--json`, stdout is one JSON object. Progress lines go to stderr.
   - `needs_input` (exit 1): no school was given.
   - `blocked` (exit 1): fix each step whose `ok` is false, then rerun.
 - `steps[]`: `{id, ok, blocking, line}`.
-- `apps[]`: one `outcome` per app: `added`, `current`, `replaced`, `different_left` or `failed`.
+- `apps[]`: one `outcome` per app: `added`, `current`, `shared_http` (uses the shared server by URL; carries `url`), `replaced`, `different_left` or `failed`.
 - `restart[]`: the apps that need restarting to load the server.
 - `next`: `{command, needsHuman, instructions}`.
 

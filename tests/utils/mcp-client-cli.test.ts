@@ -69,12 +69,78 @@ describe("classifyRegistration", () => {
     });
   });
 
-  it("describes an entry without a command as JSON", () => {
-    const entry = { url: "http://localhost:3000/mcp" };
+  it("doesn't dump an entry with no command and no known URL field (#295)", () => {
+    // Unknown fields may carry secrets, so the entry is never printed as JSON.
+    const entry = { type: "sse", endpoint: "http://localhost:3000/mcp" };
     expect(classifyRegistration(entry, "darwin")).toEqual({
       state: "different",
-      current: '{"url":"http://localhost:3000/mcp"}',
+      current: "(an entry setup could not read)",
     });
+  });
+
+  it("recognizes a URL entry for the shared local server", () => {
+    // Codex's streamable_http transport and Claude Code's http entry.
+    const codex = { type: "streamable_http", url: "http://127.0.0.1:18765/mcp", bearer_token_env_var: "D2L_HTTP_TOKEN" };
+    const claude = { type: "http", url: "http://localhost:18766/mcp", headers: { Authorization: "Bearer x" } };
+    expect(classifyRegistration(codex, "darwin")).toEqual({ state: "shared_http", url: "http://127.0.0.1:18765/mcp" });
+    expect(classifyRegistration(claude, "win32")).toEqual({ state: "shared_http", url: "http://localhost:18766/mcp" });
+  });
+
+  it("treats a URL that isn't the shared local server as different", () => {
+    for (const url of ["https://example.com/mcp", "http://192.168.1.5:18765/mcp", "http://127.0.0.1:18765/other"]) {
+      expect(classifyRegistration({ url }, "darwin")).toEqual({ state: "different", current: url });
+    }
+    expect(classifyRegistration({ url: "not a url" }, "darwin")).toEqual({ state: "different", current: "(an entry setup could not read)" });
+  });
+
+  it("never shows the headers of an HTTP entry", () => {
+    const entry = {
+      type: "streamable_http",
+      url: "https://mcp.example.com/mcp",
+      http_headers: { Authorization: "Bearer fake-secret-token" },
+      headers: { "X-Api-Key": "fake-secret-key" },
+    };
+    const result = classifyRegistration(entry, "darwin");
+    expect(result).toEqual({
+      state: "different",
+      current: "https://mcp.example.com/mcp",
+    });
+  });
+
+  it("drops credentials, query, and fragment from the URL it shows", () => {
+    const entry = { url: "https://user:fake-password@mcp.example.com/mcp?token=fake-secret#frag" };
+    expect(classifyRegistration(entry, "darwin")).toEqual({
+      state: "different",
+      current: "https://mcp.example.com/mcp",
+    });
+  });
+
+  it("never shows env values, credential helpers, or unknown fields", () => {
+    const entry = {
+      url: "https://mcp.example.com/mcp",
+      env: { BRIGHTSPACE_PASSWORD: "fake-secret-password" },
+      bearer_token_env_var: "FAKE_SECRET_VAR",
+      credentialHelper: "fake-secret-helper",
+      extra: { nested: "fake-secret-nested" },
+    };
+    const result = classifyRegistration(entry, "darwin");
+    expect(result.state).toBe("different");
+    expect(JSON.stringify(result)).not.toMatch(/fake-secret|FAKE_SECRET/);
+  });
+
+  it("describes a commandless entry with no readable URL without its contents", () => {
+    const entry = { url: "not a url fake-secret", type: { fake: "fake-secret" } };
+    const result = classifyRegistration(entry, "darwin");
+    expect(result).toEqual({ state: "different", current: "(an entry setup could not read)" });
+  });
+
+  it("shows a Windsurf-style serverUrl entry as its type and cleaned URL only", () => {
+    const entry = { type: "sse", serverUrl: "https://remote.example/sse?key=fake-secret", headers: { "X-Api-Key": "fake-secret-key" }, env: { TOKEN: "fake-secret-env" } };
+    expect(classifyRegistration(entry, "darwin")).toEqual({ state: "different", current: '{"type":"sse","url":"https://remote.example/sse"}' });
+  });
+
+  it("cleans the URL of a shared-server entry too", () => {
+    expect(classifyRegistration({ url: "http://127.0.0.1:18765/mcp?token=fake-secret" }, "darwin")).toEqual({ state: "shared_http", url: "http://127.0.0.1:18765/mcp" });
   });
 
   it("reports an entry it could not read as different", () => {
@@ -106,6 +172,13 @@ describe("Codex registration lookup", () => {
       state: "different",
       current: "node /opt/bsp/build/index.js",
     });
+  });
+
+  it("recognizes a registration that uses the shared server by URL", () => {
+    const url = "http://127.0.0.1:18765/mcp";
+    const run: CommandRunner = () =>
+      ok(JSON.stringify({ name: "brightspace", enabled: true, transport: { type: "streamable_http", url, bearer_token_env_var: "D2L_HTTP_TOKEN" } }));
+    expect(inspectCliMcpClient(codex, run)).toEqual({ state: "shared_http", url });
   });
 
   it("reports a missing registration", () => {
