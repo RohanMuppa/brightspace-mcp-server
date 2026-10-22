@@ -136,6 +136,7 @@ Things that change:
 - **Settings go to the server, not to Codex.** A URL entry has no process to pass an `env` table to, so `D2L_*` settings (the [table above](#settings-you-might-want)) are set in the terminal that runs `http`, in a `.env` file in the directory you start it from, or saved by `setup`.
 - **Sign-in messages show up in the server's terminal.** The number to approve still comes back in the chat's answer, and, in clients that show tool progress, while the question is running.
 - **Stopping it:** press Ctrl+C. Questions already running finish first; press Ctrl+C again to stop at once.
+- **Updating it:** restart the server, not Codex. Restarting a client only reconnects it to the server that is already running the old version. Stop the server and start the same `http` command again with the same `D2L_HTTP_TOKEN`, port, and settings; from a source checkout, run `npm run update` first. Update notices from a shared server say this too.
 
 Any other MCP client that can connect to a Streamable HTTP URL with a bearer token can share the same server. To go back to one copy per chat, put the `command`/`args` entry back (rerunning `setup` does it) and stop the shared server.
 
