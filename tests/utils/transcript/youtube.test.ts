@@ -183,3 +183,31 @@ describe("choosing a caption track", () => {
     expect(selectCaptionTrack([], undefined, undefined, "en")).toBeUndefined();
   });
 });
+
+describe("YouTube refusals name their reason (#283)", () => {
+  const reasonOf = (fetchImpl: FetchLike) =>
+    getYouTubeTranscript("vid", fetchImpl).then(
+      () => undefined,
+      (error: TranscriptFetchError) => error.reason,
+    );
+
+  it("calls a LOGIN_REQUIRED bot check sign_in_required", async () => {
+    const blocked = { playabilityStatus: { status: "LOGIN_REQUIRED", reason: "Sign in to confirm you're not a bot" } };
+    expect(await reasonOf(stub({ perClient: [blocked, blocked] }).fetchImpl)).toBe("sign_in_required");
+  });
+
+  it("calls a proof-of-origin caption URL access_blocked", async () => {
+    const { fetchImpl } = stub({ player: playerWith([{ baseUrl: signed("en", "xpe"), languageCode: "en" }]) });
+    expect(await reasonOf(fetchImpl)).toBe("access_blocked");
+  });
+
+  it("calls an empty caption body access_blocked", async () => {
+    const { fetchImpl } = stub({ player: playerWith([{ baseUrl: signed("en"), languageCode: "en" }]), caption: "" });
+    expect(await reasonOf(fetchImpl)).toBe("access_blocked");
+  });
+
+  it("calls an unplayable video unavailable", async () => {
+    const gone = { playabilityStatus: { status: "UNPLAYABLE", reason: "Video unavailable" } };
+    expect(await reasonOf(stub({ perClient: [gone, gone] }).fetchImpl)).toBe("unavailable");
+  });
+});
