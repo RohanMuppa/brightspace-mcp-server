@@ -234,12 +234,14 @@ export function detectMcpClients(overrides: Partial<ClientDeps> = {}): McpClient
 
 export type RegistrationOutcome =
   | { id: McpClientTarget["id"]; name: string; outcome: "added" | "current" | "replaced" }
+  | { id: McpClientTarget["id"]; name: string; outcome: "shared_http"; url: string }
   | { id: McpClientTarget["id"]; name: string; outcome: "different_left"; current: string }
   | { id: McpClientTarget["id"]; name: string; outcome: "failed"; message: string };
 
 /**
  * Register the server in every given app without asking. An entry that runs
- * something else is left alone unless `replace` is set, and a write that
+ * something else, or connects to the shared server by URL, is left alone
+ * unless `replace` is set, and a write that
  * fails (an agent's sandbox may block another app's settings folder) is
  * reported for that app instead of stopping the rest.
  */
@@ -249,13 +251,15 @@ export function registerAll(targets: McpClientTarget[], { replace }: { replace: 
     try {
       const existing = target.inspect();
       if (existing.state === "current") return { ...base, outcome: "current" };
+      if (existing.state === "shared_http" && !replace) return { ...base, outcome: "shared_http", url: existing.url };
       if (existing.state === "different" && !replace) {
         return { ...base, outcome: "different_left", current: existing.current };
       }
-      if (!target.write(existing.state === "different")) {
+      const replacing = existing.state !== "missing";
+      if (!target.write(replacing)) {
         return { ...base, outcome: "failed", message: `${target.name} did not accept the registration.` };
       }
-      return { ...base, outcome: existing.state === "different" ? "replaced" : "added" };
+      return { ...base, outcome: replacing ? "replaced" : "added" };
     } catch (error) {
       return { ...base, outcome: "failed", message: error instanceof Error ? error.message : String(error) };
     }
