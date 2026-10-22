@@ -338,6 +338,11 @@ export function main(): void {
   }
   console.log("");
   console.log("  Restart your MCP client to use the latest version.");
+  console.log("  If you run the shared HTTP server, restart the server instead: a client restart only");
+  console.log("  reconnects to the old process. Stop it, start node build/index.js http again with the");
+  console.log("  same D2L_HTTP_TOKEN, port, and D2L_* settings, and reconnect any client that does not.");
+  console.log(dim("  A chat already connected over stdio keeps its own copy and cannot move onto the shared"));
+  console.log(dim("  server mid-session; restart its client to load the new build."));
   console.log("");
 }
 

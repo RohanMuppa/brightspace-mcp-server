@@ -190,6 +190,24 @@ describe("update command", () => {
     expect(git.commands.some((c) => c.startsWith("git fetch") || c.startsWith("git merge"))).toBe(false);
   });
 
+  it("tells both stdio and shared HTTP users how to load the new build", () => {
+    git.replies.set(`git rev-list --count HEAD..${RELEASE_SHA}`, "1");
+    git.replies.set(`git log HEAD..${RELEASE_SHA} --oneline`, "abc feat: one");
+    git.replies.set(`git merge --ff-only ${RELEASE_SHA}`, "");
+    git.replies.set("npm install", "");
+    git.replies.set("npm run build", "");
+
+    main();
+    const printed = vi.mocked(console.log).mock.calls.map((args) => args.join(" ")).join("\n");
+    expect(printed).toMatch(/restart your MCP client/i);
+    // A client restart only reconnects to a shared server still running the old build.
+    expect(printed).toMatch(/shared HTTP server/i);
+    expect(printed).toContain("node build/index.js http");
+    expect(printed).toContain("D2L_HTTP_TOKEN");
+    // A chat already connected over stdio cannot move onto the shared server mid-session.
+    expect(printed).toMatch(/stdio/i);
+  });
+
   it("does not reach the network before the repository is known to be ours", () => {
     git.replies.set("git rev-parse --show-toplevel", path.join(os.tmpdir(), "somewhere-else"));
     expect(() => main()).toThrow(ExitCalled);

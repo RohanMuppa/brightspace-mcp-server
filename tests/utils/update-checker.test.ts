@@ -146,8 +146,10 @@ describe("initUpdateChecker", () => {
 
     const notice = peekUpdateNotice();
     expect(notice).not.toMatch(/npm install -g/);
-    expect(notice).toContain("git pull");
-    expect(notice).toContain("npm run build");
+    // The checkout's own updater pulls, installs dependencies, and rebuilds;
+    // a hand-written "git pull, then build" skipped the install.
+    expect(notice).toContain("npm run update");
+    expect(notice).not.toContain("git pull");
     expect(clearCaches).not.toHaveBeenCalled();
   });
 
@@ -201,6 +203,65 @@ describe("initUpdateChecker", () => {
     // notice repeat immediately.
     await seedNotice();
     expect(getUpdateNotice(1000)).toBeNull();
+  });
+});
+
+describe("notice for the transport the server runs on", () => {
+  beforeEach(() => {
+    clearUpdateNotice();
+  });
+
+  async function noticeFor(installKind: "npx-cache" | "npm-install" | "source-checkout", transport?: "stdio" | "http") {
+    await initUpdateChecker({
+      fetchImpl: vi.fn(async () => okJson({ version: "2.0.0" })) as unknown as typeof fetch,
+      env: {},
+      installedVersion: "1.0.0",
+      installKind,
+      clearCaches: async () => 0,
+      ...(transport ? { transport } : {}),
+    });
+    return peekUpdateNotice() ?? "";
+  }
+
+  const kinds = ["npx-cache", "npm-install", "source-checkout"] as const;
+
+  it("starts with the restart when an npx install had no stale cache to clear (no dangling Then)", async () => {
+    // noticeFor clears 0 caches, so nothing comes before the restart step.
+    expect(await noticeFor("npx-cache", "http")).toMatch(/^Update available: v1\.0\.0 to v2\.0\.0\. Restart the shared HTTP server/);
+    expect(await noticeFor("npx-cache", "stdio")).toMatch(/^Update available: v1\.0\.0 to v2\.0\.0\. Restart your MCP client/);
+    expect(await noticeFor("npm-install", "http")).toContain("npx clear-npx-cache. Then restart the shared HTTP server");
+  });
+
+  it.each(kinds)("tells a stdio %s server to restart the MCP client", async (kind) => {
+    const notice = await noticeFor(kind, "stdio");
+    expect(notice).toMatch(/restart your MCP client/i);
+    expect(notice).not.toMatch(/shared HTTP server/i);
+  });
+
+  it.each(kinds)("defaults to the stdio advice for %s when no transport is given", async (kind) => {
+    expect(await noticeFor(kind)).toBe(await noticeFor(kind, "stdio"));
+  });
+
+  it.each(kinds)("tells a shared HTTP %s server to restart the server, not the client", async (kind) => {
+    const notice = await noticeFor(kind, "http");
+    expect(notice).toMatch(/restart the shared HTTP server/i);
+    expect(notice).not.toMatch(/restart your MCP client/i);
+    // Restarting a client only reconnects it to the old listener.
+    expect(notice).toMatch(/reconnect/i);
+    // The restarted server must keep the token and port clients already use.
+    expect(notice).toContain("D2L_HTTP_TOKEN");
+    expect(notice).toMatch(/port/i);
+  });
+
+  it("gives each install kind the command that starts the new version over HTTP", async () => {
+    expect(await noticeFor("npx-cache", "http")).toContain("npx -y brightspace-mcp-server@latest http");
+    expect(await noticeFor("npm-install", "http")).toContain("brightspace-mcp-server http");
+    expect(await noticeFor("source-checkout", "http")).toContain("node build/index.js http");
+  });
+
+  it("keeps each install kind's update step on HTTP", async () => {
+    expect(await noticeFor("npm-install", "http")).toContain("npm install -g brightspace-mcp-server@latest");
+    expect(await noticeFor("source-checkout", "http")).toContain("npm run update");
   });
 });
 

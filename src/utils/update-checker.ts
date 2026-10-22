@@ -20,7 +20,11 @@
  *
  * A source checkout gets different advice: installing the npm package would
  * update some other copy, and for a fork it would mean leaving its changes
- * behind. Such a checkout is told to pull and rebuild, or to opt out.
+ * behind. Such a checkout is told to run its own updater, or to opt out.
+ *
+ * What to restart depends on the transport: a stdio server dies with its
+ * client, but the shared HTTP server outlives every client and must itself be
+ * restarted.
  *
  * Set D2L_NO_UPDATE_CHECK to any value to switch the check off entirely.
  */
@@ -189,6 +193,36 @@ export interface UpdateCheckDeps {
   installedVersion?: string;
   installKind?: InstallKind;
   clearCaches?: () => Promise<number>;
+  /** How clients reach this server, which decides what has to restart. */
+  transport?: Transport;
+}
+
+/** `stdio`: each client runs its own copy. `http`: one shared listener serves them all. */
+export type Transport = "stdio" | "http";
+
+/** The command that starts the shared HTTP server from each kind of install. */
+const HTTP_START_COMMAND: Record<InstallKind, string> = {
+  "npx-cache": `npx -y ${PACKAGE_NAME}@latest http`,
+  "npm-install": `${PACKAGE_NAME} http`,
+  "source-checkout": "node build/index.js http",
+};
+
+/**
+ * What to restart so the new version actually runs. A stdio server lives as
+ * long as its client, so restarting the client is enough. The shared HTTP
+ * server outlives every client: restarting one only reconnects it to the same
+ * old process, so the server itself has to be restarted, with the token and
+ * port its clients already use.
+ */
+function reloadStep(installKind: InstallKind, transport: Transport, to: string, afterAStep: boolean): string {
+  // "Then" only follows an update step; an npx install with no stale cache to
+  // clear has none, so the restart is the first thing to do.
+  const restart = afterAStep ? "Then restart" : "Restart";
+  if (transport === "stdio") return `${restart} your MCP client to pick up v${to}.`;
+  return `${restart} the shared HTTP server to pick up v${to}: restarting an MCP client only reconnects it ` +
+    `to this running server. Stop it (Ctrl+C where it runs, or stop its service), then start it again with ` +
+    `${HTTP_START_COMMAND[installKind]}, using the same D2L_HTTP_TOKEN, port, and D2L_* settings, ` +
+    `and reconnect any client that does not reconnect on its own.`;
 }
 
 /**
@@ -203,6 +237,7 @@ export async function initUpdateChecker(deps: UpdateCheckDeps = {}): Promise<voi
     installedVersion = getInstalledVersion(),
     installKind = installKindOf(),
     clearCaches = () => clearAllNpxCaches(),
+    transport = "stdio",
   } = deps;
 
   if (env.D2L_NO_UPDATE_CHECK) return;
@@ -216,23 +251,27 @@ export async function initUpdateChecker(deps: UpdateCheckDeps = {}): Promise<voi
     const from = safeVersionLabel(installedVersion);
     const to = safeVersionLabel(latest);
     const headline = `Update available: v${from} to v${to}.`;
-    let text: string;
+    let update: string;
 
     if (installKind === "npx-cache") {
       const count = await clearCaches();
-      const cleanup = count > 0
+      update = count > 0
         ? `Cleared ${count} stale npx cache director${count === 1 ? "y" : "ies"} for ${PACKAGE_NAME} ` +
-          `(kept the one this server is running from). `
+          `(kept the one this server is running from).`
         : "";
-      text = `${headline} ${cleanup}Restart your MCP client to pick up v${to}.`;
     } else if (installKind === "source-checkout") {
-      text = `${headline} This server runs from a source checkout, so update that checkout ` +
-        `(git pull, then npm run build) and restart your MCP client. ` +
-        `If it is a fork you maintain, set D2L_NO_UPDATE_CHECK=1 to turn off upstream update notices.`;
+      update = `This server runs from a source checkout, so update that checkout with npm run update ` +
+        `(it pulls, installs dependencies, and rebuilds).`;
     } else {
-      text = `${headline} Run: ${GLOBAL_INSTALL_COMMAND}` +
-        `, then ${CLEAR_NPX_CACHE_COMMAND} and restart your MCP client.`;
+      update = `Run: ${GLOBAL_INSTALL_COMMAND}, then ${CLEAR_NPX_CACHE_COMMAND}.`;
     }
+
+    const optOut = installKind === "source-checkout"
+      ? " If it is a fork you maintain, set D2L_NO_UPDATE_CHECK=1 to turn off upstream update notices."
+      : "";
+    const text = [headline, update, `${reloadStep(installKind, transport, to, update !== "")}${optOut}`]
+      .filter(Boolean)
+      .join(" ");
 
     // Preserve lastShownAt when the text is unchanged, so a periodic re-check
     // does not reset the throttle and start repeating the same line.
