@@ -15,6 +15,7 @@ import {
   validateDownloadPath,
   validateFileType,
   validateFileTypeOfFile,
+  nameForType,
   MAX_FILE_SIZE,
 } from "./file-validator.js";
 import { DownloadError } from "./download-errors.js";
@@ -144,10 +145,12 @@ export async function secureDownload(options: {
 export async function secureStreamDownload(options: {
   targetDir: string;
   filename: string;
+  /** Brightspace's own name for the file, when `filename` is the caller's. */
+  originalFilename?: string;
   body: ReadableStream<Uint8Array>;
   maxBytes: number;
 }): Promise<{ path: string; size: number; mime: string }> {
-  const { targetDir, filename, body, maxBytes } = options;
+  const { targetDir, filename, originalFilename, body, maxBytes } = options;
 
   const safeFilename = path.basename(validateDownloadPath(targetDir, filename));
   const partialPath = path.join(targetDir, `.download-${randomUUID()}.part`);
@@ -170,8 +173,9 @@ export async function secureStreamDownload(options: {
       limit,
       createWriteStream(partialPath, { flags: "wx" })
     );
-    const { mime } = await validateFileTypeOfFile(partialPath, undefined, safeFilename);
-    const finalPath = await publishExclusively(partialPath, targetDir, safeFilename);
+    const type = await validateFileTypeOfFile(partialPath, undefined, safeFilename, originalFilename);
+    const { mime } = type;
+    const finalPath = await publishExclusively(partialPath, targetDir, nameForType(safeFilename, type));
     log("INFO", `Downloaded file to ${finalPath} (${size} bytes, ${mime})`);
     return { path: finalPath, size, mime };
   } finally {

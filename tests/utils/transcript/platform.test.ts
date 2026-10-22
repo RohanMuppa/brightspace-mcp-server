@@ -45,6 +45,27 @@ describe("detectVideoPlatform", () => {
 });
 
 describe("extractKalturaIds", () => {
+  it("reads the partner ID from a hosted KAF host when the URL has none (#281)", () => {
+    expect(extractKalturaIds("https://983291-6.kaf.kaltura.com/browseandembed/index/media/entryid/1_rwlac4e9/showTitle/false/")).toEqual({
+      partnerId: "983291",
+      entryId: "1_rwlac4e9",
+    });
+    expect(extractKalturaIds("https://123456.kaf.kaltura.com/browseandembed/index/media/entryid/1_abc/")).toEqual({
+      partnerId: "123456",
+      entryId: "1_abc",
+    });
+  });
+
+  it("doesn't take a partner ID from a host that only looks like hosted KAF", () => {
+    expect(extractKalturaIds("https://123456-6.kaf.kaltura.com.evil.example/browseandembed/index/media/entryid/1_abc/")).toBeNull();
+    expect(extractKalturaIds("https://123456-6.kaf.example.edu/browseandembed/index/media/entryid/1_abc/")).toBeNull();
+    expect(extractKalturaIds("https://kaf.kaltura.com/browseandembed/index/media/entryid/1_abc/")).toBeNull();
+  });
+
+  it("still prefers a wid in the URL over the host", () => {
+    expect(extractKalturaIds("https://983291-6.kaf.kaltura.com/browseandembed/index/media/entryid/1_abc/wid/_555")?.partnerId).toBe("555");
+  });
+
   it("reads entry_id and wid from an mwEmbedFrame-style URL", () => {
     expect(
       extractKalturaIds(
