@@ -78,7 +78,10 @@ function enforcedFilePath(input: string, courseId: number, origin?: string): str
   }
   if (!path.startsWith(ENFORCED_PREFIX)) return null;
 
-  const [folder, ...rest] = path.slice(ENFORCED_PREFIX.length).split(/[?#]/)[0].split("/");
+  // Brightspace serves a backslash in a course-file path as a folder separator
+  // (old imported courses link files as csfiles\home_dir\...), so it is read
+  // as one here, before the segments are checked.
+  const [folder, ...rest] = path.slice(ENFORCED_PREFIX.length).split(/[?#]/)[0].replace(/\\/g, "/").split("/");
   const ou = /^(\d+)-/.exec(folder)?.[1];
   if (ou !== undefined && ou !== String(courseId)) {
     return { error: `This file belongs to course ${ou}, not course ${courseId}.` };

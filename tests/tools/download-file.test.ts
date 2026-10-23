@@ -1082,6 +1082,8 @@ describe("download_file: course file links (coursePath)", () => {
     ["/content/enforced/101-CS25000-FA26/Question-HW5-Fall26.docx", "Question-HW5-Fall26.docx"],
     ["/content/enforced/101-CS25000-FA26/Homework/HW%205%20(final).docx?d2lSessionVal=abc&ou=101", "Homework/HW 5 (final).docx"],
     ["https://purdue.brightspace.com/content/enforced/101-CS25000-FA26/Notes/a.pdf", "Notes/a.pdf"],
+    // An old imported course links files with backslashes; Brightspace serves them as folders.
+    ["/content/enforced/101-T2M/csfiles\\home_dir\\externalFiles\\CoE logo(1).jpg", "csfiles/home_dir/externalFiles/CoE logo(1).jpg"],
   ])("accepts the /content/enforced href get_assignments returns (%s)", async (href, filePath) => {
     const { call, pageRequested } = setup({});
 
@@ -1099,6 +1101,7 @@ describe("download_file: course file links (coursePath)", () => {
     ["an encoded '..' escape", "/content/enforced/101-X/%2e%2e/202-Y/a.pdf"],
     ["an encoded slash", "/content/enforced/101-X/a%2f..%2f..%2fb.pdf"],
     ["malformed encoding", "/content/enforced/101-X/a%zz.pdf"],
+    ["a backslash '..' escape", "/content/enforced/101-X/..\\202-Y\\a.pdf"],
   ])("refuses a /content/enforced href naming %s without sending a request", async (_why, href) => {
     const { call, pageRequested } = setup({});
 
