@@ -15,6 +15,7 @@ import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { JSONRPCMessage, RequestId } from "@modelcontextprotocol/sdk/types.js";
 import { readRuntimeAddress, type RuntimeAddress } from "./shared-runtime.js";
 import { log } from "./utils/logger.js";
+import { startupPhase } from "./utils/startup-phase.js";
 
 /** How long a chat waits for a runtime it started to publish its address. */
 const DEFAULT_START_TIMEOUT_MS = 30_000;
@@ -62,16 +63,20 @@ export async function relaySharedRuntime(
       const published = await readRuntimeAddress(dir);
       if (published && published.token !== failed?.token) return published;
       startRuntime();
-      const deadline = Date.now() + startTimeoutMs;
-      while (Date.now() < deadline && !disconnected.signal.aborted) {
-        await delay(50);
-        const started = await readRuntimeAddress(dir);
-        if (started && started.token !== failed?.token) return started;
-      }
-      throw new Error(
-        `The shared Brightspace runtime did not start within ${Math.round(startTimeoutMs / 1000)}s. ` +
-        `Its log is ${path.join(dir, RUNTIME_LOG)}.`,
-      );
+      // The runtime logs its own startup to runtime.log, which the client
+      // never sees; these lines put the wait for it in the client's log.
+      return startupPhase("starting the shared runtime", async () => {
+        const deadline = Date.now() + startTimeoutMs;
+        while (Date.now() < deadline && !disconnected.signal.aborted) {
+          await delay(50);
+          const started = await readRuntimeAddress(dir);
+          if (started && started.token !== failed?.token) return started;
+        }
+        throw new Error(
+          `The shared Brightspace runtime did not start within ${Math.round(startTimeoutMs / 1000)}s. ` +
+          `Its log is ${path.join(dir, RUNTIME_LOG)}.`,
+        );
+      });
     })().then((address) => (current = address)).finally(() => { locating = undefined; });
     return locating;
   };
