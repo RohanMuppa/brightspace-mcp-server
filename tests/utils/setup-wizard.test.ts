@@ -305,7 +305,7 @@ describe("existing client registration", () => {
     }));
     expect(inspectMcpClient(configPath)).toEqual({
       state: "different",
-      current: "node /home/me/bsp/build/index.js",
+      current: "node [1 argument hidden]",
     });
   });
 
