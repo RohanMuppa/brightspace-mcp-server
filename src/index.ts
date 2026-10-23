@@ -32,6 +32,23 @@ const PKG_VERSION = (() => {
 
 // ── Subcommand routing (before any MCP initialization) ──────────────
 const subcommand = process.argv[2];
+const COMMANDS = ['setup', 'auth', 'doctor', 'http', 'runtime'];
+
+// A mistyped command (`htp`) must not quietly start a stdio server that sits
+// waiting on stdin. Flags alone still mean the default stdio server.
+if (subcommand !== undefined && !subcommand.startsWith('-') && !COMMANDS.includes(subcommand)) {
+  process.stderr.write(
+    `Unknown command: ${subcommand}\n\n` +
+    'Usage: brightspace-mcp-server [command]\n\n' +
+    'Commands:\n' +
+    '  (none)   run the MCP server on stdio (what MCP clients launch)\n' +
+    '  http     run one shared MCP server on localhost\n' +
+    '  setup    configure your school and sign-in\n' +
+    '  auth     sign in to Brightspace now\n' +
+    '  doctor   check the install and configuration\n',
+  );
+  process.exit(2);
+}
 
 if (subcommand === 'setup') {
   await import('./setup.js');
@@ -96,7 +113,7 @@ if (subcommand === 'setup') {
       // Check for updates now, then every few hours. A server can stay alive
       // for days, so a boot-only check would never see a release. The
       // interval is unref'd and cannot hold the process open.
-      startUpdateChecks();
+      startUpdateChecks({ transport: mode === "http" ? "http" : "stdio" });
 
       // Log active course filter config if any filter is set
       if (config.courseFilter.includeCourseIds || config.courseFilter.excludeCourseIds || !config.courseFilter.activeOnly) {

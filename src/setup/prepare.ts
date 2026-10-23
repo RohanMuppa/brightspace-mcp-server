@@ -139,6 +139,8 @@ function appLine(outcome: RegistrationOutcome): PrepareStep {
       return ok("app", `${outcome.name}: old "brightspace" entry replaced`, false);
     case "current":
       return ok("app", `${outcome.name}: already set up`, false);
+    case "shared_http":
+      return ok("app", `${outcome.name}: already set up to use the shared server at ${outcome.url}`, false);
     case "different_left":
       return fail("app", `${outcome.name}: "brightspace" already runs ${outcome.current} — left as is (pass --replace to change it)`, false);
     case "failed":
