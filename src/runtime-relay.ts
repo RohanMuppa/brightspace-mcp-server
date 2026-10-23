@@ -5,11 +5,14 @@
  */
 
 import { spawn } from "node:child_process";
+import { createInterface } from "node:readline";
 import { closeSync, mkdirSync, openSync, statSync, truncateSync } from "node:fs";
 import * as path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
-import { isJSONRPCRequest, JSONRPCMessageSchema, type JSONRPCMessage, type RequestId } from "@modelcontextprotocol/sdk/types.js";
+// Types only: the SDK's runtime schemas cost every chat's relay about 16 MB,
+// and the runtime validates every message itself.
+import type { JSONRPCMessage, RequestId } from "@modelcontextprotocol/sdk/types.js";
 import { readRuntimeAddress, type RuntimeAddress } from "./shared-runtime.js";
 import { log } from "./utils/logger.js";
 
@@ -74,7 +77,7 @@ export async function relaySharedRuntime(
   };
 
   const forward = async (message: JSONRPCMessage): Promise<void> => {
-    const id = isJSONRPCRequest(message) ? message.id : undefined;
+    const id = "method" in message && "id" in message ? message.id : undefined;
     let answered = false;
     const reply = (out: JSONRPCMessage) => {
       if (id !== undefined && "id" in out && out.id === id && !("method" in out)) answered = true;
@@ -153,7 +156,7 @@ async function post(
   const type = response.headers.get("content-type") ?? "";
   if (!type.includes("text/event-stream")) {
     const body: unknown = JSON.parse(await response.text());
-    for (const item of Array.isArray(body) ? body : [body]) reply(JSONRPCMessageSchema.parse(item));
+    for (const item of Array.isArray(body) ? body : [body]) reply(item as JSONRPCMessage);
     return;
   }
   const decoder = new TextDecoder();
@@ -162,7 +165,7 @@ async function post(
     buffered += decoder.decode(chunk, { stream: true });
     const { events, rest } = splitEvents(buffered);
     buffered = rest;
-    for (const data of events) reply(JSONRPCMessageSchema.parse(JSON.parse(data)));
+    for (const data of events) reply(JSON.parse(data) as JSONRPCMessage);
   }
 }
 
@@ -198,11 +201,21 @@ export function spawnSharedRuntime(entry: string, dir: string): void {
     // No log yet.
   }
   const logFd = openSync(logFile, "a", 0o600);
+  // The runtime outlives the chat that started it, so it runs in its own
+  // directory: Windows will not delete or rename a folder that a live process
+  // is working in, and that chat's project folder would stay locked until the
+  // runtime idled out. The settings it needs, .env included, are already in
+  // this process's environment; a relative session directory is pinned to
+  // where this chat resolved it.
+  const env = { ...process.env };
+  const sessionDir = env.D2L_SESSION_DIR;
+  if (sessionDir && !sessionDir.startsWith("~") && !path.isAbsolute(sessionDir)) env.D2L_SESSION_DIR = path.resolve(sessionDir);
   try {
-    const child = spawn(process.execPath, [entry, "runtime", dir], {
+    const child = spawn(process.execPath, [entry, "runtime", path.resolve(dir)], {
+      cwd: dir,
       detached: true,
       stdio: ["ignore", "ignore", logFd],
-      env: process.env,
+      env,
       windowsHide: true,
     });
     child.once("error", (error) => log("ERROR", "Could not start the shared runtime", error));
@@ -210,4 +223,39 @@ export function spawnSharedRuntime(entry: string, dir: string): void {
   } finally {
     closeSync(logFd);
   }
+}
+
+/**
+ * The relay's side of stdio: one JSON-RPC message per line, as the MCP stdio
+ * transport frames them. The SDK's own transport validates every message
+ * with its schemas, which is the memory the relay exists to save; a line that
+ * is not JSON is dropped, since the runtime would reject it anyway.
+ */
+export function stdioLines(
+  input: NodeJS.ReadableStream = process.stdin,
+  output: NodeJS.WritableStream = process.stdout,
+): Transport {
+  const transport: Transport = {
+    async start() {
+      const lines = createInterface({ input });
+      lines.on("line", (line) => {
+        if (!line.trim()) return;
+        let message: JSONRPCMessage;
+        try {
+          message = JSON.parse(line) as JSONRPCMessage;
+        } catch {
+          return;
+        }
+        transport.onmessage?.(message);
+      });
+      lines.once("close", () => transport.onclose?.());
+    },
+    async send(message) {
+      output.write(JSON.stringify(message) + "\n");
+    },
+    async close() {
+      transport.onclose?.();
+    },
+  };
+  return transport;
 }

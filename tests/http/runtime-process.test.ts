@@ -34,7 +34,9 @@ describe.skipIf(!existsSync(entry))("brightspace-mcp-server default command (rea
       if (alive(pid)) process.kill(pid);
       await vi.waitFor(() => expect(alive(pid)).toBe(false), { timeout: 10_000 });
     }
-    for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true });
+    // A relay that was just closed can take a moment to exit on Windows, and
+    // until it does its working directory cannot be removed.
+    for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
   });
 
   function runtimeStates(home: string): Array<{ pid: number }> {

@@ -9,7 +9,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { acquireProcessLock, AuthenticationInProgressError } from "./auth/auth-lock.js";
-import { startHttpServer, type RunningHttpServer } from "./http-server.js";
+import type { RunningHttpServer } from "./http-server.js";
 import type { ServerRuntime } from "./server.js";
 import type { AppConfig } from "./types/index.js";
 import { log } from "./utils/logger.js";
@@ -114,6 +114,9 @@ export async function serveSharedRuntime(
   };
 
   try {
+    // Loaded here, not at the top: the relay in every chat imports this
+    // module for runtimeDirectory and must not pull in the server with it.
+    const { startHttpServer } = await import("./http-server.js");
     server = await startHttpServer({ runtime, token, port: 0, onActiveChange });
     const address: RuntimeAddress = { pid: process.pid, url: server.url, token };
     // Write then rename, so a reader never sees half a file.

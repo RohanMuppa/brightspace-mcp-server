@@ -7,14 +7,9 @@
  * https://github.com/rohanmuppa/brightspace-mcp-server
  */
 
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { enableStdoutGuard, log } from "./utils/logger.js";
 import { guardServerProcess } from "./utils/process-guard.js";
 import { loadConfig } from "./utils/config.js";
-import { setActiveShortcuts } from "./utils/two-factor-shortcuts.js";
-import { startUpdateChecks } from "./utils/update-checker.js";
-import { configureDevActivity } from "./utils/dev-activity.js";
-import { createRuntime } from "./server.js";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
@@ -91,15 +86,21 @@ if (subcommand === 'setup') {
         // Every MCP client on this computer that launches this command with
         // the same settings shares one runtime: one sign-in, one cache, one
         // rate limiter. The first request starts it; it stops when idle.
+        // Each chat runs one of these, so it loads only the relay, never the
+        // tools, API client or browser code the runtime itself needs.
         const { runtimeDirectory } = await import("./shared-runtime.js");
-        const { relaySharedRuntime, spawnSharedRuntime } = await import("./runtime-relay.js");
+        const { relaySharedRuntime, spawnSharedRuntime, stdioLines } = await import("./runtime-relay.js");
         const dir = runtimeDirectory(config, PKG_VERSION);
-        await relaySharedRuntime(new StdioServerTransport(), { dir, startRuntime: () => spawnSharedRuntime(__filename, dir) });
+        await relaySharedRuntime(stdioLines(), { dir, startRuntime: () => spawnSharedRuntime(__filename, dir) });
         log("INFO", "Brightspace MCP Server by Rohan Muppa — running on stdio, sharing one Brightspace runtime with this computer's other MCP clients");
         log("INFO", "Setup: see README.md for MCP client configuration (Claude Desktop, ChatGPT Desktop, Cursor, etc.)");
         return;
       }
 
+      const { configureDevActivity } = await import("./utils/dev-activity.js");
+      const { setActiveShortcuts } = await import("./utils/two-factor-shortcuts.js");
+      const { startUpdateChecks } = await import("./utils/update-checker.js");
+      const { createRuntime } = await import("./server.js");
       configureDevActivity(config.sessionDir);
       // Lets the MFA approval message mention the setup options only to users
       // who have neither turned on. Booleans only; the key is never passed.
