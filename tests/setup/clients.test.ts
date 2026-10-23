@@ -75,7 +75,7 @@ describe("registerAll", () => {
     fs.mkdirSync(path.dirname(desktopConfig()), { recursive: true });
     fs.writeFileSync(desktopConfig(), JSON.stringify({ mcpServers: { brightspace: { command: "node", args: ["/old.js"] }, other: { command: "x" } } }));
 
-    expect(registerAll(desktop(), { replace: false })[0]).toMatchObject({ outcome: "different_left", current: "node /old.js" });
+    expect(registerAll(desktop(), { replace: false })[0]).toMatchObject({ outcome: "different_left", current: "node [1 argument hidden]" });
     expect(readServers(desktopConfig()).brightspace).toEqual({ command: "node", args: ["/old.js"] });
 
     expect(registerAll(desktop(), { replace: true })[0].outcome).toBe("replaced");

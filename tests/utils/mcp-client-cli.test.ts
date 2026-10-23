@@ -57,7 +57,7 @@ describe("classifyRegistration", () => {
     const entry = { command: "node", args: ["/Users/me/brightspace-mcp-server/build/index.js"] };
     expect(classifyRegistration(entry, "darwin")).toEqual({
       state: "different",
-      current: "node /Users/me/brightspace-mcp-server/build/index.js",
+      current: "node [1 argument hidden]",
     });
   });
 
@@ -65,7 +65,7 @@ describe("classifyRegistration", () => {
     const entry = { command: "npx", args: ["-y", "brightspace-mcp-server"] };
     expect(classifyRegistration(entry, "darwin")).toEqual({
       state: "different",
-      current: "npx -y brightspace-mcp-server",
+      current: "npx [2 arguments hidden]",
     });
   });
 
@@ -143,6 +143,16 @@ describe("classifyRegistration", () => {
     expect(classifyRegistration({ url: "http://127.0.0.1:18765/mcp?token=fake-secret" }, "darwin")).toEqual({ state: "shared_http", url: "http://127.0.0.1:18765/mcp" });
   });
 
+  it("does not print credentials from changed stdio arguments or command paths", () => {
+    for (const command of ["node", "C:\\private-fake-secret\\node.exe", "fake-secret-command"]) {
+      const entry = { command, args: ["-e", "process.env.TOKEN='fake-secret-inline'", "--token=fake-secret-flag", "https://host/?token=fake-secret-url"] };
+      const result = classifyRegistration(entry, "darwin");
+      expect(result.state).toBe("different");
+      expect(result).toMatchObject({ current: expect.stringContaining("4 arguments hidden") });
+      expect(JSON.stringify(result)).not.toContain("fake-secret");
+    }
+  });
+
   it("reports an entry it could not read as different", () => {
     expect(classifyRegistration(null, "darwin").state).toBe("different");
   });
@@ -170,7 +180,7 @@ describe("Codex registration lookup", () => {
     const run: CommandRunner = () => ok(codexJson("node", ["/opt/bsp/build/index.js"]));
     expect(inspectCliMcpClient(codex, run)).toEqual({
       state: "different",
-      current: "node /opt/bsp/build/index.js",
+      current: "node [1 argument hidden]",
     });
   });
 
@@ -219,7 +229,7 @@ describe("Claude Code registration lookup", () => {
     });
     expect(inspectCliMcpClient(claude, noCommands)).toEqual({
       state: "different",
-      current: "node /dev/bsp/build/index.js",
+      current: "node [1 argument hidden]",
     });
   });
 
