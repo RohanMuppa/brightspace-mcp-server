@@ -156,6 +156,8 @@ describe("dev activity", () => {
     const api = new D2LApiClient({ baseUrl: "https://example.com",
       tokenManager: new TokenManager({ baseUrl: "https://example.com", envAccessToken: "private-token" }),
     });
+    // A minute and second of 41 used to trip the ID check below on correct output.
+    vi.spyOn(Date.prototype, "toISOString").mockReturnValue("2026-01-01T12:41:41.077Z");
     const c = await connect(s => s.registerTool("get_assignments", {}, async () => {
       for (const path of Object.keys(statuses)) await api.getRaw(path).catch(() => undefined);
       return { content: [{ type: "text", text: "unknown fields" }] };
@@ -172,7 +174,11 @@ describe("dev activity", () => {
     ]);
     expect(rows.find(r => r.event === "tool_finished")).toMatchObject({ outcome: "success" });
     expect(new Set(rows.map(r => r.callId)).size).toBe(1);
-    expect(JSON.stringify(rows)).not.toMatch(/private-|6606|\b41\b|\b77\b|secret|\/d2l/);
+    // Timestamps, pids, UUIDs and timings vary per run and can contain these digits by chance.
+    const responses = rows.filter(r => r.event === "http_response")
+      .map(({ at, runId, pid, callId, elapsedMs, idleMs, sinceSuccessMs, ...rest }) => rest);
+    expect(JSON.stringify(responses)).not.toMatch(/private-|6606|\b41\b|\b77\b|secret|\/d2l/);
+    expect(JSON.stringify(rows)).not.toMatch(/private-|secret|\/d2l/);
   });
   it.each([
     ["/d2l/api/lp/1.56/users/whoami", "whoami"],
