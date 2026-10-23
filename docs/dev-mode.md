@@ -15,13 +15,18 @@ until a prior observation exists. Compare timestamps across files for gaps
 that span server restarts. Unknown tools and requests rejected by SDK input
 validation never execute a handler and are not included.
 
-Authentication events include `http_response` (status only), `auth_required`,
+Authentication events include `http_response` (status and `operation`), `auth_required`,
 `token_mint_started` / `token_mint_finished`, `recovery_started`, `mfa_observed`,
 and `recovery_finished`. They share the initiating handler's `callId`, including
 background recovery that finishes after a tool returns. Concurrent callers
 joining an existing recovery share that operation; its events retain the
 initiating call's ID. A mint outcome describes the token service response;
 `recovery_finished` describes the browser child process outcome.
+
+`operation` names what a request was for from a fixed list (`quizList`,
+`quizAttempts`, `dropboxSubmissions`, `dropboxFeedback`, `grades`, `content`, and
+so on; `other` when none fits), never its endpoint, IDs, or query. A tool that
+succeeds with some fields unknown shows which optional read returned a 403 or 404.
 
 During background recovery, `auth_phase` records how long each browser sign-in
 stage took, as `phase` and `elapsedMs`: `launch` (starting Chromium),

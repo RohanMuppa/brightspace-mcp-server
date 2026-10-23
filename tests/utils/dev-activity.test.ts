@@ -142,6 +142,60 @@ describe("dev activity", () => {
     expect(new Set(records().map(r => r.callId)).size).toBe(1);
     expect(JSON.stringify(records())).not.toContain("private-");
   });
+  it("names the operation behind each status so a partial success shows which optional read failed", async () => {
+    const statuses: Record<string, number> = {
+      "/d2l/api/le/1.75/6606/dropbox/folders/": 200,
+      "/d2l/api/le/1.75/6606/dropbox/folders/41/submissions/mysubmissions/": 403,
+      "/d2l/api/le/1.75/6606/dropbox/folders/41/feedback/myFeedback/": 404,
+      "/d2l/api/le/1.75/6606/quizzes/": 403,
+      "/d2l/api/le/1.75/6606/quizzes/77/attempts/": 404,
+      "/d2l/api/le/1.75/6606/private-unknown/99?secret=1": 200,
+    };
+    vi.stubGlobal("fetch", vi.fn(async (url: string) =>
+      new Response("private-response", { status: statuses[new URL(url).pathname + new URL(url).search] })));
+    const api = new D2LApiClient({ baseUrl: "https://example.com",
+      tokenManager: new TokenManager({ baseUrl: "https://example.com", envAccessToken: "private-token" }),
+    });
+    const c = await connect(s => s.registerTool("get_assignments", {}, async () => {
+      for (const path of Object.keys(statuses)) await api.getRaw(path).catch(() => undefined);
+      return { content: [{ type: "text", text: "unknown fields" }] };
+    }));
+    expect((await c.callTool({ name: "get_assignments" })).isError).not.toBe(true);
+    const rows = records();
+    expect(rows.filter(r => r.event === "http_response").map(r => [r.operation, r.status])).toEqual([
+      ["dropboxFolders", 200],
+      ["dropboxSubmissions", 403],
+      ["dropboxFeedback", 404],
+      ["quizList", 403],
+      ["quizAttempts", 404],
+      ["other", 200],
+    ]);
+    expect(rows.find(r => r.event === "tool_finished")).toMatchObject({ outcome: "success" });
+    expect(new Set(rows.map(r => r.callId)).size).toBe(1);
+    expect(JSON.stringify(rows)).not.toMatch(/private-|6606|\b41\b|\b77\b|secret|\/d2l/);
+  });
+  it.each([
+    ["/d2l/api/lp/1.56/users/whoami", "whoami"],
+    ["/d2l/api/lp/1.56/enrollments/myenrollments/?orgUnitTypeId=3", "enrollments"],
+    ["/d2l/api/le/1.75/6606/quizzes/77", "quiz"],
+    ["/d2l/api/le/1.75/6606/grades/values/myGradeValues/", "grades"],
+    ["/d2l/api/le/1.75/6606/content/topics/5/file", "contentFile"],
+    ["/d2l/api/le/1.75/6606/rubrics?objectType=Dropbox&objectId=41", "rubrics"],
+    ["/d2l/lms/dropbox/user/folder_user_view_feedback.d2l?db=41&grpid=0&ou=6606", "dropboxFeedbackPage"],
+    ["/d2l/api/versions/", "versions"],
+  ])("classifies %s as %s", async (path, operation) => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("[]", { status: 200 })));
+    const api = new D2LApiClient({ baseUrl: "https://example.com",
+      tokenManager: new TokenManager({ baseUrl: "https://example.com", envAccessToken: "private-token" }),
+    });
+    await api.getRaw(path);
+    expect(records()).toEqual([expect.objectContaining({ event: "http_response", status: 200, operation })]);
+  });
+  it("drops an operation outside the allowlist", () => {
+    devActivity("http_response", { status: 403, operation: "/d2l/api/le/1.75/6606/private" } as any);
+    expect(records()[0]).toMatchObject({ event: "http_response", status: 403 });
+    expect(records()[0]).not.toHaveProperty("operation");
+  });
   it("continues tool execution if the log directory is unwritable", async () => {
     writeFileSync(join(root, "dev-activity"), "occupied");
     const warn = vi.spyOn(console, "error").mockImplementation(() => {});
