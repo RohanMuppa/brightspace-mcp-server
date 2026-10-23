@@ -107,11 +107,18 @@ All optional, set in your AI app's MCP `env` config or your shell. The full list
 | `D2L_ACTIVE_ONLY=false` | Include courses whose enrollment has ended |
 | `D2L_CURRENT_ONLY=true` | Only show courses in their current enrollment window, like Brightspace's "Current Courses" widget |
 | `D2L_NO_UPDATE_CHECK=1` | Turn off the new-version notice |
+| `D2L_RUNTIME_IDLE_SECONDS` | How long the shared background server waits with no question running before it stops (default 600) |
 | `D2L_DEV_MODE=true` | Write a local, content-free log of tool calls and sign-in events, for debugging session problems ([how](docs/dev-mode.md)) |
 
-## One server for all your chats (optional)
+## One server for all your chats
 
-Normally every chat starts its own copy of the server. With many Codex chats open that is many copies, each roughly 70 MB of memory. Instead you can run **one** copy yourself and point every chat at it by URL. It uses the same saved password, saved session, and sign-in as before; a question that needs a sign-in still signs in once, for every chat.
+Every chat already shares one Brightspace server, with nothing to set up. Each chat still launches the usual command, but that command is now only a small relay: the first question from any chat starts one shared background server for this computer, and every other chat (Claude Desktop, Codex, Cursor, …) uses that same one. That means one sign-in, one saved session, and one cache for all of them. Two chats starting at the same moment still end up with one server. Closing a chat never interrupts another chat's question. After 10 minutes with no question running, the shared server stops by itself, and the next question starts it again.
+
+Chats share a server only when they use the same settings and the same version of this package. A chat started with different `D2L_*` settings, or after an update, gets its own. Because the background server isn't attached to any chat, its log goes to `runtime.log` under `~/.d2l-session/…/shared-runtime/`. Set `D2L_RUNTIME_IDLE_SECONDS` to change how long it waits before stopping.
+
+### Running the shared server yourself (optional)
+
+You can also run **one** copy yourself and point every chat at it by URL. It uses the same saved password, saved session, and sign-in as before; a question that needs a sign-in still signs in once, for every chat.
 
 1. **Make a secret token, once.** Chats must present it, so other programs and web pages can't read your grades. Generate one:
    ```bash
@@ -138,7 +145,7 @@ Things that change:
 - **Stopping it:** press Ctrl+C. Questions already running finish first; press Ctrl+C again to stop at once.
 - **Updating it:** restart the server, not Codex. Restarting a client only reconnects it to the server that is already running the old version. Stop the server and start the same `http` command again with the same `D2L_HTTP_TOKEN`, port, and settings; from a source checkout, run `npm run update` first. Update notices from a shared server say this too.
 
-Any other MCP client that can connect to a Streamable HTTP URL with a bearer token can share the same server. To go back to one copy per chat, put the `command`/`args` entry back (rerun `setup` and say yes when it offers to switch Codex back to its own copy per chat) and stop the shared server.
+Any other MCP client that can connect to a Streamable HTTP URL with a bearer token can share the same server. To go back to the automatic shared server, put the `command`/`args` entry back (rerun `setup` and say yes when it offers to switch Codex back) and stop the server you started.
 
 ## When it asks you to sign in
 
