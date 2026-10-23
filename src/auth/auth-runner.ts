@@ -12,7 +12,7 @@ import * as path from "node:path";
 import { log } from "../utils/logger.js";
 import { AuthError } from "../utils/errors.js";
 import { AUTH_COMMAND } from "../utils/commands.js";
-import { devActivity } from "../utils/dev-activity.js";
+import { devActivity, newRecoveryId, RECOVERY_ID_ENV } from "../utils/dev-activity.js";
 import { parsePhaseMarker } from "./auth-phases.js";
 import { AUTOMATIC_PENDING_MARKER, RELAYED_CHALLENGE_MARKER, RELAYED_STARTING_MARKER, authLockPath, challengeRelayedAt, relayChallenge } from "./mfa-challenge.js";
 import { inspectLockOwner } from "./auth-lock.js";
@@ -769,7 +769,8 @@ export class AuthRunner {
    */
   private async spawnAuth(): Promise<boolean> {
     const started = Date.now();
-    devActivity("recovery_started");
+    const recoveryId = newRecoveryId();
+    devActivity("recovery_started", { recoveryId });
     log("INFO", "Auto-launching brightspace-auth...");
 
     return await new Promise<boolean>((resolve, reject) => {
@@ -781,7 +782,8 @@ export class AuthRunner {
           // Background recovery never opens a browser over the user's work
           // unless D2L_HEADLESS explicitly asks for one; the saved
           // visible-browser preference applies to manual sign-in only.
-          env: { D2L_HEADLESS: "true", ...process.env },
+          // The recovery id lets the child's dev activity join this recovery.
+          env: { D2L_HEADLESS: "true", ...process.env, [RECOVERY_ID_ENV]: recoveryId },
           stdio: ["ignore", "pipe", "pipe"],
           detached: process.platform !== "win32",
           windowsHide: true,
@@ -903,7 +905,7 @@ export class AuthRunner {
         // is told the number instead of "still working".
         const firstChallenge = this.pendingChallenge === null || this.pendingChallenge.kind === "automaticPending";
         startWatching();
-        if (firstChallenge) devActivity("mfa_observed", { elapsedMs: Date.now() - started });
+        if (firstChallenge) devActivity("mfa_observed", { elapsedMs: Date.now() - started, recoveryId });
         if (firstChallenge || matched) {
           this.pendingChallenge = { kind: "mfaPending", numberMatch: matched ?? this.pendingChallenge?.numberMatch };
         }
@@ -939,7 +941,7 @@ export class AuthRunner {
       const finishChild = (error?: AuthProcessError) => {
         if (childFinished) return;
         childFinished = true;
-        devActivity("recovery_finished", { outcome: error ? "error" : "success", reason: error?.kind, elapsedMs: Date.now() - started });
+        devActivity("recovery_finished", { outcome: error ? "error" : "success", reason: error?.kind, elapsedMs: Date.now() - started, recoveryId });
         clearTimeout(timer);
         if (killTimer) clearTimeout(killTimer);
         if (abandonTimer) clearTimeout(abandonTimer);
@@ -974,7 +976,7 @@ export class AuthRunner {
         const numberMarker = MFA_NUMBER_MARKER.exec(line);
         const phaseMarker = parsePhaseMarker(line);
         if (phaseMarker) {
-          devActivity("auth_phase", phaseMarker);
+          devActivity("auth_phase", { ...phaseMarker, recoveryId });
         } else if (numberMarker) {
           numberMatch = numberMarker[1];
           publishChallenge(numberMatch);

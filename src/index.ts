@@ -58,7 +58,7 @@ if (subcommand === 'setup') {
     try {
       // Load configuration
       const config = await loadConfig();
-      configureDevActivity(config.sessionDir);
+      configureDevActivity(config.sessionDir, { version: PKG_VERSION, role: "server" });
       // Lets the MFA approval message mention the setup options only to users
       // who have neither turned on. Booleans only; the key is never passed.
       setActiveShortcuts({ rememberMfa: config.rememberMfa === true, keySaved: Boolean(config.totpUri) });
