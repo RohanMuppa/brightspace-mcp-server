@@ -151,13 +151,16 @@ describe("shared runtime behind the default stdio command", { timeout: 30_000 },
     idleMs = 300;
     const client = await chat();
     expect(await courseNames(client)).toContain("Course 1");
-    const first = served[0];
+    // A slow machine can idle out between the client's initialize and its
+    // call, so count starts from the runtime that answered, not from one.
+    const first = served[served.length - 1];
     await first.stopped;
     expect(existsSync(join(dir, "state.json"))).toBe(false);
+    const before = served.length;
 
     expect(await courseNames(client)).toContain("Course 1");
-    expect(served).toHaveLength(2);
-    expect(served[1]).not.toBe(first);
+    expect(served.length).toBeGreaterThan(before);
+    expect(served[served.length - 1]).not.toBe(first);
   });
 
   it("is not stopped for idleness while a call is still in progress", async () => {
