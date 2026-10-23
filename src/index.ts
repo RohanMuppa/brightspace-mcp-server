@@ -75,7 +75,8 @@ if (subcommand === 'setup') {
       // OS credential store, which can stall, and a client that times out
       // needs these timestamped lines to see where. No account details.
       log("INFO", `Brightspace MCP Server v${PKG_VERSION} starting (Node ${process.version}, ${process.platform}, ${mode})`);
-      const config = await startupPhase("loading configuration", loadConfig);
+      // The relay leaves the credential store to the runtime; see loadConfig.
+      const config = await startupPhase("loading configuration", () => loadConfig({ credentials: mode !== "stdio" }));
       log("DEBUG", "Configuration loaded", { sessionDir: config.sessionDir });
 
       log("INFO", "");

@@ -28,8 +28,11 @@ const MAX_LOG_BYTES = 1024 * 1024;
 export interface RelayOptions {
   /** The shared runtime's directory (see runtimeDirectory). */
   dir: string;
-  /** Start a runtime for `dir` in the background; it publishes its own address. */
-  startRuntime: () => void;
+  /**
+   * Start a runtime for `dir` in the background; it publishes its own
+   * address. May resolve with the runtime's exit code if it exits.
+   */
+  startRuntime: () => Promise<number | null> | void;
   startTimeoutMs?: number;
 }
 
@@ -62,7 +65,10 @@ export async function relaySharedRuntime(
     locating ??= (async () => {
       const published = await readRuntimeAddress(dir);
       if (published && published.token !== failed?.token) return published;
-      startRuntime();
+      // A runtime that exits with 0 lost the race to another one, which will
+      // publish; any other exit before an address appears is a failed start.
+      let exitCode: number | null | undefined;
+      void startRuntime()?.then((code) => { exitCode = code; });
       // The runtime logs its own startup to runtime.log, which the client
       // never sees; these lines put the wait for it in the client's log.
       return startupPhase("starting the shared runtime", async () => {
@@ -71,6 +77,12 @@ export async function relaySharedRuntime(
           await delay(50);
           const started = await readRuntimeAddress(dir);
           if (started && started.token !== failed?.token) return started;
+          if (exitCode !== undefined && exitCode !== 0) {
+            throw new Error(
+              `The shared Brightspace runtime stopped while starting (exit code ${exitCode}). ` +
+              `Its log is ${path.join(dir, RUNTIME_LOG)}.`,
+            );
+          }
         }
         throw new Error(
           `The shared Brightspace runtime did not start within ${Math.round(startTimeoutMs / 1000)}s. ` +
@@ -196,8 +208,9 @@ function splitEvents(buffered: string): { events: string[]; rest: string } {
  * Start `brightspace-mcp-server runtime <dir>` detached, so it outlives the
  * chat that started it and serves every other one. Its log goes to
  * runtime.log in `dir`, since no MCP client is listening to its stderr.
+ * Resolves with its exit code if it exits while this chat is still open.
  */
-export function spawnSharedRuntime(entry: string, dir: string): void {
+export function spawnSharedRuntime(entry: string, dir: string): Promise<number | null> {
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   const logFile = path.join(dir, RUNTIME_LOG);
   try {
@@ -225,6 +238,10 @@ export function spawnSharedRuntime(entry: string, dir: string): void {
     });
     child.once("error", (error) => log("ERROR", "Could not start the shared runtime", error));
     child.unref();
+    return new Promise((resolve) => {
+      child.once("exit", (code) => resolve(code));
+      child.once("error", () => resolve(null));
+    });
   } finally {
     closeSync(logFd);
   }

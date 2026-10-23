@@ -55,6 +55,12 @@ describe("runtimeDirectory", () => {
     expect(runtimeDirectory({ ...config, courseFilter: { activeOnly: false } }, "1.0.0")).not.toBe(dir);
   });
 
+  it("is the same whether or not a password or authenticator key is saved, since the relay never reads them", () => {
+    const dir = runtimeDirectory(config, "1.0.0");
+    expect(runtimeDirectory({ ...config, password: "hunter2" }, "1.0.0")).toBe(dir);
+    expect(runtimeDirectory({ ...config, totpUri: "otpauth://totp/x?secret=ABC" }, "1.0.0")).toBe(dir);
+  });
+
   it("never puts a secret in the path", () => {
     const dir = runtimeDirectory({ ...config, password: "hunter2", envAccessToken: "secret-token" }, "1.0.0");
     expect(dir).not.toContain("hunter2");
@@ -257,5 +263,32 @@ describe("shared runtime behind the default stdio command", { timeout: 30_000 },
     await relaySharedRuntime(relaySide, { dir, startRuntime: () => {}, startTimeoutMs: 300 });
     clients.push(client);
     await expect(client.connect(clientSide)).rejects.toThrow(/shared Brightspace runtime/i);
+  });
+
+  it("stops waiting as soon as the runtime it started exits with an error", async () => {
+    const client = new Client({ name: "chat", version: "1" });
+    const [clientSide, relaySide] = InMemoryTransport.createLinkedPair();
+    // A locked credential store, say: the runtime fails before it publishes.
+    await relaySharedRuntime(relaySide, { dir, startRuntime: () => Promise.resolve(1), startTimeoutMs: 20_000 });
+    clients.push(client);
+    const started = Date.now();
+    await expect(client.connect(clientSide)).rejects.toThrow(/stopped while starting \(exit code 1\)\. Its log is .*runtime\.log/);
+    expect(Date.now() - started).toBeLessThan(5_000);
+  });
+
+  it("keeps waiting when the runtime it started exits because another one won", async () => {
+    // Exit 0 is the runtime that lost the owner lock; the winner publishes.
+    const client = new Client({ name: "chat", version: "1" });
+    const [clientSide, relaySide] = InMemoryTransport.createLinkedPair();
+    await relaySharedRuntime(relaySide, {
+      dir,
+      startRuntime: () => {
+        setTimeout(startRuntime, 200);
+        return Promise.resolve(0);
+      },
+    });
+    clients.push(client);
+    await client.connect(clientSide);
+    expect((await client.listTools()).tools).toHaveLength(26);
   });
 });
