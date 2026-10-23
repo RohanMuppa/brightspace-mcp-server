@@ -4,13 +4,14 @@ import { appendFileSync, mkdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { AUTH_PHASES, type AuthPhase } from "../auth/auth-phases.js";
+import { ERROR_KINDS, errorKind, resultErrorKind, type ErrorKind } from "./error-kind.js";
 
 type Event = "tool_started" | "tool_finished" | "http_response" | "auth_required"
   | "token_mint_started" | "token_mint_finished" | "recovery_started"
   | "mfa_observed" | "recovery_finished" | "auth_phase"
   | "mfa_method_selected" | "mfa_code_submitted";
 type Outcome = "success" | "error" | "sessionExpired" | "transport";
-interface Fields { elapsedMs?: number; status?: number; outcome?: Outcome; reason?: string; phase?: AuthPhase }
+interface Fields { elapsedMs?: number; status?: number; outcome?: Outcome; reason?: string; phase?: AuthPhase; errorKind?: ErrorKind }
 interface CallContext { callId: string; tool: string }
 const calls = new AsyncLocalStorage<CallContext>();
 const runId = randomUUID();
@@ -47,6 +48,7 @@ function write(event: Event, fields: Fields, context = calls.getStore(), idleMs?
   if (["busy", "cooldown", "unsupported", "secureStorage", "transport", "timeout", "failed", "mfaPending",
     "automaticPending", "inProgress"].includes(fields.reason ?? "")) record.reason = fields.reason;
   if ((AUTH_PHASES as readonly string[]).includes(fields.phase ?? "")) record.phase = fields.phase;
+  if ((ERROR_KINDS as readonly string[]).includes(fields.errorKind ?? "")) record.errorKind = fields.errorKind;
   try {
     mkdirSync(directory, { recursive: true, mode: 0o700 });
     const file = join(directory, `activity-${at.slice(0, 10)}-${process.pid}-${runId}.jsonl`);
@@ -78,15 +80,21 @@ export function trackToolActivity(server: McpServer): void {
       lastStart = started;
       return calls.run(context, async () => {
         let outcome: Outcome = "error";
+        let kind: ErrorKind | undefined;
         try {
           const result = await callback(...args);
-          if (!(result as { isError?: boolean } | undefined)?.isError) {
+          if ((result as { isError?: boolean } | undefined)?.isError) {
+            kind = resultErrorKind(result);
+          } else {
             outcome = "success";
             lastSuccess = Date.now();
           }
           return result;
+        } catch (error) {
+          kind = errorKind(error);
+          throw error;
         } finally {
-          write("tool_finished", { outcome, elapsedMs: Date.now() - started });
+          write("tool_finished", { outcome, errorKind: kind, elapsedMs: Date.now() - started });
         }
       });
     }) as never)) as typeof server.registerTool;

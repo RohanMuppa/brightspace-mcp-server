@@ -15,6 +15,12 @@ until a prior observation exists. Compare timestamps across files for gaps
 that span server restarts. Unknown tools and requests rejected by SDK input
 validation never execute a handler and are not included.
 
+A failed `tool_finished` also records `errorKind`, a fixed category chosen from
+the error's type, never its message: `invalidInput`, `notFound`, `permission`,
+`auth`, `rateLimited`, `http` (another Brightspace HTTP failure), `transport`,
+`unsupportedFormat`, `rejectedFile` (a download name or size that was refused),
+or `unknown` when the tool reported an error the server did not classify.
+
 Authentication events include `http_response` (status only), `auth_required`,
 `token_mint_started` / `token_mint_finished`, `recovery_started`, `mfa_observed`,
 and `recovery_finished`. They share the initiating handler's `callId`, including

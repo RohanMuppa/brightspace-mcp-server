@@ -11,6 +11,8 @@ import { currentMfaAnnouncer, relayMfaChallenges } from "../../src/tools/mfa-rel
 import { TokenManager } from "../../src/auth/token-manager.js";
 import type { TokenData } from "../../src/types/index.js";
 import { D2LApiClient } from "../../src/api/client.js";
+import { NetworkError } from "../../src/api/errors.js";
+import { errorResponse, sanitizeError } from "../../src/tools/tool-helpers.js";
 
 describe("dev activity", () => {
   let root: string;
@@ -78,6 +80,28 @@ describe("dev activity", () => {
     expect(JSON.stringify(rows)).not.toMatch(/private-|secret-token|"42"/);
     expect(rows[0]).toHaveProperty("at");
     expect(rows[0]).toHaveProperty("runId");
+  });
+  it("records a safe error category for returned and thrown failures without their messages", async () => {
+    const c = await connect(s => {
+      s.registerTool("invalid", {}, async () =>
+        sanitizeError(z.object({ id: z.number() }).safeParse({ id: "private-input" }).error));
+      s.registerTool("offline", {}, async () => { throw new NetworkError("private-host secret-token"); });
+      s.registerTool("handwritten", {}, async () => errorResponse("private-path /Users/x"));
+      s.registerTool("ok", {}, async () => ({ content: [] }));
+    });
+    for (const name of ["invalid", "offline", "handwritten", "ok"]) await c.callTool({ name });
+    const finished = records().filter(r => r.event === "tool_finished");
+    expect(finished.map(r => [r.tool, r.outcome, r.errorKind])).toEqual([
+      ["invalid", "error", "invalidInput"],
+      ["offline", "error", "transport"],
+      ["handwritten", "error", "unknown"],
+      ["ok", "success", undefined],
+    ]);
+    expect(JSON.stringify(records())).not.toMatch(/private-|secret-token|Users/);
+  });
+  it("drops an error category outside the allowlist", () => {
+    devActivity("tool_finished", { outcome: "error", errorKind: "private-kind" } as any);
+    expect(records()[0]).not.toHaveProperty("errorKind");
   });
   it("keeps overlapping tools' authentication events correlated", async () => {
     let release!: () => void;
