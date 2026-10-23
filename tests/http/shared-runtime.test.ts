@@ -9,7 +9,7 @@ import { D2LApiClient } from "../../src/api/client.js";
 import { currentMfaAnnouncer } from "../../src/tools/mfa-relay.js";
 import type { TokenManager } from "../../src/auth/token-manager.js";
 import { runtimeDirectory, serveSharedRuntime, type SharedRuntime } from "../../src/shared-runtime.js";
-import { relaySharedRuntime } from "../../src/runtime-relay.js";
+import { relaySharedRuntime, startupFailure } from "../../src/runtime-relay.js";
 import type { AppConfig } from "../../src/types/index.js";
 
 /**
@@ -269,11 +269,20 @@ describe("shared runtime behind the default stdio command", { timeout: 30_000 },
     const client = new Client({ name: "chat", version: "1" });
     const [clientSide, relaySide] = InMemoryTransport.createLinkedPair();
     // A locked credential store, say: the runtime fails before it publishes.
-    await relaySharedRuntime(relaySide, { dir, startRuntime: () => Promise.resolve(1), startTimeoutMs: 20_000 });
+    await relaySharedRuntime(relaySide, { dir, startRuntime: () => Promise.resolve({ code: 1 }), startTimeoutMs: 20_000 });
     clients.push(client);
     const started = Date.now();
     await expect(client.connect(clientSide)).rejects.toThrow(/stopped while starting \(exit code 1\)\. Its log is .*runtime\.log/);
     expect(Date.now() - started).toBeLessThan(5_000);
+  });
+
+  it("names the runtime's own startup error when its log has one", async () => {
+    const client = new Client({ name: "chat", version: "1" });
+    const [clientSide, relaySide] = InMemoryTransport.createLinkedPair();
+    const reason = "NativeCredentialStoreError: The native credential store is locked or unavailable.";
+    await relaySharedRuntime(relaySide, { dir, startRuntime: () => Promise.resolve({ code: 1, reason }) });
+    clients.push(client);
+    await expect(client.connect(clientSide)).rejects.toThrow("stopped while starting: NativeCredentialStoreError: The native credential store is locked or unavailable. Its log is");
   });
 
   it("keeps waiting when the runtime it started exits because another one won", async () => {
@@ -284,11 +293,31 @@ describe("shared runtime behind the default stdio command", { timeout: 30_000 },
       dir,
       startRuntime: () => {
         setTimeout(startRuntime, 200);
-        return Promise.resolve(0);
+        return Promise.resolve({ code: 0 });
       },
     });
     clients.push(client);
     await client.connect(clientSide);
     expect((await client.listTools()).tools).toHaveLength(26);
+  });
+});
+
+describe("startupFailure", () => {
+  it("reads the last startup error in the log, without its stack", () => {
+    const log = [
+      "[2026-10-23T23:39:00.083Z] [INFO] Startup: loading configuration...",
+      "[2026-10-23T23:39:00.083Z] [ERROR] MCP Server failed to start NativeCredentialStoreError: The native credential store is locked or unavailable. at Object.getPassword (file:///x/build/auth/credential-store.js:136:19)",
+      "[2026-10-23T23:39:00.084Z] [ERROR] Brightspace MCP server exited with code 1.",
+    ].join("\n");
+    expect(startupFailure(log)).toBe("NativeCredentialStoreError: The native credential store is locked or unavailable.");
+  });
+
+  it("keeps an ' at ' that is part of the message, not a stack frame", () => {
+    const log = "[t] [ERROR] MCP Server failed to start Error: bad value at D2L_BASE_URL at file:///x/config.js:10:5";
+    expect(startupFailure(log)).toBe("Error: bad value at D2L_BASE_URL");
+  });
+
+  it("is undefined when the log has no startup error", () => {
+    expect(startupFailure("[t] [INFO] Shared runtime listening")).toBeUndefined();
   });
 });

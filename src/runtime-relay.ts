@@ -6,7 +6,7 @@
 
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
-import { closeSync, mkdirSync, openSync, statSync, truncateSync } from "node:fs";
+import { closeSync, mkdirSync, openSync, readFileSync, statSync, truncateSync } from "node:fs";
 import * as path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
@@ -30,10 +30,17 @@ export interface RelayOptions {
   dir: string;
   /**
    * Start a runtime for `dir` in the background; it publishes its own
-   * address. May resolve with the runtime's exit code if it exits.
+   * address. May resolve with how the runtime exited, if it exits.
    */
-  startRuntime: () => Promise<number | null> | void;
+  startRuntime: () => Promise<RuntimeExit> | void;
   startTimeoutMs?: number;
+}
+
+/** How a runtime started by this chat exited, and why, when its log says. */
+export interface RuntimeExit {
+  code: number | null;
+  /** The runtime's own startup error, from this run's part of runtime.log. */
+  reason?: string;
 }
 
 /** The request never reached a runtime: try again on a fresh one. */
@@ -67,8 +74,8 @@ export async function relaySharedRuntime(
       if (published && published.token !== failed?.token) return published;
       // A runtime that exits with 0 lost the race to another one, which will
       // publish; any other exit before an address appears is a failed start.
-      let exitCode: number | null | undefined;
-      void startRuntime()?.then((code) => { exitCode = code; });
+      let exited: RuntimeExit | undefined;
+      void startRuntime()?.then((exit) => { exited = exit; });
       // The runtime logs its own startup to runtime.log, which the client
       // never sees; these lines put the wait for it in the client's log.
       return startupPhase("starting the shared runtime", async () => {
@@ -77,11 +84,9 @@ export async function relaySharedRuntime(
           await delay(50);
           const started = await readRuntimeAddress(dir);
           if (started && started.token !== failed?.token) return started;
-          if (exitCode !== undefined && exitCode !== 0) {
-            throw new Error(
-              `The shared Brightspace runtime stopped while starting (exit code ${exitCode}). ` +
-              `Its log is ${path.join(dir, RUNTIME_LOG)}.`,
-            );
+          if (exited && exited.code !== 0) {
+            const why = exited.reason ? `: ${exited.reason.replace(/\.$/, "")}` : ` (exit code ${exited.code})`;
+            throw new Error(`The shared Brightspace runtime stopped while starting${why}. Its log is ${path.join(dir, RUNTIME_LOG)}.`);
           }
         }
         throw new Error(
@@ -208,9 +213,9 @@ function splitEvents(buffered: string): { events: string[]; rest: string } {
  * Start `brightspace-mcp-server runtime <dir>` detached, so it outlives the
  * chat that started it and serves every other one. Its log goes to
  * runtime.log in `dir`, since no MCP client is listening to its stderr.
- * Resolves with its exit code if it exits while this chat is still open.
+ * Resolves with how it exited if it exits while this chat is still open.
  */
-export function spawnSharedRuntime(entry: string, dir: string): Promise<number | null> {
+export function spawnSharedRuntime(entry: string, dir: string): Promise<RuntimeExit> {
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   const logFile = path.join(dir, RUNTIME_LOG);
   try {
@@ -219,6 +224,8 @@ export function spawnSharedRuntime(entry: string, dir: string): Promise<number |
     // No log yet.
   }
   const logFd = openSync(logFile, "a", 0o600);
+  // Where this run's lines start, so a failure is read from this run only.
+  const offset = statSync(logFile).size;
   // The runtime outlives the chat that started it, so it runs in its own
   // directory: Windows will not delete or rename a folder that a live process
   // is working in, and that chat's project folder would stay locked until the
@@ -239,8 +246,18 @@ export function spawnSharedRuntime(entry: string, dir: string): Promise<number |
     child.once("error", (error) => log("ERROR", "Could not start the shared runtime", error));
     child.unref();
     return new Promise((resolve) => {
-      child.once("exit", (code) => resolve(code));
-      child.once("error", () => resolve(null));
+      child.once("exit", (code) => {
+        let reason: string | undefined;
+        if (code !== 0) {
+          try {
+            reason = startupFailure(readFileSync(logFile).subarray(offset).toString("utf-8"));
+          } catch {
+            // No log to read; the exit code alone is reported.
+          }
+        }
+        resolve({ code, reason });
+      });
+      child.once("error", () => resolve({ code: null }));
     });
   } finally {
     closeSync(logFd);
@@ -280,4 +297,18 @@ export function stdioLines(
     },
   };
   return transport;
+}
+
+/**
+ * The error a runtime logged when it failed to start ("MCP Server failed to
+ * start", in index.ts), without its stack, from the given part of its log.
+ * The logger has already redacted it, as it does every line.
+ */
+export function startupFailure(logText: string): string | undefined {
+  const marker = "MCP Server failed to start ";
+  const line = logText.split(/\r?\n/).reverse().find((candidate) => candidate.includes(marker));
+  if (!line) return undefined;
+  const error = line.slice(line.indexOf(marker) + marker.length);
+  const message = /^(.*?)\s+at\s+\S*:\d+:\d+/.exec(error)?.[1] ?? /^(.*?)\s+at\s+\S+\s+\(/.exec(error)?.[1] ?? error;
+  return message.trim().slice(0, 300) || undefined;
 }
