@@ -20,7 +20,7 @@ import { authLockPath, publishAutomaticProgress, publishChallenge, relayChalleng
 import type { AuthPhase } from "./auth-phases.js";
 import { AuthCooldown } from "./auth-cooldown.js";
 import { mintAccessToken } from "./token-mint.js";
-import { isMissingBrowserError, PLAYWRIGHT_INSTALL_HINT } from "../utils/browser-install.js";
+import { isMissingBrowserError, browserMissingHint } from "../utils/browser-install.js";
 import { signInCommand } from "../utils/commands.js";
 
 const SILENT_SSO_TIMEOUT_MS = 30000;
@@ -205,7 +205,7 @@ export class BrowserAuth {
         // Keep the remedy attached to the failure. Without this the hint is
         // lost when the auth runner flattens errors into "Authentication failed".
         if (isMissingBrowserError(launchError)) {
-          throw new BrowserAuthError(PLAYWRIGHT_INSTALL_HINT, "browser_missing", launchError as Error);
+          throw new BrowserAuthError(browserMissingHint(), "browser_missing", launchError as Error);
         }
         throw launchError;
       }

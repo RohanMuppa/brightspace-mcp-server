@@ -236,7 +236,7 @@ describe("setup --prepare", () => {
     const h = harness({ browser: { headless: "missing", visible: false }, installOk: false });
     const result = await runPrepare(args("--purdue"), h.deps);
     expect(result.state).toBe("blocked");
-    expect(result.steps.find((s) => s.id === "browser")?.line).toContain("playwright install chromium");
+    expect(result.steps.find((s) => s.id === "browser")?.line).toMatch(/playwright[\\/]cli\.js" install chromium/);
     expect(result.next.command).toBe("npx -y brightspace-mcp-server@latest setup --purdue --prepare");
   });
 

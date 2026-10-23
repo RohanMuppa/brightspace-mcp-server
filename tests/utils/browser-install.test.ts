@@ -6,7 +6,7 @@ import {
   installChromium,
   isMissingBrowserError,
   playwrightCliPath,
-  PLAYWRIGHT_INSTALL_HINT,
+  browserMissingHint,
 } from "../../src/utils/browser-install.js";
 
 /**
@@ -52,14 +52,34 @@ describe("isMissingBrowserError", () => {
   });
 });
 
-describe("PLAYWRIGHT_INSTALL_HINT", () => {
-  it("names the command that actually fixes it", () => {
-    expect(PLAYWRIGHT_INSTALL_HINT).toContain("npx playwright install chromium");
+describe("browserMissingHint", () => {
+  const paths = { execPath: "/usr/local/bin/node", resolveCli: () => "/pkg/node_modules/playwright/cli.js" };
+
+  it("gives the install command of this package's own Playwright, not npx's", () => {
+    const hint = browserMissingHint(paths);
+    expect(hint).toContain('"/usr/local/bin/node" "/pkg/node_modules/playwright/cli.js" install chromium');
+    expect(hint).not.toContain("npx playwright");
   });
 
-  it("explains why the browser is missing, not just what to run", () => {
-    expect(PLAYWRIGHT_INSTALL_HINT).toMatch(/postinstall/i);
-    expect(PLAYWRIGHT_INSTALL_HINT).toMatch(/ignore-scripts|allow-scripts/i);
+  it("explains a postinstall that was skipped", () => {
+    expect(browserMissingHint(paths)).toMatch(/postinstall.*(ignore-scripts|allow-scripts)/i);
+  });
+
+  it("explains a browser removed after installation, such as by disk cleanup", () => {
+    expect(browserMissingHint(paths)).toMatch(/removed after installation.*disk cleanup/i);
+  });
+
+  it("tells the person their saved sign-in is untouched", () => {
+    expect(browserMissingHint(paths)).toMatch(/saved .*sign-in.* (kept|untouched)/i);
+  });
+
+  it("falls back to the package's prepare command when Playwright's CLI cannot be found", () => {
+    const hint = browserMissingHint({ execPath: "/node", resolveCli: () => { throw new Error("Cannot find module"); } });
+    expect(hint).toContain("npx -y brightspace-mcp-server@latest setup --prepare");
+  });
+
+  it("defaults to the running node and this package's Playwright CLI", () => {
+    expect(browserMissingHint()).toContain(`"${process.execPath}" "${playwrightCliPath()}" install chromium`);
   });
 });
 

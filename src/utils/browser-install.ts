@@ -6,7 +6,8 @@
  * This package's postinstall downloads Chromium. npm skips postinstall under
  * `--ignore-scripts` and under the newer allow-scripts policy, both of which
  * are common on global installs, so the package can land without a browser and
- * fail only later, at first sign-in.
+ * fail only later, at first sign-in. Disk cleanup can also delete Playwright's
+ * browser cache long after a good install.
  *
  * Playwright's own message does say what to run, but by the time it has been
  * wrapped in BrowserAuthError and then flattened into a generic
@@ -23,14 +24,7 @@ import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { createRequire } from "node:module";
-import { CLEAR_NPX_CACHE_COMMAND } from "./commands.js";
-
-export const PLAYWRIGHT_INSTALL_HINT =
-  "Chromium is not installed, so sign-in cannot start. Your package manager " +
-  "skipped this package's postinstall script, which is what normally downloads it " +
-  "(common with --ignore-scripts or an allow-scripts policy). Run: " +
-  "npx playwright install chromium" +
-  `. If that does not help, reinstall and clear caches with ${CLEAR_NPX_CACHE_COMMAND}.`;
+import { CLEAR_NPX_CACHE_COMMAND, prepareCommand } from "./commands.js";
 
 /** True when an error is Playwright reporting that no browser binary exists. */
 export function isMissingBrowserError(error: unknown): boolean {
@@ -136,4 +130,31 @@ export function installChromium(options: InstallChromiumOptions = {}): Promise<{
     child.once("close", (code) =>
       resolve(code === 0 ? { ok: true } : { ok: false, message: `Playwright's installer exited with code ${code}.` }));
   });
+}
+
+export interface BrowserMissingHintOptions {
+  execPath?: string;
+  resolveCli?: () => string;
+}
+
+/**
+ * What to tell someone whose sign-in found no browser. The command runs this
+ * package's own Playwright, so it installs the revision this server launches;
+ * it never downloads anything itself, so a short tool call never waits on it.
+ * Without a resolvable Playwright, prepare is the package-scoped repair.
+ */
+export function browserMissingHint(options: BrowserMissingHintOptions = {}): string {
+  const execPath = options.execPath ?? process.execPath;
+  let command: string;
+  try {
+    command = `"${execPath}" "${(options.resolveCli ?? playwrightCliPath)()}" install chromium`;
+  } catch {
+    command = prepareCommand();
+  }
+  return "Chromium is not installed, so sign-in cannot start. Either this package's postinstall " +
+    "script was skipped (common with --ignore-scripts or an allow-scripts policy), or the browser " +
+    "was removed after installation, for example by disk cleanup clearing Playwright's browser cache. " +
+    "Your saved password and sign-in are kept. Install the browser this server needs with: " +
+    command +
+    `. If that does not help, reinstall and clear caches with ${CLEAR_NPX_CACHE_COMMAND}.`;
 }

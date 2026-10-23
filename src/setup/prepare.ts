@@ -20,7 +20,7 @@ import {
   chromiumReady,
   chromiumStatus,
   installChromium,
-  PLAYWRIGHT_INSTALL_HINT,
+  browserMissingHint,
   type ChromiumStatus,
 } from "../utils/browser-install.js";
 import { DOCTOR_COMMAND, prepareCommand, signInCommand } from "../utils/commands.js";
@@ -198,7 +198,7 @@ export async function runPrepare(args: SetupArgs, overrides: Partial<PrepareDeps
       : "Chromium is installed for sign-in"));
   } else {
     steps.push(fail("browser", args.installBrowser
-      ? `Chromium could not be installed. ${PLAYWRIGHT_INSTALL_HINT}`
+      ? `Chromium could not be installed. ${browserMissingHint()}`
       : "Chromium is missing — run prepare again without --no-browser-install"));
   }
 
