@@ -7,15 +7,9 @@
  * https://github.com/rohanmuppa/brightspace-mcp-server
  */
 
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { enableStdoutGuard, log } from "./utils/logger.js";
 import { guardServerProcess } from "./utils/process-guard.js";
 import { loadConfig } from "./utils/config.js";
-import { setActiveShortcuts } from "./utils/two-factor-shortcuts.js";
-import { startUpdateChecks } from "./utils/update-checker.js";
-import { configureDevActivity } from "./utils/dev-activity.js";
-import { createMcpServer, createRuntime } from "./server.js";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
@@ -33,7 +27,7 @@ const PKG_VERSION = (() => {
 
 // ── Subcommand routing (before any MCP initialization) ──────────────
 const subcommand = process.argv[2];
-const COMMANDS = ['setup', 'auth', 'doctor', 'http'];
+const COMMANDS = ['setup', 'auth', 'doctor', 'http', 'runtime'];
 
 // A mistyped command (`htp`) must not quietly start a stdio server that sits
 // waiting on stdin. Flags alone still mean the default stdio server.
@@ -58,27 +52,26 @@ if (subcommand === 'setup') {
 } else if (subcommand === 'doctor') {
   await import('./doctor.js');
 } else {
-  // ── MCP Server (default: stdio; `http`: one shared localhost server) ──
-  const http = subcommand === 'http';
+  // ── MCP Server ──────────────────────────────────────────────────────
+  // default: stdio, relayed to the one shared runtime, started on demand;
+  // `runtime <dir>`: that shared runtime (started by the default command);
+  // `http`: one shared localhost server the user runs and connects to by URL.
+  const mode = subcommand === 'http' ? 'http' : subcommand === 'runtime' ? 'runtime' : 'stdio';
 
   // CRITICAL: Enable stdout guard IMMEDIATELY to prevent corruption of stdio transport
   enableStdoutGuard();
 
   // A stray exception or a closed pipe must not silently drop the client's
   // transport; see guardServerProcess.
-  guardServerProcess(process, !http);
+  guardServerProcess(process, mode === 'stdio');
 
-  /** Set once the HTTP server is listening; shutdown waits on it. */
-  let stopHttp: (() => Promise<void>) | undefined;
+  /** Set once the HTTP server or shared runtime is listening; shutdown waits on it. */
+  let stopServing: (() => Promise<void>) | undefined;
 
   async function main(): Promise<void> {
     try {
       // Load configuration
       const config = await loadConfig();
-      configureDevActivity(config.sessionDir);
-      // Lets the MFA approval message mention the setup options only to users
-      // who have neither turned on. Booleans only; the key is never passed.
-      setActiveShortcuts({ rememberMfa: config.rememberMfa === true, keySaved: Boolean(config.totpUri) });
       log("DEBUG", "Configuration loaded", { sessionDir: config.sessionDir });
 
       log("INFO", "");
@@ -89,18 +82,39 @@ if (subcommand === 'setup') {
       log("INFO", "========================================");
       log("INFO", "");
 
-      // The one stdio client hears the sign-in's progress lines as logging
-      // messages. The HTTP server has many clients and tells none of them;
-      // see createRuntime.
-      let stdioServer: McpServer | undefined;
-      const runtime = createRuntime(config, PKG_VERSION, http ? undefined : (message) => {
-        void stdioServer?.sendLoggingMessage({ level: "info", logger: "brightspace-auth", data: message }).catch(() => {});
-      });
+      if (mode === 'stdio') {
+        // Every MCP client on this computer that launches this command with
+        // the same settings shares one runtime: one sign-in, one cache, one
+        // rate limiter. The first request starts it; it stops when idle.
+        // Each chat runs one of these, so it loads only the relay, never the
+        // tools, API client or browser code the runtime itself needs.
+        const { runtimeDirectory } = await import("./shared-runtime.js");
+        const { relaySharedRuntime, spawnSharedRuntime, stdioLines } = await import("./runtime-relay.js");
+        const dir = runtimeDirectory(config, PKG_VERSION);
+        await relaySharedRuntime(stdioLines(), { dir, startRuntime: () => spawnSharedRuntime(__filename, dir) });
+        log("INFO", "Brightspace MCP Server by Rohan Muppa — running on stdio, sharing one Brightspace runtime with this computer's other MCP clients");
+        log("INFO", "Setup: see README.md for MCP client configuration (Claude Desktop, ChatGPT Desktop, Cursor, etc.)");
+        return;
+      }
 
-      // Check for updates now, then every few hours. A stdio server can stay
-      // alive for days, so a boot-only check would never see a release. The
+      const { configureDevActivity } = await import("./utils/dev-activity.js");
+      const { setActiveShortcuts } = await import("./utils/two-factor-shortcuts.js");
+      const { startUpdateChecks } = await import("./utils/update-checker.js");
+      const { createRuntime } = await import("./server.js");
+      configureDevActivity(config.sessionDir);
+      // Lets the MFA approval message mention the setup options only to users
+      // who have neither turned on. Booleans only; the key is never passed.
+      setActiveShortcuts({ rememberMfa: config.rememberMfa === true, keySaved: Boolean(config.totpUri) });
+
+      // Both serve many clients, so the sign-in's progress lines go to this
+      // process's log and to none of them; see createRuntime. Each call's MFA
+      // challenge still reaches the client that made the call.
+      const runtime = createRuntime(config, PKG_VERSION);
+
+      // Check for updates now, then every few hours. A server can stay alive
+      // for days, so a boot-only check would never see a release. The
       // interval is unref'd and cannot hold the process open.
-      startUpdateChecks({ transport: http ? "http" : "stdio" });
+      startUpdateChecks({ transport: mode === "http" ? "http" : "stdio" });
 
       // Log active course filter config if any filter is set
       if (config.courseFilter.includeCourseIds || config.courseFilter.excludeCourseIds || !config.courseFilter.activeOnly) {
@@ -111,39 +125,44 @@ if (subcommand === 'setup') {
         });
       }
 
-      if (http) {
-        const { resolveHttpPort, resolveHttpToken, startHttpServer } = await import("./http-server.js");
-        const running = await startHttpServer({ runtime, token: resolveHttpToken(), port: resolveHttpPort() });
-        stopHttp = running.close;
-        log("INFO", `Brightspace MCP Server by Rohan Muppa — shared HTTP server listening on ${running.url} (26 tools, 4 prompts registered)`);
-        log("INFO", "Leave this running; every MCP client on this computer connects to that URL. Press Ctrl+C to stop.");
-        return;
+      if (mode === 'runtime') {
+        const { DEFAULT_IDLE_MS, runtimeDirectory, serveSharedRuntime } = await import("./shared-runtime.js");
+        const idleSeconds = Number(process.env.D2L_RUNTIME_IDLE_SECONDS);
+        const idleMs = Number.isFinite(idleSeconds) && idleSeconds > 0 ? idleSeconds * 1000 : DEFAULT_IDLE_MS;
+        const dir = process.argv[3] ?? runtimeDirectory(config, PKG_VERSION);
+        const shared = await serveSharedRuntime(runtime, { dir, idleMs });
+        if (!shared) {
+          log("INFO", "Another shared runtime is already serving these settings; exiting");
+          process.exit(0);
+        }
+        stopServing = shared.stop;
+        log("INFO", `Shared runtime listening on ${shared.address.url} (pid ${process.pid}); stops after ${Math.round(idleMs / 1000)}s idle`);
+        await shared.stopped;
+        process.exit(0);
       }
 
-      // Connect stdio transport
-      stdioServer = createMcpServer(runtime);
-      const transport = new StdioServerTransport();
-      await stdioServer.connect(transport);
-
-      log("INFO", "Brightspace MCP Server by Rohan Muppa — running on stdio (26 tools, 4 prompts registered)");
-      log("INFO", "Setup: see README.md for MCP client configuration (Claude Desktop, ChatGPT Desktop, Cursor, etc.)");
+      const { resolveHttpPort, resolveHttpToken, startHttpServer } = await import("./http-server.js");
+      const running = await startHttpServer({ runtime, token: resolveHttpToken(), port: resolveHttpPort() });
+      stopServing = running.close;
+      log("INFO", `Brightspace MCP Server by Rohan Muppa — shared HTTP server listening on ${running.url} (26 tools, 4 prompts registered)`);
+      log("INFO", "Leave this running; every MCP client on this computer connects to that URL. Press Ctrl+C to stop.");
     } catch (error) {
       log("ERROR", "MCP Server failed to start", error);
       process.exit(1);
     }
   }
 
-  // Graceful shutdown. The HTTP server first answers the calls already in
-  // progress (other chats may be mid-call); a second signal stops at once.
+  // Graceful shutdown. A server shared by other chats first answers the
+  // calls already in progress; a second signal stops at once.
   let shuttingDown = false;
   const shutdown = () => {
-    if (shuttingDown || !stopHttp) {
+    if (shuttingDown || !stopServing) {
       log('INFO', 'Shutting down MCP server');
       process.exit(0);
     }
     shuttingDown = true;
     log('INFO', 'Shutting down MCP server after the calls in progress finish (press Ctrl+C again to stop now)');
-    void stopHttp().then(() => process.exit(0));
+    void stopServing().then(() => process.exit(0));
   };
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
