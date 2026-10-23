@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { hostname, tmpdir } from "node:os";
+import { spawn } from "node:child_process";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
@@ -289,6 +290,27 @@ describe("shared runtime behind the default stdio command", { timeout: 30_000 },
     expect(served).toHaveLength(1);
     const state = JSON.parse(readFileSync(join(dir, "state.json"), "utf-8"));
     expect(state.pid).toBe(process.pid);
+  });
+
+  it("replaces a runtime that died without cleaning up when another process now has its pid", async () => {
+    // After a reboot the dead runtime's state file and owner lock are both
+    // left behind, and its pid can belong to some unrelated live process.
+    const unrelated = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+    try {
+      const pid = unrelated.pid!;
+      mkdirSync(join(dir, "owner.lock"), { recursive: true });
+      writeFileSync(join(dir, "owner.lock", "owner.json"), JSON.stringify({ pid, host: hostname(), nonce: "left-behind", mode: "exclusive" }));
+      writeFileSync(join(dir, "state.json"), JSON.stringify({ pid, url: "http://127.0.0.1:9/mcp", token: "x".repeat(64) }));
+      const client = await chat();
+      expect(await courseNames(client)).toContain("Course 1");
+      expect(served).toHaveLength(1);
+      expect(JSON.parse(readFileSync(join(dir, "state.json"), "utf-8")).pid).toBe(process.pid);
+      // The unrelated process is left alone.
+      expect(unrelated.exitCode).toBeNull();
+      expect(unrelated.signalCode).toBeNull();
+    } finally {
+      unrelated.kill();
+    }
   });
 
   it("answers the call with an error when the runtime cannot be started", async () => {
