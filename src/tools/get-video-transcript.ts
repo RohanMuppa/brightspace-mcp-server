@@ -206,7 +206,7 @@ export function registerGetVideoTranscript(
           resolvedUrl = resolved.url;
         } else {
           return errorResponse(
-            "Provide either videoUrl, or both courseId and topicId to look up the video from course content."
+            "Provide either videoUrl, or both courseId and topicId to look up the video from course content.", "validation"
           );
         }
 
@@ -262,7 +262,7 @@ export function registerGetVideoTranscript(
         if ("failed" in outcome) {
           // The message stays the first block, as it always was; the second
           // carries the same failure in a shape a caller can branch on.
-          const failure = errorResponse(outcome.failed);
+          const failure = errorResponse(outcome.failed, outcome.reason === "access_blocked" ? "providerBlocked" : "unknown");
           failure.content.push({
             type: "text",
             text: JSON.stringify({

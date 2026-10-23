@@ -10,6 +10,8 @@ import { ApiError, RateLimitError, NetworkError } from "../api/index.js";
 import { TokenRefreshError } from "../api/errors.js";
 import { AuthProcessError, type AuthFailureKind } from "../auth/auth-runner.js";
 import { log } from "../utils/logger.js";
+import { recordToolFailure, recordToolFailureKind } from "../utils/dev-activity.js";
+import type { DiagnosticErrorKind } from "../utils/diagnostic-fields.js";
 import { AUTH_COMMAND } from "../utils/commands.js";
 import { getUpdateNotice } from "../utils/update-checker.js";
 import { mfaShortcutTip } from "../utils/two-factor-shortcuts.js";
@@ -72,7 +74,8 @@ export function toolResponseWithNotice(data: unknown, notice: string): CallToolR
 /**
  * Wrap error message as MCP-compatible tool result
  */
-export function errorResponse(message: string): CallToolResult {
+export function errorResponse(message: string, kind?: DiagnosticErrorKind): CallToolResult {
+  if (kind) recordToolFailureKind(kind);
   return {
     content: [
       {
@@ -262,6 +265,7 @@ export function authPendingNotice(error: unknown): string {
  * SECURITY: Never include stack traces, raw API responses, or token values
  */
 export function sanitizeError(error: unknown): CallToolResult {
+  recordToolFailure(error);
   // Log full error to stderr for debugging (token redaction handled by logger)
   log("ERROR", "Tool error", error);
 

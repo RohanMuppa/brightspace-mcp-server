@@ -10,7 +10,9 @@ import { devActivity } from "../../src/utils/dev-activity.js";
 
 vi.mock("node:child_process", () => ({ spawn: vi.fn(), execFileSync: vi.fn() }));
 vi.mock("../../src/utils/logger.js", () => ({ log: vi.fn() }));
-vi.mock("../../src/utils/dev-activity.js", () => ({ devActivity: vi.fn() }));
+vi.mock("../../src/utils/dev-activity.js", async importOriginal => ({
+  ...await importOriginal<typeof import("../../src/utils/dev-activity.js")>(), devActivity: vi.fn(),
+}));
 
 // Every child a test creates, so afterEach can close the ones a test leaves
 // running. A child that never closes keeps its process "exit" listener.

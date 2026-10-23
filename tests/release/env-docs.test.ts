@@ -12,6 +12,8 @@ import { join, resolve } from "node:path";
 const INTERNAL = new Set([
   // Set by the auth CLI on its own re-exec, never by a user.
   "D2L_REEXECED",
+  // Generated per authentication attempt and passed only to its child.
+  "D2L_DEV_RECOVERY_ID",
   // Code constants for the d2lSessionVal / d2lSecureSessionVal cookie names.
   "D2L_SESSION_VAL",
   "D2L_SECURE_SESSION_VAL",

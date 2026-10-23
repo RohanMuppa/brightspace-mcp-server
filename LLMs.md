@@ -391,7 +391,7 @@ Every setting the server reads from the environment. All are optional; `setup` w
 | `D2L_ACTIVE_ONLY` | `true` | Hide inactive enrollments and courses D2L reports as closed (`CanAccess: false`) |
 | `D2L_CURRENT_ONLY` | `false` | Keep only courses whose `Access.StartDate`–`Access.EndDate` window contains now, like Brightspace's "Current Courses" widget. Courses with neither date are dropped |
 | `D2L_NO_UPDATE_CHECK` | unset | Any non-empty value turns off the npm new-version notice and the auth CLI's self-update re-exec |
-| `D2L_DEV_MODE` | unset | Exactly `true` writes a local, content-free activity log ([docs/dev-mode.md](docs/dev-mode.md)) |
+| `D2L_DEV_MODE` | unset | Exactly `true` adds local, content-free activity diagnostics (failure categories, HTTP operations and correlated authentication); normal stderr logging is unchanged ([docs/dev-mode.md](docs/dev-mode.md)) |
 | `D2L_HTTP_TOKEN` | none | `http` only, and required there: the bearer token every request to the shared server must carry. At least 32 characters; never logged ([README](README.md#one-server-for-all-your-chats-optional)) |
 | `D2L_HTTP_PORT` | `18765` | `http` only: the port on 127.0.0.1. `--port` overrides it |
 

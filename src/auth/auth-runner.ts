@@ -5,6 +5,7 @@
  */
 
 import { spawn, execFileSync } from "node:child_process";
+import { AsyncLocalStorage } from "node:async_hooks";
 import * as fs from "node:fs/promises";
 import type { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
@@ -12,7 +13,7 @@ import * as path from "node:path";
 import { log } from "../utils/logger.js";
 import { AuthError } from "../utils/errors.js";
 import { AUTH_COMMAND } from "../utils/commands.js";
-import { devActivity } from "../utils/dev-activity.js";
+import { devActivity, withRecoveryActivity, recoveryActivityEnvironment } from "../utils/dev-activity.js";
 import { parsePhaseMarker } from "./auth-phases.js";
 import { AUTOMATIC_PENDING_MARKER, RELAYED_CHALLENGE_MARKER, RELAYED_STARTING_MARKER, authLockPath, challengeRelayedAt, relayChallenge } from "./mfa-challenge.js";
 import { inspectLockOwner } from "./auth-lock.js";
@@ -676,7 +677,7 @@ export class AuthRunner {
     // prompt starts a fresh attempt rather than inheriting the stale
     // rejection. Ownership is checked because a caller could in principle
     // clear the latch while this flow is still running.
-    const flow = this.spawnAuth().finally(() => {
+    const flow = withRecoveryActivity(() => this.spawnAuth()).finally(() => {
       if (this.inFlight === flow) this.inFlight = null;
     });
     this.inFlight = flow;
@@ -769,7 +770,9 @@ export class AuthRunner {
    */
   private async spawnAuth(): Promise<boolean> {
     const started = Date.now();
-    devActivity("recovery_started");
+    // EventEmitter callbacks may be invoked outside the registering context.
+    const activity = AsyncLocalStorage.bind(devActivity);
+    activity("recovery_started");
     log("INFO", "Auto-launching brightspace-auth...");
 
     return await new Promise<boolean>((resolve, reject) => {
@@ -781,7 +784,7 @@ export class AuthRunner {
           // Background recovery never opens a browser over the user's work
           // unless D2L_HEADLESS explicitly asks for one; the saved
           // visible-browser preference applies to manual sign-in only.
-          env: { D2L_HEADLESS: "true", ...process.env },
+          env: { D2L_HEADLESS: "true", ...process.env, ...recoveryActivityEnvironment() },
           stdio: ["ignore", "pipe", "pipe"],
           detached: process.platform !== "win32",
           windowsHide: true,
@@ -903,7 +906,7 @@ export class AuthRunner {
         // is told the number instead of "still working".
         const firstChallenge = this.pendingChallenge === null || this.pendingChallenge.kind === "automaticPending";
         startWatching();
-        if (firstChallenge) devActivity("mfa_observed", { elapsedMs: Date.now() - started });
+        if (firstChallenge) activity("mfa_observed", { elapsedMs: Date.now() - started });
         if (firstChallenge || matched) {
           this.pendingChallenge = { kind: "mfaPending", numberMatch: matched ?? this.pendingChallenge?.numberMatch };
         }
@@ -939,7 +942,7 @@ export class AuthRunner {
       const finishChild = (error?: AuthProcessError) => {
         if (childFinished) return;
         childFinished = true;
-        devActivity("recovery_finished", { outcome: error ? "error" : "success", reason: error?.kind, elapsedMs: Date.now() - started });
+        activity("recovery_finished", { outcome: error ? "error" : "success", reason: error?.kind, elapsedMs: Date.now() - started });
         clearTimeout(timer);
         if (killTimer) clearTimeout(killTimer);
         if (abandonTimer) clearTimeout(abandonTimer);
@@ -974,7 +977,7 @@ export class AuthRunner {
         const numberMarker = MFA_NUMBER_MARKER.exec(line);
         const phaseMarker = parsePhaseMarker(line);
         if (phaseMarker) {
-          devActivity("auth_phase", phaseMarker);
+          activity("auth_phase", phaseMarker);
         } else if (numberMarker) {
           numberMatch = numberMarker[1];
           publishChallenge(numberMatch);

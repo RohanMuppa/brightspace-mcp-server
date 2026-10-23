@@ -5,6 +5,7 @@
  */
 
 import { log } from "../utils/logger.js";
+import { devActivity } from "../utils/dev-activity.js";
 
 /**
  * The marker in the HTML stub a dead session gets instead of a token payload.
@@ -88,11 +89,15 @@ export async function mintAccessToken({
     body = await response.text();
     location = response.headers?.get("location") ?? null;
   } catch (error) {
+    devActivity("token_mint_response", { outcome: "transport", reason: "transport" });
     const message = error instanceof Error ? error.message : String(error);
     return transport(message);
   }
 
-  if (status >= 500 || status === 429) return transport(`HTTP ${status}`);
+  if (status >= 500 || status === 429) {
+    devActivity("token_mint_response", { status, outcome: "transport", reason: "serviceUnavailable" });
+    return transport(`HTTP ${status}`);
+  }
 
   let payload: { access_token?: unknown } | null = null;
   try {
@@ -103,23 +108,29 @@ export async function mintAccessToken({
 
   if (status === 401 || (!payload && body.includes(EXPIRED_MARKER)) ||
       expiredRedirect(location, url)) {
+    devActivity("token_mint_response", { status, outcome: "sessionExpired",
+      reason: status === 401 ? "http401" : expiredRedirect(location, url) ? "expiredRedirect" : "expiredStub" });
     log("DEBUG", "The token mint answered with the session-expired stub");
     return { ok: false, reason: "sessionExpired" };
   }
 
   if (status < 200 || status >= 300) {
+    devActivity("token_mint_response", { status, outcome: "transport", reason: "transport" });
     return transport(`HTTP ${status}`);
   }
 
   if (!payload) {
+    devActivity("token_mint_response", { status, outcome: "transport", reason: "invalidPayload" });
     return transport("the token mint returned an unparseable body");
   }
 
   const accessToken = payload.access_token;
 
   if (typeof accessToken !== "string" || accessToken.length === 0) {
+    devActivity("token_mint_response", { status, outcome: "transport", reason: "invalidPayload" });
     return transport("the token mint returned no access_token");
   }
 
+  devActivity("token_mint_response", { status, outcome: "success" });
   return { ok: true, accessToken };
 }

@@ -107,7 +107,7 @@ All optional, set in your AI app's MCP `env` config or your shell. The full list
 | `D2L_ACTIVE_ONLY=false` | Include courses whose enrollment has ended |
 | `D2L_CURRENT_ONLY=true` | Only show courses in their current enrollment window, like Brightspace's "Current Courses" widget |
 | `D2L_NO_UPDATE_CHECK=1` | Turn off the new-version notice |
-| `D2L_DEV_MODE=true` | Write a local, content-free log of tool calls and sign-in events, for debugging session problems ([how](docs/dev-mode.md)) |
+| `D2L_DEV_MODE=true` | Add local, content-free diagnostics: tool failure categories, HTTP operations and correlated sign-in stages ([logging modes](docs/dev-mode.md)) |
 
 ## One server for all your chats (optional)
 

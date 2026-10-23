@@ -75,7 +75,7 @@ export function registerGetDropboxUserSubmissions(
           if (error instanceof ApiError && error.status === 403) {
             return errorResponse(
               "Instructor or TA access required for this course. This tool reads another user's " +
-              "dropbox submissions, which Brightspace only grants to course staff."
+              "dropbox submissions, which Brightspace only grants to course staff.", "permissionDenied"
             );
           }
           if (error instanceof ApiError && error.status === 404) {

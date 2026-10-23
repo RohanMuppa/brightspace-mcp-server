@@ -3,6 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { BrowserAuth } from "../../src/auth/browser-auth.js";
+import { devActivity } from "../../src/utils/dev-activity.js";
 import type { OnMfaChallenge } from "../../src/auth/sso-flow.js";
 import type { AppConfig } from "../../src/types/index.js";
 
@@ -18,6 +19,7 @@ const mocks = vi.hoisted(() => ({
   load: vi.fn(), save: vi.fn(), launch: vi.fn(), mint: vi.fn(), login: vi.fn(),
   announce: undefined as OnMfaChallenge | undefined,
 }));
+vi.mock("../../src/utils/dev-activity.js", () => ({ devActivity: vi.fn() }));
 vi.mock("../../src/auth/browser-state-store.js", () => ({
   BrowserStateStore: class { load = mocks.load; save = mocks.save; },
 }));
@@ -81,6 +83,16 @@ describe("BrowserAuth phase timings", () => {
     await auth.authenticate();
 
     expect(phases).toEqual([["launch", 2000], ["token", 700]]);
+    expect(devActivity).toHaveBeenCalledWith("browser_state_loaded", { statePresent: false });
+    expect(devActivity).toHaveBeenCalledWith("mfa_remembered", { rememberMfa: "unknown" });
+  });
+
+  it("reports saved-state read failure before launching a browser without the error detail", async () => {
+    mocks.load.mockRejectedValue(new Error("private-storage-detail"));
+    await expect(newAuth().authenticate()).rejects.toThrow();
+    expect(devActivity).toHaveBeenCalledWith("browser_state_loaded", { outcome: "error" });
+    expect(mocks.launch).not.toHaveBeenCalled();
+    expect(JSON.stringify(vi.mocked(devActivity).mock.calls)).not.toContain("private-");
   });
 
   it("splits a login at the MFA challenge into credentials and approval wait", async () => {
@@ -102,6 +114,39 @@ describe("BrowserAuth phase timings", () => {
     await (auth as any).navigateAndLogin(page);
 
     expect(phases).toEqual([["navigation", 3000], ["silentSso", 4000], ["credentials", 5000], ["approvalWait", 21000]]);
+    expect(devActivity).toHaveBeenCalledWith("silent_sso_finished", { ssoResult: "loginRequired" });
+  });
+
+  it("distinguishes a resumed SSO session from an unavailable identity provider", async () => {
+    const auth = newAuth();
+    page.goto = vi.fn(async () => null);
+    const silent = vi.spyOn(auth as any, "awaitSilentSSO").mockResolvedValue(true);
+    await (auth as any).navigateAndLogin(page);
+    expect(devActivity).toHaveBeenCalledWith("silent_sso_finished", { ssoResult: "resumed" });
+    silent.mockRejectedValue(new Error("private-provider-response"));
+    await expect((auth as any).navigateAndLogin(page)).rejects.toThrow();
+    expect(devActivity).toHaveBeenCalledWith("silent_sso_finished", { ssoResult: "unavailable" });
+    expect(JSON.stringify(vi.mocked(devActivity).mock.calls)).not.toContain("private-");
+  });
+
+  it("records the MFA checkbox outcome without its page or cookies", async () => {
+    const auth = newAuth();
+    (auth as any).ssoFlow.rememberMfaResult = () => ({ outcome: "absent", at: new Date().toISOString() });
+    await (auth as any).saveBrowserState({ cookies: [], origins: [] });
+    expect(devActivity).toHaveBeenCalledWith("mfa_remembered", { rememberMfa: "absent" });
+  });
+
+  it("keeps the MFA observation when the login later fails", async () => {
+    const auth = newAuth();
+    page.goto = vi.fn(async () => null);
+    vi.spyOn(auth as any, "awaitSilentSSO").mockResolvedValue(false);
+    vi.spyOn(auth as any, "hasMfaChallenge").mockResolvedValue(true);
+    vi.spyOn(auth as any, "hasCredentialPrompt").mockResolvedValue(false);
+    (auth as any).ssoFlow.rememberMfaResult = () => ({ outcome: "absent", at: new Date().toISOString() });
+    mocks.login.mockRejectedValue(new Error("private-login-error"));
+    await expect((auth as any).navigateAndLogin(page)).rejects.toThrow();
+    expect(devActivity).toHaveBeenCalledWith("mfa_remembered", { rememberMfa: "absent" });
+    expect(JSON.stringify(vi.mocked(devActivity).mock.calls)).not.toContain("private-");
   });
 
   it("reports a login with no MFA challenge as credentials only", async () => {

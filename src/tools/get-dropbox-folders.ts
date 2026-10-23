@@ -84,7 +84,7 @@ export function registerGetDropboxFolders(
           if (error instanceof ApiError && error.status === 403) {
             return errorResponse(
               "Instructor or TA access required for this course. This tool reads every student's " +
-              "dropbox folder metadata, which Brightspace only grants to course staff."
+              "dropbox folder metadata, which Brightspace only grants to course staff.", "permissionDenied"
             );
           }
           if (error instanceof ApiError && error.status === 404) {

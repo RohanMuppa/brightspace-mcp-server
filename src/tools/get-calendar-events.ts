@@ -46,7 +46,7 @@ export function registerGetCalendarEvents(
           return errorResponse(
             from
               ? `to (${to}) is before from (${from}). Pass a to that is on or after from.`
-              : `to (${to}) is in the past, and from defaults to now. Pass from as well to look at past events.`
+              : `to (${to}) is in the past, and from defaults to now. Pass from as well to look at past events.`, "validation"
           );
         }
 

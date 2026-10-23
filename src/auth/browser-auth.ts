@@ -9,6 +9,7 @@ import { readFileSync, accessSync } from "node:fs";
 import type { AppConfig, TokenData } from "../types/index.js";
 import { BrowserAuthError } from "../utils/errors.js";
 import { log } from "../utils/logger.js";
+import { devActivity } from "../utils/dev-activity.js";
 import { createSSOFlow, UnsupportedAuthenticationError, MfaApprovalError, AutomaticCodeAuthenticationError } from "./sso-flow.js";
 import type { SSOFlow } from "./sso-flow.js";
 import type { RequestMfaCode, OnMfaChallenge } from "./sso-flow.js";
@@ -194,7 +195,13 @@ export class BrowserAuth {
       void browser?.close().catch(() => {});
     };
     try {
-      state = await this.stateStore.load();
+      try {
+        state = await this.stateStore.load();
+      } catch (error) {
+        devActivity("browser_state_loaded", { outcome: "error" });
+        throw error;
+      }
+      devActivity("browser_state_loaded", { statePresent: state !== undefined });
       const { chromium } = await import("playwright");
       const args = ["--disable-blink-features=AutomationControlled"];
       if (BrowserAuth.isWSLOrDocker()) args.push("--no-sandbox", "--disable-setuid-sandbox");
@@ -273,7 +280,9 @@ export class BrowserAuth {
   /** Save the browser state and what Microsoft remembered in it. */
   private async saveBrowserState(state: BrowserState): Promise<void> {
     await this.stateStore.save(state);
-    await recordMicrosoftSession(this.config.sessionDir, state, this.ssoFlow.rememberMfaResult?.())
+    const remembered = this.ssoFlow.rememberMfaResult?.();
+    devActivity("mfa_remembered", { rememberMfa: remembered?.outcome ?? "unknown" });
+    await recordMicrosoftSession(this.config.sessionDir, state, remembered)
       .catch(() => log("WARN", "Could not record the Microsoft sign-in summary; saved sign-in state is unaffected."));
   }
 
@@ -432,10 +441,19 @@ export class BrowserAuth {
     if (response && (response.status() >= 500 || response.status() === 429)) {
       throw new BrowserAuthTransportError(`Brightspace temporarily returned HTTP ${response.status()}. Saved state is preserved.`);
     }
-    if (await this.timed("silentSso", () => this.awaitSilentSSO(page))) {
+    let resumed: boolean;
+    try {
+      resumed = await this.timed("silentSso", () => this.awaitSilentSSO(page));
+    } catch (error) {
+      devActivity("silent_sso_finished", { ssoResult: "unavailable" });
+      throw error;
+    }
+    devActivity("silent_sso_finished", { ssoResult: resumed ? "resumed" : "loginRequired" });
+    if (resumed) {
       log("INFO", "Saved session is active");
       return true;
     }
+    log("INFO", "Saved Microsoft session did not resume; continuing with the sign-in challenge");
     const pendingMfa = await this.hasMfaChallenge(page);
     const credentialPrompt = await this.hasCredentialPrompt(page);
     const hasCredentials = this.ssoFlow.hasCredentials();
@@ -465,6 +483,8 @@ export class BrowserAuth {
     } catch (error) {
       // An automatic code sign-in that failed gets the same cooldown: retrying
       // it in a tight loop would walk Entra's attempt limits down for nothing.
+      const remembered = this.ssoFlow.rememberMfaResult?.();
+      if (remembered) devActivity("mfa_remembered", { rememberMfa: remembered.outcome });
       if (error instanceof MfaApprovalError || error instanceof AutomaticCodeAuthenticationError) {
         await this.cooldown.recordMfaFailure();
       }

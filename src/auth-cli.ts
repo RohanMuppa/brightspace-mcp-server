@@ -65,7 +65,7 @@ async function main(): Promise<void> {
     const config = await loadConfig();
     // The sign-in itself runs here, not in the server, so the dev activity log
     // only sees its MFA events if this process is configured for them too.
-    configureDevActivity(config.sessionDir);
+    configureDevActivity(config.sessionDir, { version: pkg.version, role: "auth" });
     console.error(`\n=== Brightspace Authentication v${pkg.version} ===\n`);
     console.error(config.headless
       ? "Authentication runs headlessly. MFA numbers and code prompts appear here."

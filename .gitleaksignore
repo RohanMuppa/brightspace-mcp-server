@@ -1,0 +1,2 @@
+# Public HTTP operation enum labels, not a Dropbox credential. Exact finding only.
+0003ccc9de1b69e7ce4320f0d96fa83626f3138f:src/utils/diagnostic-fields.ts:dropbox-api-token:30

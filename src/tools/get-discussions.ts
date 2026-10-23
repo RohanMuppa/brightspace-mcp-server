@@ -117,7 +117,7 @@ export function registerGetDiscussions(
         // topicId requires forumId
         if (topicId !== undefined && forumId === undefined) {
           return errorResponse(
-            "topicId requires forumId. Provide both forumId and topicId to get posts for a specific topic."
+            "topicId requires forumId. Provide both forumId and topicId to get posts for a specific topic.", "validation"
           );
         }
 

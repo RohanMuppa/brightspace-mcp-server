@@ -20,6 +20,7 @@ import {
 import { log } from "../utils/logger.js";
 import { AUTH_COMMAND } from "../utils/commands.js";
 import { devActivity } from "../utils/dev-activity.js";
+import { httpOperation } from "../utils/diagnostic-fields.js";
 
 /**
  * True when a followed redirect ended on this Brightspace's sign-in page. A
@@ -320,6 +321,7 @@ export class D2LApiClient {
       const age = this.cache.ageOf(path);
       if (age !== undefined && age <= options.ttl) {
         log("DEBUG", `Cache hit: ${path}`);
+        devActivity("cache_hit", { operation: httpOperation(path) });
         this.statsData.cacheHits++;
         return this.cache.get(path) as T;
       }
@@ -333,6 +335,7 @@ export class D2LApiClient {
     if (pending) {
       this.statsData.coalescedJoins++;
       log("DEBUG", `Coalescing GET onto an in-flight request: ${path}`);
+      devActivity("http_coalesced", { operation: httpOperation(path) });
       return pending;
     }
 
@@ -457,8 +460,8 @@ export class D2LApiClient {
   }
 
   /** Buckets one observed HTTP status into statsData.statusClasses. */
-  private recordStatus(status: number): void {
-    devActivity("http_response", { status });
+  private recordStatus(status: number, path: string, started: number): void {
+    devActivity("http_response", { status, operation: httpOperation(path), elapsedMs: Date.now() - started });
     const classes = this.statsData.statusClasses;
     if (status >= 200 && status < 300) classes["2xx"]++;
     else if (status === 401) classes["401"]++;
@@ -489,9 +492,11 @@ export class D2LApiClient {
    * If successful, returns the fresh token. Otherwise throws 401 ApiError.
    */
   private async tryAutoReauth(path: string, rejectedAccessToken?: string): Promise<TokenData> {
-    devActivity("auth_required");
+    devActivity("auth_required", { reason: rejectedAccessToken ? "rejectedToken" : "missingToken" });
     if (this.onAuthExpired) {
-      log("INFO", "Attempting auto-reauthentication...");
+      log("INFO", rejectedAccessToken
+        ? "Attempting auto-reauthentication: the request token was rejected"
+        : "Attempting auto-reauthentication: no usable saved token");
       const success = await this.onAuthExpired();
       if (success) {
         const freshToken = await this.tokenManager.getToken(rejectedAccessToken);
@@ -514,6 +519,7 @@ export class D2LApiClient {
   ): Promise<T> {
     const url = `${this.baseUrl}${path}`;
     const headers = this.buildAuthHeaders(token);
+    const started = Date.now();
 
     try {
       log("DEBUG", `Requesting GET ${path}`);
@@ -523,7 +529,7 @@ export class D2LApiClient {
         headers,
         signal: AbortSignal.timeout(this.timeoutMs),
       });
-      this.recordStatus(response.status);
+      this.recordStatus(response.status, path, started);
 
       // Preserve cookie material: a 401 only rejects this access token.
       if (response.status === 401) {
@@ -586,6 +592,7 @@ export class D2LApiClient {
       }
 
       // Wrap network/fetch errors
+      devActivity("http_failed", { operation: httpOperation(path), outcome: "transport", elapsedMs: Date.now() - started });
       this.statsData.networkErrors++;
       const message = error instanceof Error ? error.message : String(error);
       throw new NetworkError(
@@ -604,6 +611,7 @@ export class D2LApiClient {
   ): Promise<Response> {
     const url = `${this.baseUrl}${path}`;
     const headers = this.buildAuthHeaders(token);
+    const started = Date.now();
     // A file can take far longer than timeoutMs to arrive. Time out on a
     // stall rather than on total duration, for the headers and the body alike.
     const idle = idleTimeout(this.timeoutMs);
@@ -616,7 +624,7 @@ export class D2LApiClient {
         headers,
         signal: idle.signal,
       });
-      this.recordStatus(response.status);
+      this.recordStatus(response.status, path, started);
 
       // Preserve cookie material for the shared HTTP refresh path.
       if (response.status === 401) {
@@ -685,6 +693,7 @@ export class D2LApiClient {
       }
 
       // Wrap network/fetch errors
+      devActivity("http_failed", { operation: httpOperation(path), outcome: "transport", elapsedMs: Date.now() - started });
       this.statsData.networkErrors++;
       const message = error instanceof Error ? error.message : String(error);
       throw new NetworkError(
