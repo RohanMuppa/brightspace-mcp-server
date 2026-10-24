@@ -8,10 +8,11 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import type { AppConfig } from "../types/index.js";
 import type { D2LApiClient } from "../api/client.js";
-import type { AuthRunner } from "../auth/auth-runner.js";
+import { stopAutomaticSignIn, type AuthRunner } from "../auth/auth-runner.js";
 import type { TokenManager } from "../auth/token-manager.js";
 import { AuthenticationInProgressError } from "../auth/auth-lock.js";
 import { clearSavedSession, RemoveError } from "../auth/logout.js";
+import { authLockPath } from "../auth/mfa-challenge.js";
 import { log } from "../utils/logger.js";
 import { SignOutSchema } from "./schemas.js";
 import { withUpdateNotice } from "./tool-helpers.js";
@@ -23,9 +24,14 @@ const NEXT_SIGN_IN =
   "Because your saved password (and authenticator key, if you saved one) stay on this computer, that next sign-in may just ask you to approve it, or finish on its own if you saved an authenticator key. On a shared computer, also delete the saved \"brightspace-mcp-server\" entries from your computer's password store (Keychain Access on a Mac, Credential Manager on Windows).";
 const LOCAL_ONLY = "This only clears this computer. It does not sign you out of Microsoft or Brightspace on other devices.";
 const IN_PROGRESS =
-  "Not signed out: a sign-in is in progress on this computer, so nothing was deleted. If you don't want to sign in, don't approve the prompt. Tell the user to ask again after the sign-in finishes or times out; do not call sign_out again on your own.";
+  "Not signed out: a sign-in that sign_out can't cancel is in progress on this computer (one started in a terminal with `auth`, for example), so nothing was deleted and it was left running. Tell the user to finish or close that sign-in, then ask again; do not call sign_out again on your own.";
+const CANCELLED =
+  "Cancelled the Brightspace sign-in that was waiting for approval, so the prompt or number from it no longer works.";
+const NEXT_QUESTION =
+  "The next Brightspace question starts a new sign-in right away and sends a new prompt; give the user the new number it returns.";
 const ALREADY_SIGNED_OUT =
   "You're already signed out of Brightspace on this computer; there was no saved session to remove.";
+const NOTHING_SAVED = "There was no saved session to remove.";
 const UNEXPECTED_FAILURE =
   "Could not clear the saved session because of an unexpected error. Nothing more was changed; try again, or run `npx -y brightspace-mcp-server@latest auth --logout` in a terminal to see the details.";
 
@@ -37,28 +43,35 @@ function text(message: string, isError = false): CallToolResult {
 /**
  * Register sign_out tool.
  *
- * The in-chat version of `auth --logout`: it deletes this computer's saved
+ * The in-chat version of `auth --logout`, plus one thing the command does not
+ * do: it first cancels a background sign-in still waiting on MFA, this
+ * server's (AuthRunner.cancel, which answers every call waiting on it) or
+ * another app's on this computer (stopAutomaticSignIn). A user who missed the
+ * prompt otherwise waited out its 5-minute window for a new one. Then it
+ * deletes this computer's saved
  * session for the account the server is configured with (clearSavedSession,
  * under the sign-in lock, so a running sign-in is never disturbed), then
  * empties the API client's response cache and this process's in-memory token
  * so it serves nothing from the session it just signed out of. Answers are
- * plain text, not JSON. A sign-in in progress and an env-supplied credential
- * are ordinary answers rather than errors, so a model has no reason to retry
- * in a loop; only a file that could not be deleted is reported as a failure.
+ * plain text, not JSON. A sign-in it cannot cancel (a person's `auth` run)
+ * and an env-supplied credential are ordinary answers rather than errors, so
+ * a model has no reason to retry in a loop; only a file that could not be
+ * deleted is reported as a failure.
  *
  * authRunner covers the moment between this server spawning a sign-in and
  * that child taking the cross-process lock, when the lock alone still looks
  * free. It is absent when the server uses a pasted credential (no runner).
  *
- * clear is an injection seam: tests point it at a temporary directory.
+ * clear and stopElsewhere are injection seams for tests.
  */
 export function registerSignOut(
   server: McpServer,
   config: AppConfig,
   apiClient: Pick<D2LApiClient, "clearCache">,
   tokenManager: Pick<TokenManager, "forgetSession">,
-  authRunner?: Pick<AuthRunner, "busy">,
-  clear: (sessionDir: string) => Promise<{ removed: string[] }> = clearSavedSession
+  authRunner?: Pick<AuthRunner, "cancel">,
+  clear: (sessionDir: string) => Promise<{ removed: string[] }> = clearSavedSession,
+  stopElsewhere: (sessionDir: string) => Promise<boolean> = (dir) => stopAutomaticSignIn(authLockPath(dir))
 ): void {
   server.registerTool(
     "sign_out",
@@ -66,7 +79,7 @@ export function registerSignOut(
       title: "Sign Out of Brightspace",
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
       description:
-        "Sign out of Brightspace on this computer: delete the saved Brightspace session, so every Brightspace app here must sign in again from scratch on its next question. Keeps the saved password, settings, and authenticator key. Does not sign out of Microsoft or Brightspace on other devices. Call this ONLY when the user explicitly asks to sign out or log out of Brightspace (a shared computer, handing the machine on). Never call it to fix an error, never as part of answering another question, and never to retry or refresh a sign-in.",
+        "Sign out of Brightspace on this computer: cancel any sign-in still waiting for MFA approval here, then delete the saved Brightspace session, so every Brightspace app here must sign in again from scratch on its next question. After a cancel, the next Brightspace call starts a new sign-in right away and sends a new prompt with a new number. Keeps the saved password, settings, and authenticator key. Does not sign out of Microsoft or Brightspace on other devices. Call this ONLY when the user explicitly asks: to sign out or log out of Brightspace (a shared computer, handing the machine on), or to cancel a sign-in that is waiting for approval and get a new prompt now (they missed it, or the number won't work). Never call it on your own to fix an error or as part of answering another question.",
       inputSchema: SignOutSchema,
     },
     async () => {
@@ -75,21 +88,27 @@ export function registerSignOut(
           "Nothing was signed out. This server uses a credential from its configuration (D2L_ACCESS_TOKEN or D2L_SESSION_COOKIE, set in your AI app's client configuration or a .env file), and sign_out cannot remove that. To stop using it, remove that setting and restart the app."
         );
       }
-      if (authRunner?.busy()) return text(IN_PROGRESS);
       const dropInMemory = () => {
         apiClient.clearCache();
         tokenManager.forgetSession();
       };
       try {
+        // This server's own sign-in first: stopping it also answers its waiting calls.
+        let cancelled = (await authRunner?.cancel()) ?? false;
+        if (await stopElsewhere(config.sessionDir)) cancelled = true;
         const { removed } = await clear(config.sessionDir);
         dropInMemory();
-        if (removed.length === 0) return text(ALREADY_SIGNED_OUT);
+        if (removed.length === 0) {
+          return text(cancelled ? [CANCELLED, NOTHING_SAVED, NEXT_QUESTION].join("\n") : ALREADY_SIGNED_OUT);
+        }
         return text(
           [
+            ...(cancelled ? [CANCELLED] : []),
             "Signed out of Brightspace on this computer.",
             `Removed: ${removed.join(", ")}`,
             KEPT,
             OTHER_APPS,
+            ...(cancelled ? [NEXT_QUESTION] : []),
             NEXT_SIGN_IN,
             LOCAL_ONLY,
           ].join("\n")

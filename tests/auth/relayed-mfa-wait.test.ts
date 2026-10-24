@@ -561,7 +561,8 @@ describe("a caller whose sign-in found another process still starting its own", 
     await relayStarting(child);
     await pass(3_000);
 
-    expect(call.error).toMatchObject({ kind: "inProgress", relayed: false });
+    // Cancelled by another app's sign_out, or crashed: over either way.
+    expect(call.error).toMatchObject({ kind: "cancelled", relayed: true });
   });
 
   it("still answers busy when there is no session directory to watch", async () => {

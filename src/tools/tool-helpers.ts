@@ -106,12 +106,41 @@ const MFA_SOLO_CALL =
   "Don't run other Brightspace calls in parallel until the sign-in completes: a batched " +
   "answer can reach the user too late to approve. Make one call at a time.";
 
+/**
+ * What a retry does to the prompt on the user's phone. Without this a model
+ * filled the gap itself, telling a user that a call timing out would make the
+ * server send a new push: the retry joins the background sign-in instead, and
+ * only a sign-in that is cancelled (sign_out) or left alone for ABANDON_MS
+ * (auth-runner.ts) is replaced.
+ */
+const MFA_SAME_PROMPT =
+  "Calling again doesn't send a new prompt, and neither does a call timing out: the sign-in " +
+  "keeps waiting, for up to 5 minutes, on the prompt already sent.";
+
+/** Entra number match only: purdue-sso.ts asks for another request when one expires or is denied. */
+const MFA_NEW_NUMBER =
+  "If Microsoft's number expires or is denied, the sign-in asks Microsoft for a new one by itself " +
+  "and the next answer shows it; always give the user the latest number.";
+
+/**
+ * How to get a new prompt now. A user who got none was left calling into the
+ * same sign-in until its 5-minute window ran out; sign_out cancels it at once.
+ */
+const MFA_FRESH_PROMPT =
+  "If the user got no prompt or wants a new one now, offer to cancel this sign-in; if they agree, " +
+  "call sign_out: it cancels the waiting sign-in (and signs out of Brightspace on this computer), " +
+  "and the next call starts a new sign-in and sends a new prompt right away. Otherwise a sign-in " +
+  "that no call asks about for 45 seconds is stopped, and the next call after that starts a new one.";
+
 const AUTH_FAILURE_GUIDANCE: Record<AuthFailureKind, string> = {
   busy: "A sign-in is already running in another process. Let it finish, then try again, " +
     `or run \`${AUTH_COMMAND}\` in a terminal to take over that background attempt.`,
   cooldown:
-    "Automatic sign-in is paused because an MFA prompt went unanswered. " +
-    `Run \`${AUTH_COMMAND}\` in a terminal (from your home folder) to retry now and see the number to enter.`,
+    "Automatic sign-in is paused because an MFA prompt went unanswered; the pause ends 5 minutes " +
+    "after that prompt was missed. Until then " +
+    "calls send no prompt and return this message; after that, the next call starts a new sign-in " +
+    "and sends a new prompt. " +
+    `To sign in now, run \`${AUTH_COMMAND}\` in a terminal (from your home folder); it shows the number to enter.`,
   unsupported:
     "This login needs something your AI client cannot supply, usually a code from an "
     + "authenticator app. " +
@@ -123,7 +152,8 @@ const AUTH_FAILURE_GUIDANCE: Record<AuthFailureKind, string> = {
     "Brightspace could not be reached to sign in. The saved session was kept. " +
     "Check your connection and try again in a few minutes.",
   timeout:
-    "The sign-in did not finish in time, usually a missed MFA prompt. " +
+    "The sign-in did not finish in time, usually a missed MFA prompt, and has stopped: the prompt it " +
+    "sent no longer works. The next call starts a new sign-in, or says automatic sign-in is paused. " +
     `Run \`${AUTH_COMMAND}\` in a terminal (from your home folder) to complete it with the number visible.`,
   failed:
     `The sign-in did not complete. Run \`${AUTH_COMMAND}\` in a terminal (from your home folder) to see why, ` +
@@ -140,12 +170,16 @@ const AUTH_FAILURE_GUIDANCE: Record<AuthFailureKind, string> = {
     "again right away without waiting for them to " +
     "confirm: each call waits up to 45 seconds for the approval and returns the result as soon " +
     "as the sign-in completes. Keep calling until it succeeds or reports a different error. " +
-    MFA_SOLO_CALL,
+    `${MFA_SAME_PROMPT} ${MFA_FRESH_PROMPT} ${MFA_SOLO_CALL}`,
+  cancelled:
+    "The sign-in was cancelled before it finished (by sign_out, or its process was stopped), so " +
+    "the prompt or number from it no longer works. Calling this tool again starts a new sign-in " +
+    "and sends a new prompt; give the user the new number it returns.",
   inProgress:
     "Brightspace sign-in is still starting in the background (opening the browser and the " +
     "school's login pages). Call this tool again right away: the next call picks up that " +
-    "sign-in and returns the number to approve as soon as one appears. Don't ask the user to " +
-    "do anything yet.",
+    "sign-in and returns the number to approve as soon as one appears. No prompt has been sent " +
+    "yet, and calling again doesn't start a second sign-in. Don't ask the user to do anything yet.",
 };
 
 /**
@@ -191,7 +225,7 @@ function mfaPendingMessage(error: AuthProcessError): string {
       "tool again right away without waiting for them " +
       "to confirm: each call waits up to 45 seconds for the approval and returns the result as " +
       "soon as the sign-in completes. Keep calling until it succeeds or reports a different error. " +
-      MFA_SOLO_CALL;
+      `${MFA_SAME_PROMPT} ${MFA_NEW_NUMBER} ${MFA_FRESH_PROMPT} ${MFA_SOLO_CALL}`;
   }
   return AUTH_FAILURE_GUIDANCE[error.kind];
 }
