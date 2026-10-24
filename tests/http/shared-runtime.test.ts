@@ -166,7 +166,7 @@ describe("shared runtime behind the default stdio command", { timeout: 30_000 },
     expect(served).toHaveLength(1);
   });
 
-  it("stops after it has been idle, and starts again on a later request", { repeats: 15, timeout: 60_000 }, async ({ onTestFailed }) => {
+  it("stops after it has been idle, and starts again on a later request", { repeats: 60, timeout: 60_000 }, async ({ onTestFailed }) => {
     // DIAGNOSTIC (draft PR, not for merging): records where a hang happens.
     const lines: string[] = [];
     const t0 = Date.now();
