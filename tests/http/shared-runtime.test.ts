@@ -167,7 +167,9 @@ describe("shared runtime behind the default stdio command", { timeout: 30_000 },
   });
 
   it("stops after it has been idle, and starts again on a later request", async () => {
-    idleMs = 300;
+    // Long enough that a runtime cannot publish and idle out again between two
+    // of the relay's 50 ms polls on a slow runner, which left it waiting 30 s.
+    idleMs = 1_000;
     const client = await chat();
     expect(await courseNames(client)).toContain("Course 1");
     // A slow machine can idle out between the client's initialize and its
@@ -176,6 +178,8 @@ describe("shared runtime behind the default stdio command", { timeout: 30_000 },
     await first.stopped;
     expect(existsSync(join(dir, "state.json"))).toBe(false);
     const before = served.length;
+    // Only the first runtime needs to idle out.
+    idleMs = 60_000;
 
     expect(await courseNames(client)).toContain("Course 1");
     expect(served.length).toBeGreaterThan(before);
