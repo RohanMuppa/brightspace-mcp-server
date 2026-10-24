@@ -51,8 +51,8 @@ import {
 /**
  * Everything one server process shares across every MCP connection it
  * serves: the saved session, the single in-flight sign-in, and the API
- * client's cache, request coalescing, and rate limiter. Over stdio there is
- * exactly one connection; over HTTP every chat shares this one object, so a
+ * client's cache, request coalescing, and rate limiter. Every chat shares
+ * this one object, so a
  * cold session signs in once for all of them.
  */
 export interface ServerRuntime {
@@ -72,16 +72,11 @@ export interface ServerRuntime {
  * whether or not they ever asked about a course, and a tenant that was
  * briefly unreachable would take the whole server down with it.
  *
- * onAuthProgress receives the sign-in child's progress lines. Over stdio they
- * go to the one client as logging messages; the HTTP server passes none, so
- * they reach only its own log, never a client that did not ask. Each call's
- * MFA challenge still reaches that call's client (see relayMfaChallenges).
+ * The runtime serves many clients, so the sign-in child's progress lines go
+ * only to its own log, never to a client that did not ask. Each call's MFA
+ * challenge still reaches that call's client (see relayMfaChallenges).
  */
-export function createRuntime(
-  config: AppConfig,
-  version: string,
-  onAuthProgress?: (line: string) => void,
-): ServerRuntime {
+export function createRuntime(config: AppConfig, version: string): ServerRuntime {
   const tokenManager = new TokenManager({
     sessionDir: config.sessionDir,
     baseUrl: config.baseUrl,
@@ -99,7 +94,7 @@ export function createRuntime(
   const envAuthActive = Boolean(config.envAccessToken || config.envSessionCookie);
   const authRunner = envAuthActive
     ? undefined
-    : new AuthRunner({ sessionDir: config.sessionDir, onProgress: onAuthProgress });
+    : new AuthRunner({ sessionDir: config.sessionDir });
 
   // currentMfaAnnouncer() is read inside the tool call that hit the expired
   // session, so the challenge is announced to that call's client only.

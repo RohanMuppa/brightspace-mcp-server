@@ -10,7 +10,9 @@ import { devActivity } from "../../src/utils/dev-activity.js";
 
 vi.mock("node:child_process", () => ({ spawn: vi.fn(), execFileSync: vi.fn() }));
 vi.mock("../../src/utils/logger.js", () => ({ log: vi.fn() }));
-vi.mock("../../src/utils/dev-activity.js", () => ({ devActivity: vi.fn() }));
+vi.mock("../../src/utils/dev-activity.js", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../../src/utils/dev-activity.js")>(), devActivity: vi.fn(),
+}));
 
 // Every child a test creates, so afterEach can close the ones a test leaves
 // running. A child that never closes keeps its process "exit" listener.
@@ -544,6 +546,44 @@ describe("AuthRunner", () => {
     });
   });
 
+  describe("recovery correlation", () => {
+    it("joins each of two interleaved recoveries' child to exactly one parent", async () => {
+      const firstChild = child;
+      const secondChild = mockChild();
+      vi.mocked(spawn).mockReturnValueOnce(firstChild as never).mockReturnValueOnce(secondChild as never);
+      const first = new AuthRunner().run();
+      const second = new AuthRunner().run();
+      secondChild.stdout.write("MFA_NUMBER:11\n");
+      firstChild.stdout.write("MFA_NUMBER:22\n");
+      await expect(first).rejects.toMatchObject({ kind: "mfaPending" });
+      await expect(second).rejects.toMatchObject({ kind: "mfaPending" });
+      firstChild.emit("close", 0);
+      secondChild.emit("close", 0);
+      await vi.advanceTimersByTimeAsync(0);
+
+      const childIds = vi.mocked(spawn).mock.calls.map(([, , options]) => options?.env?.D2L_RECOVERY_ID);
+      expect(childIds).toHaveLength(2);
+      expect(childIds[0]).toMatch(/^[0-9a-f-]{36}$/);
+      expect(childIds[1]).toMatch(/^[0-9a-f-]{36}$/);
+      expect(childIds[0]).not.toBe(childIds[1]);
+      for (const recoveryId of childIds) {
+        const parentEvents = vi.mocked(devActivity).mock.calls
+          .filter(([, fields]) => fields?.recoveryId === recoveryId).map(([event]) => event);
+        expect(parentEvents).toEqual(["recovery_started", "mfa_observed", "recovery_finished"]);
+      }
+    });
+
+    it("gives the child a recovery id it cannot inherit from the parent's environment", () => {
+      process.env.D2L_RECOVERY_ID = "00000000-0000-4000-8000-000000000000";
+      try {
+        void new AuthRunner().run().catch(() => {});
+        expect(vi.mocked(spawn).mock.calls[0][2]?.env?.D2L_RECOVERY_ID).not.toBe("00000000-0000-4000-8000-000000000000");
+      } finally {
+        delete process.env.D2L_RECOVERY_ID;
+      }
+    });
+  });
+
   describe("sign-in phase timings", () => {
     it("records each phase the child reports as a dev activity event, not a log line", async () => {
       const result = new AuthRunner().run();
@@ -551,9 +591,10 @@ describe("AuthRunner", () => {
       child.emit("close", 0);
       await result;
 
+      const recoveryId = vi.mocked(spawn).mock.calls[0][2]?.env?.D2L_RECOVERY_ID;
       expect(vi.mocked(devActivity).mock.calls.filter(([event]) => event === "auth_phase")).toEqual([
-        ["auth_phase", { phase: "launch", elapsedMs: 1234 }],
-        ["auth_phase", { phase: "approvalWait", elapsedMs: 20500 }],
+        ["auth_phase", { phase: "launch", elapsedMs: 1234, recoveryId }],
+        ["auth_phase", { phase: "approvalWait", elapsedMs: 20500, recoveryId }],
       ]);
     });
 

@@ -52,7 +52,9 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 });
 vi.mock("node:child_process", () => ({ spawn: vi.fn(), execFileSync: vi.fn() }));
 vi.mock("../../src/utils/logger.js", () => ({ log: vi.fn() }));
-vi.mock("../../src/utils/dev-activity.js", () => ({ devActivity: vi.fn() }));
+vi.mock("../../src/utils/dev-activity.js", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../../src/utils/dev-activity.js")>(), devActivity: vi.fn(),
+}));
 
 const children: EventEmitter[] = [];
 

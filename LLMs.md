@@ -270,7 +270,9 @@ While a sign-in is still being worked on in the background, `get_assignments`, `
 
 ```
 src/
-  index.ts                  Entrypoint: subcommand routing, stdio server (default) or `http`
+  index.ts                  Entrypoint: subcommand routing, stdio relay (default), `runtime`, or `http`
+  runtime-relay.ts          Default stdio command: relays each message to the shared runtime, starting one (detached `runtime <dir>`) when none answers
+  shared-runtime.ts         `runtime`: the one shared runtime per settings+version (owner lock, 0600 state file with port and random token, idle stop)
   server.ts                 Shared runtime (session, sign-in, API client) and the McpServer factory that registers every tool and prompt
   http-server.ts            `http`: stateless Streamable HTTP on 127.0.0.1 with Host/Origin, bearer token, and body checks
   setup.ts                  `setup`: interactive wizard and `--sign-in`; routes `--prepare`
@@ -361,7 +363,8 @@ src/
 | `npx -y brightspace-mcp-server@latest auth --logout` | Delete this computer's saved session so the next call does a full sign-in. Keeps the password, `config.json`, and credential-store entries. Local only |
 | `npx -y brightspace-mcp-server@latest doctor` | Diagnose a broken setup — Node version, Chromium, saved config, credential store, Brightspace reachability, saved sign-in, a real course-list call, and installed version, each as a ✓/✗ line with one plain-English next step, then one informational line on the 2FA shortcuts (remember this device, saved authenticator key). `--json` prints `{checks, allOk, notes}` instead |
 | `npx -y brightspace-mcp-server@latest` | Run the MCP server (registered in AI client config) |
-| `npx -y brightspace-mcp-server@latest http` | Opt-in: one shared Streamable HTTP server at `http://127.0.0.1:18765/mcp` for every client on the computer, instead of one stdio process per chat. Needs `D2L_HTTP_TOKEN`; takes `--port`. The user starts it and keeps it running; clients connect by URL and never start it, and a second copy on a taken port exits with an error. Ctrl+C lets calls in progress finish. Setup steps: [README](README.md#one-server-for-all-your-chats-optional) |
+| `npx -y brightspace-mcp-server@latest` (default) | stdio relay. The first message starts (or reuses) one detached shared runtime per account, settings, and package version, under `<session dir>/shared-runtime/<hash>/` (`state.json`, `runtime.log`); every client sharing those settings shares its sign-in, session, and cache. Concurrent starts converge on one; it stops after `D2L_RUNTIME_IDLE_SECONDS` (default 600) with no request in progress and the next request starts it again. Sign-in progress lines go to `runtime.log`; each call's MFA challenge still reaches the calling client |
+| `npx -y brightspace-mcp-server@latest http` | Opt-in: one shared Streamable HTTP server at `http://127.0.0.1:18765/mcp` for every client on the computer, instead of the automatic shared runtime. Needs `D2L_HTTP_TOKEN`; takes `--port`. The user starts it and keeps it running; clients connect by URL and never start it, and a second copy on a taken port exits with an error. Ctrl+C lets calls in progress finish. Setup steps: [README](README.md#running-the-shared-server-yourself-optional) |
 | `npm run build` | Compile TypeScript to `build/` |
 | `npm run dev` | Watch-mode TypeScript compile |
 | `npm run test` | Run Vitest suite |
@@ -392,7 +395,8 @@ Every setting the server reads from the environment. All are optional; `setup` w
 | `D2L_CURRENT_ONLY` | `false` | Keep only courses whose `Access.StartDate`–`Access.EndDate` window contains now, like Brightspace's "Current Courses" widget. Courses with neither date are dropped |
 | `D2L_NO_UPDATE_CHECK` | unset | Any non-empty value turns off the npm new-version notice and the auth CLI's self-update re-exec |
 | `D2L_DEV_MODE` | unset | Exactly `true` writes a local, content-free activity log ([docs/dev-mode.md](docs/dev-mode.md)) |
-| `D2L_HTTP_TOKEN` | none | `http` only, and required there: the bearer token every request to the shared server must carry. At least 32 characters; never logged ([README](README.md#one-server-for-all-your-chats-optional)) |
+| `D2L_HTTP_TOKEN` | none | `http` only, and required there: the bearer token every request to the shared server must carry. At least 32 characters; never logged ([README](README.md#running-the-shared-server-yourself-optional)) |
+| `D2L_RUNTIME_IDLE_SECONDS` | `600` | Default command only: seconds the shared runtime waits with no request in progress before stopping |
 | `D2L_HTTP_PORT` | `18765` | `http` only: the port on 127.0.0.1. `--port` overrides it |
 
 ## Storage locations
