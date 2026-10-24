@@ -195,20 +195,20 @@ export function registerGetSyllabus(
         if (downloadPath !== undefined) {
           if (!path.isAbsolute(downloadPath)) {
             return errorResponse(
-              "Download path must be an absolute path (e.g., /Users/username/Downloads on Mac or C:\\Users\\username\\Downloads on Windows)"
+              "Download path must be an absolute path (e.g., /Users/username/Downloads on Mac or C:\\Users\\username\\Downloads on Windows)", "invalidInput"
             );
           }
           try {
             const stats = await fs.stat(downloadPath);
             if (!stats.isDirectory()) {
               return errorResponse(
-                `Download path is not a directory: ${downloadPath}`
+                `Download path is not a directory: ${downloadPath}`, "destination"
               );
             }
           } catch (error: any) {
             if (error?.code === "ENOENT") {
               return errorResponse(
-                `Download directory does not exist: ${downloadPath}`
+                `Download directory does not exist: ${downloadPath}`, "destination"
               );
             }
             throw error;
@@ -263,7 +263,7 @@ export function registerGetSyllabus(
             );
             if (contentLength > MAX_FILE_SIZE) {
               return errorResponse(
-                `Attachment too large (${Math.round(contentLength / 1024 / 1024)}MB). Maximum allowed: ${MAX_FILE_SIZE / 1024 / 1024}MB`
+                `Attachment too large (${Math.round(contentLength / 1024 / 1024)}MB). Maximum allowed: ${MAX_FILE_SIZE / 1024 / 1024}MB`, "rejectedFile"
               );
             }
 
@@ -279,7 +279,7 @@ export function registerGetSyllabus(
             } catch (error) {
               if (error instanceof DownloadError && error.kind === "tooLarge") {
                 return errorResponse(
-                  `Attachment too large (over ${MAX_FILE_SIZE / 1024 / 1024}MB). Maximum allowed: ${MAX_FILE_SIZE / 1024 / 1024}MB`
+                  `Attachment too large (over ${MAX_FILE_SIZE / 1024 / 1024}MB). Maximum allowed: ${MAX_FILE_SIZE / 1024 / 1024}MB`, "rejectedFile"
                 );
               }
               throw error;

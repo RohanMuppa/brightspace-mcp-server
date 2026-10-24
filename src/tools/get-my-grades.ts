@@ -176,7 +176,7 @@ export function registerGetMyGrades(
               log("INFO", `get_my_grades: 403 for course ${courseId} - grade API access restricted`);
               return errorResponse(
                 "Your institution restricts grade API access for this course. " +
-                `View your grades directly in Brightspace: ${url}`
+                `View your grades directly in Brightspace: ${url}`, "permission"
               );
             }
             // A pending sign-in is not an empty gradebook: the route never

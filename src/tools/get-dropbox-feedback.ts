@@ -69,7 +69,7 @@ export function registerGetDropboxFeedback(
         // lets a student read once it is released.
         const own = parsed.entityId === undefined;
         if (own && parsed.entityType === "group") {
-          return errorResponse("entityId is required when entityType is group.");
+          return errorResponse("entityId is required when entityType is group.", "invalidInput");
         }
         const entityType = parsed.entityType ?? "user";
         const entityId = parsed.entityId ?? await fetchCurrentUserId(apiClient);
@@ -89,7 +89,7 @@ export function registerGetDropboxFeedback(
                 ? "Brightspace refused this read of your own feedback; it has not been released yet, or " +
                   "this course does not expose it through the API. Check the assignment in Brightspace."
                 : "Instructor or TA access required for this course. Reading another user's grading " +
-                  "feedback is only granted to course staff; to read your own, omit entityType and entityId."
+                  "feedback is only granted to course staff; to read your own, omit entityType and entityId.", "permission"
             );
           }
           if (error instanceof ApiError && error.status === 404) {
