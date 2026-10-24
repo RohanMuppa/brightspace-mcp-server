@@ -34,14 +34,14 @@ export interface RuntimeAddress {
  * runtime only when they would have built the same one themselves, and an
  * upgraded package starts its own instead of talking to old code.
  *
- * The saved password and authenticator key count only by their presence (the
- * runtime reads nothing else of them; sign-in reads them itself), so neither
- * reaches the hash. A pasted access token or cookie is a high-entropy secret
- * and is hashed like any other setting.
+ * The saved password and authenticator key play no part: the relay that picks
+ * the runtime loads its settings without reading the credential store (see
+ * loadConfig), and every sign-in reads them itself. A pasted access token or
+ * cookie is a high-entropy secret and is hashed like any other setting.
  */
 export function runtimeDirectory(config: AppConfig, version: string): string {
-  const { password, totpUri, legacyBrowserStateMigrated: _perRun, ...settings } = config;
-  const identity = JSON.stringify({ version, settings, password: password !== undefined, totpUri: totpUri !== undefined });
+  const { password: _password, totpUri: _totpUri, legacyBrowserStateMigrated: _perRun, ...settings } = config;
+  const identity = JSON.stringify({ version, settings });
   const key = createHash("sha256").update(identity).digest("hex").slice(0, 32);
   return path.join(config.sessionDir, "shared-runtime", key);
 }
