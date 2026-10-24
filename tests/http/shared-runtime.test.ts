@@ -166,24 +166,37 @@ describe("shared runtime behind the default stdio command", { timeout: 30_000 },
     expect(served).toHaveLength(1);
   });
 
-  it("stops after it has been idle, and starts again on a later request", async () => {
-    // Long enough that a runtime cannot publish and idle out again between two
-    // of the relay's 50 ms polls on a slow runner, which left it waiting 30 s.
-    idleMs = 1_000;
-    const client = await chat();
-    expect(await courseNames(client)).toContain("Course 1");
-    // A slow machine can idle out between the client's initialize and its
-    // call, so count starts from the runtime that answered, not from one.
-    const first = served[served.length - 1];
-    await first.stopped;
-    expect(existsSync(join(dir, "state.json"))).toBe(false);
-    const before = served.length;
-    // Only the first runtime needs to idle out.
-    idleMs = 60_000;
-
-    expect(await courseNames(client)).toContain("Course 1");
-    expect(served.length).toBeGreaterThan(before);
-    expect(served[served.length - 1]).not.toBe(first);
+  it("stops after it has been idle, and starts again on a later request", { repeats: 15, timeout: 60_000 }, async ({ onTestFailed }) => {
+    // DIAGNOSTIC (draft PR, not for merging): records where a hang happens.
+    const lines: string[] = [];
+    const t0 = Date.now();
+    const note = (text: string) => lines.push(`+${Date.now() - t0}ms ${text}`);
+    const spy = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => { note("log: " + args.map(String).join(" ").slice(0, 200)); });
+    onTestFailed(() => { spy.mockRestore(); console.error("DIAG timeline:\n" + lines.join("\n")); });
+    const step = async <T,>(name: string, work: Promise<T>): Promise<T> => {
+      note(`start ${name} (served=${served.length}, state=${existsSync(join(dir, "state.json"))})`);
+      const result = await work;
+      note(`done ${name}`);
+      return result;
+    };
+    try {
+      idleMs = 1_000;
+      const client = await step("chat()", chat());
+      expect(await step("first call", courseNames(client))).toContain("Course 1");
+      const first = served[served.length - 1];
+      void first.stopped.then(() => note("first.stopped resolved"));
+      await step("first.stopped", first.stopped);
+      expect(existsSync(join(dir, "state.json"))).toBe(false);
+      const before = served.length;
+      idleMs = 60_000;
+      expect(await step("second call", courseNames(client))).toContain("Course 1");
+      expect(served.length).toBeGreaterThan(before);
+      expect(served[served.length - 1]).not.toBe(first);
+    } finally {
+      spy.mockRestore();
+      await Promise.all(clients.splice(0).map((c) => c.close().catch(() => {})));
+      await Promise.all(served.splice(0).map((runtime) => runtime.stop()));
+    }
   });
 
   it("is not stopped for idleness while a call is still in progress", async () => {
