@@ -87,14 +87,16 @@ describe("dev activity", () => {
         sanitizeError(z.object({ id: z.number() }).safeParse({ id: "private-input" }).error));
       s.registerTool("offline", {}, async () => { throw new NetworkError("private-host secret-token"); });
       s.registerTool("handwritten", {}, async () => errorResponse("private-path /Users/x"));
+      s.registerTool("noFolder", {}, async () => errorResponse("Download directory does not exist: /Users/private-dir", "destination"));
       s.registerTool("ok", {}, async () => ({ content: [] }));
     });
-    for (const name of ["invalid", "offline", "handwritten", "ok"]) await c.callTool({ name });
+    for (const name of ["invalid", "offline", "handwritten", "noFolder", "ok"]) await c.callTool({ name });
     const finished = records().filter(r => r.event === "tool_finished");
     expect(finished.map(r => [r.tool, r.outcome, r.errorKind])).toEqual([
       ["invalid", "error", "invalidInput"],
       ["offline", "error", "transport"],
       ["handwritten", "error", "unknown"],
+      ["noFolder", "error", "destination"],
       ["ok", "success", undefined],
     ]);
     expect(JSON.stringify(records())).not.toMatch(/private-|secret-token|Users/);

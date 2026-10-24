@@ -18,7 +18,7 @@ import {
   isSafeDetail,
   type DownloadFailureKind,
 } from "../utils/download-errors.js";
-import { withErrorKind } from "../utils/error-kind.js";
+import { tagErrorKind, withErrorKind, type ErrorKind } from "../utils/error-kind.js";
 
 /**
  * Append an available-update notice to an already-built content array and
@@ -73,8 +73,8 @@ export function toolResponseWithNotice(data: unknown, notice: string): CallToolR
 /**
  * Wrap error message as MCP-compatible tool result
  */
-export function errorResponse(message: string): CallToolResult {
-  return {
+export function errorResponse(message: string, kind?: ErrorKind): CallToolResult {
+  const result: CallToolResult = {
     content: [
       {
         type: "text",
@@ -83,6 +83,8 @@ export function errorResponse(message: string): CallToolResult {
     ],
     isError: true,
   };
+  // The dev activity log records the category, never the message.
+  return kind ? tagErrorKind(result, kind) : result;
 }
 
 /**

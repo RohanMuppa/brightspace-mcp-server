@@ -14,8 +14,8 @@ import { ApiError, NetworkError } from "../api/errors.js";
 import { AuthProcessError } from "../auth/auth-runner.js";
 import { DownloadError } from "./download-errors.js";
 
-export const ERROR_KINDS = ["invalidInput", "notFound", "permission", "auth", "rateLimited", "http",
-  "transport", "unsupportedFormat", "rejectedFile", "unknown"] as const;
+export const ERROR_KINDS = ["invalidInput", "destination", "notFound", "permission", "auth", "rateLimited", "http",
+  "transport", "providerBlocked", "unsupportedFormat", "rejectedFile", "unknown"] as const;
 export type ErrorKind = typeof ERROR_KINDS[number];
 
 const API_STATUS_KINDS: Partial<Record<number, ErrorKind>> = {
@@ -37,7 +37,12 @@ const resultKinds = new WeakMap<object, ErrorKind>();
 
 /** Remembers which error a returned tool result describes. */
 export function withErrorKind<T extends object>(result: T, error: unknown): T {
-  resultKinds.set(result, errorKind(error));
+  return tagErrorKind(result, errorKind(error));
+}
+
+/** Records the category of an error result a tool built itself. */
+export function tagErrorKind<T extends object>(result: T, kind: ErrorKind): T {
+  resultKinds.set(result, kind);
   return result;
 }
 
