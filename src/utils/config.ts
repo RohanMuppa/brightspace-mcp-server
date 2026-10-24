@@ -90,7 +90,18 @@ export function resolveSessionLocation(): { sessionDir: string; sessionRoot: str
   return { sessionDir, sessionRoot };
 }
 
-export async function loadConfig(): Promise<AppConfig> {
+export interface LoadConfigOptions {
+  /**
+   * False leaves the OS credential store alone: the saved password and
+   * authenticator key come back unset. The relay in each chat needs only the
+   * settings that pick its shared runtime, and a slow credential store would
+   * otherwise be waited on twice before a chat's first answer, once here and
+   * again in the runtime. The runtime, and every sign-in, read them themselves.
+   */
+  credentials?: boolean;
+}
+
+export async function loadConfig({ credentials = true }: LoadConfigOptions = {}): Promise<AppConfig> {
   dotenv.config({ quiet: true });
 
   const store = readConfigStore();
@@ -149,7 +160,7 @@ export async function loadConfig(): Promise<AppConfig> {
   const envSessionCookie = rawSessionCookie ? parseSessionCookieEnv(rawSessionCookie) : undefined;
 
   const { baseUrl, username, sessionRoot, sessionDir } = resolveAccountLocation(store);
-  const password = passwordless
+  const password = passwordless || !credentials
     ? undefined
     : await startupPhase("reading the saved password from the OS credential store", () => resolveStoredPassword(baseUrl, username, store));
   // Opt-in: only an enrollment the user deliberately saved makes the Entra
@@ -165,7 +176,7 @@ export async function loadConfig(): Promise<AppConfig> {
     // an optional extra, and resolveStoredPassword above is already the place
     // that reports a locked or missing store, loudly, for the credential the
     // server genuinely cannot work without.
-    : username
+    : username && credentials
       ? (await startupPhase("reading the saved authenticator key from the OS credential store", () => getStoredTotpUri(baseUrl, username).catch(() => null))) ?? undefined
       : undefined;
   const legacyMigration = sessionDir !== sessionRoot ? await migrateLegacyState(sessionRoot) : undefined;

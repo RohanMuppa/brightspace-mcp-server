@@ -30,13 +30,16 @@ describe.skipIf(!existsSync(entry))("brightspace-mcp-server default command (rea
 
   afterEach(async () => {
     await Promise.all(clients.splice(0).map((client) => client.close().catch(() => {})));
+    // A runtime that lost the start race can still take over once the winner
+    // idles out on a slow runner, so stop whatever is published as well.
+    for (const home of homes) pids.push(...runtimeStates(home).map((state) => state.pid));
     for (const pid of pids.splice(0)) {
       if (alive(pid)) process.kill(pid);
       await vi.waitFor(() => expect(alive(pid)).toBe(false), { timeout: 10_000 });
     }
-    // A relay that was just closed can take a moment to exit on Windows, and
-    // until it does its working directory cannot be removed.
-    for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
+    // A relay that was just closed, or a runtime still starting up, can take a
+    // moment to exit on Windows, and until it does its folder cannot be removed.
+    for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true, maxRetries: 60, retryDelay: 250 });
   });
 
   function runtimeStates(home: string): Array<{ pid: number }> {

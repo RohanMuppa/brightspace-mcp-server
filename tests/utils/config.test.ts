@@ -63,6 +63,14 @@ describe("resolved authentication configuration", () => {
     printed.mockRestore();
   });
 
+  it("leaves the credential store alone when asked to, for the relay in each chat", async () => {
+    fake.store = { baseUrl: "https://school.example", username: "alice" };
+    const config = await loadConfig({ credentials: false });
+    expect(fake.password).not.toHaveBeenCalled();
+    expect(fake.totp).not.toHaveBeenCalled();
+    expect(config).toMatchObject({ baseUrl: "https://school.example", username: "alice", password: undefined, totpUri: undefined });
+  });
+
   it("uses the setup MFA preference when no environment override is present", async () => {
     fake.store = { baseUrl: "https://school.example", username: "alice", headless: false };
     expect(await loadConfig()).toMatchObject({ headless: false });
