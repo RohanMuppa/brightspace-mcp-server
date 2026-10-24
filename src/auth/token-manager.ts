@@ -7,6 +7,7 @@
 import type { TokenData } from "../types/index.js";
 import { SessionStore } from "./session-store.js";
 import { mintAccessToken } from "./token-mint.js";
+import { fetchXsrfToken } from "./xsrf-fetch.js";
 import { log } from "../utils/logger.js";
 import { TokenRefreshError } from "../api/errors.js";
 import { devActivity } from "../utils/dev-activity.js";
@@ -20,6 +21,9 @@ const REFRESH_BUFFER_MS = 5 * 60 * 1000; // 5 minutes
 /** Matches the tokenTtl default in the app config. */
 const DEFAULT_TOKEN_TTL_SECONDS = 3600;
 
+/** How long a D2L_SESSION_COOKIE mint that failed in transit waits before trying again. */
+const ENV_MINT_RETRY_MS = 60 * 1000;
+
 export interface TokenManagerOptions {
   sessionDir?: string;
   /** Tenant base URL. Without it the cookie mint is not attempted. */
@@ -28,6 +32,8 @@ export interface TokenManagerOptions {
   tokenTtl?: number;
   /** Injection seam for tests. */
   mint?: typeof mintAccessToken;
+  /** Injection seam for tests. */
+  fetchXsrf?: typeof fetchXsrfToken;
   /** Persistence injection keeps unit tests independent of native credentials. */
   sessionStore?: Pick<SessionStore, "load" | "save" | "clear" | "saveIfCurrent" | "clearIfCurrent"> & Partial<Pick<SessionStore, "fingerprint">>;
   /**
@@ -40,11 +46,18 @@ export interface TokenManagerOptions {
    * Normalized "d2lSessionVal=...; d2lSecureSessionVal=..." from
    * D2L_SESSION_COOKIE. When set (and envAccessToken is not), getToken()
    * returns it wrapped in the client's existing "cookie:" passthrough auth
-   * (see D2LApiClient.buildAuthHeaders) rather than minting a Bearer JWT: the
-   * mint endpoint requires a CSRF token that only a live browser page can
-   * produce, which a pasted cookie never carries.
+   * (see D2LApiClient.buildAuthHeaders), unless mintEnvCookie trades it for a
+   * Bearer JWT first.
    */
   envSessionCookie?: string;
+  /**
+   * Trade envSessionCookie for a Bearer JWT over plain HTTP: read the XSRF
+   * token off /d2l/home with the cookie, then call the token mint. The JWT is
+   * held in memory only and re-minted when it expires. Any failure falls back
+   * to the cookie passthrough. Needs baseUrl. Off by default so read-only
+   * callers (doctor, setup --prepare) make no extra requests.
+   */
+  mintEnvCookie?: boolean;
 }
 
 /**
@@ -57,8 +70,18 @@ export class TokenManager {
   private readonly baseUrl?: string;
   private readonly tokenTtl: number;
   private readonly mint: typeof mintAccessToken;
+  private readonly fetchXsrf: typeof fetchXsrfToken;
   private readonly envAccessToken?: string;
   private readonly envSessionCookie?: string;
+  private readonly mintEnvCookie: boolean;
+  /** The Bearer JWT minted from envSessionCookie, memory only. */
+  private envMinted: TokenData | null = null;
+  /** The XSRF token that last minted successfully, reused for the hourly re-mint. */
+  private envCsrfToken: string | undefined;
+  /** Set once the env cookie is known not to mint, so later calls skip straight to the passthrough. */
+  private envMintDisabled = false;
+  private envMintRetryAt = 0;
+  private envMintInFlight: Promise<TokenData | null> | null = null;
   /** Single in-flight mint, so concurrent callers share one request. */
   private mintInFlight: Promise<TokenData | null> | null = null;
   private rejectedAccessToken: string | null = null;
@@ -90,8 +113,10 @@ export class TokenManager {
     this.baseUrl = options.baseUrl ? new URL(options.baseUrl).origin : undefined;
     this.tokenTtl = options.tokenTtl ?? DEFAULT_TOKEN_TTL_SECONDS;
     this.mint = options.mint ?? mintAccessToken;
+    this.fetchXsrf = options.fetchXsrf ?? fetchXsrfToken;
     this.envAccessToken = options.envAccessToken;
     this.envSessionCookie = options.envSessionCookie;
+    this.mintEnvCookie = options.mintEnvCookie ?? false;
   }
 
   /**
@@ -110,6 +135,10 @@ export class TokenManager {
     // value again. (See D2LApiClient.tryAutoReauth / authExpiredMessage for
     // the user-facing "paste a fresh one" error this produces.)
     if (this.envAccessToken || this.envSessionCookie) {
+      if (!this.envAccessToken && this.mintEnvCookie && this.baseUrl) {
+        const minted = await this.envCookieBearer(rejectedAccessToken);
+        if (minted) return minted;
+      }
       const token = this.buildEnvToken();
       if (rejectedAccessToken && token.accessToken === rejectedAccessToken) {
         log("DEBUG", "The env-provided credential was rejected; no replacement is available");
@@ -296,6 +325,76 @@ export class TokenManager {
       source: "env",
       cookieHeader: this.envSessionCookie,
     };
+  }
+
+  /**
+   * The Bearer JWT minted from envSessionCookie, minting one when there is
+   * none or it expired or was just rejected. Null means use the cookie
+   * passthrough instead, which also keeps the existing "paste a fresh one"
+   * error for a dead cookie.
+   */
+  private async envCookieBearer(rejectedAccessToken?: string): Promise<TokenData | null> {
+    if (this.envMinted && rejectedAccessToken === this.envMinted.accessToken) {
+      log("DEBUG", "The JWT minted from D2L_SESSION_COOKIE was rejected; minting again");
+      this.envMinted = null;
+    }
+    if (this.envMinted && this.isValid(this.envMinted)) return this.envMinted;
+    if (this.envMintDisabled || Date.now() < this.envMintRetryAt) return null;
+    this.envMintInFlight ??= this.runEnvMint().finally(() => {
+      this.envMintInFlight = null;
+    });
+    return this.envMintInFlight;
+  }
+
+  private async runEnvMint(): Promise<TokenData | null> {
+    const baseUrl = this.baseUrl as string;
+    const cookieHeader = this.envSessionCookie as string;
+
+    let csrfToken = this.envCsrfToken;
+    if (!csrfToken) {
+      const xsrf = await this.fetchXsrf({ baseUrl, cookieHeader });
+      if (!xsrf.ok) return this.envMintFailed(xsrf.reason, xsrf.detail);
+      csrfToken = xsrf.csrfToken;
+    }
+
+    let result;
+    try {
+      result = await this.mint({ baseUrl, cookieHeader, csrfToken });
+    } catch (error) {
+      return this.envMintFailed("transport", error instanceof Error ? error.message : String(error));
+    }
+    if (!result.ok) {
+      // A stale XSRF token is one cause of a refused mint; read a fresh one next time.
+      this.envCsrfToken = undefined;
+      return this.envMintFailed(result.reason, result.detail);
+    }
+
+    const now = Date.now();
+    this.envCsrfToken = csrfToken;
+    this.envMinted = {
+      accessToken: result.accessToken,
+      tenantOrigin: this.baseUrl,
+      capturedAt: now,
+      expiresAt: now + this.tokenTtl * 1000,
+      source: "env",
+      cookieHeader,
+    };
+    log("INFO", "Minted a Bearer token from D2L_SESSION_COOKIE without a browser");
+    return this.envMinted;
+  }
+
+  /**
+   * A dead cookie or a page with no XSRF token will not mint later either, so
+   * stop trying; a transport failure is retried after ENV_MINT_RETRY_MS.
+   */
+  private envMintFailed(reason: "sessionExpired" | "notFound" | "transport", detail?: string): null {
+    if (reason === "transport") {
+      this.envMintRetryAt = Date.now() + ENV_MINT_RETRY_MS;
+    } else {
+      this.envMintDisabled = true;
+    }
+    log("DEBUG", `Could not mint from D2L_SESSION_COOKIE (${reason}${detail ? `: ${detail}` : ""}); using the cookie as-is`);
+    return null;
   }
 
   /**
