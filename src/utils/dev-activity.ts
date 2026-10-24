@@ -42,6 +42,8 @@ const HTTP_OPERATIONS = [
   ["overview", COURSE + "overview"],
   ["classlist", COURSE + "classlist/"],
   ["quickLink", "^/d2l/common/dialogs/quickLink/"],
+  // The LTI launch page a video quickLink leads to (get_video_transcript).
+  ["ltiLaunch", String.raw`^/d2l/le/lti/\d+/toolLaunch/`],
 ] as const;
 export type HttpOperation = typeof HTTP_OPERATIONS[number][0] | "other";
 const OPERATION_PATTERNS = HTTP_OPERATIONS.map(([name, pattern]) => [name, new RegExp(pattern)] as const);

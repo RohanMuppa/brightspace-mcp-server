@@ -189,6 +189,7 @@ describe("dev activity", () => {
     ["/d2l/api/le/1.75/6606/rubrics?objectType=Dropbox&objectId=41", "rubrics"],
     ["/d2l/lms/dropbox/user/folder_user_view_feedback.d2l?db=41&grpid=0&ou=6606", "dropboxFeedbackPage"],
     ["/d2l/api/versions/", "versions"],
+    ["/d2l/le/lti/6606/toolLaunch/4315971/533620995", "ltiLaunch"],
   ])("classifies %s as %s", async (path, operation) => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response("[]", { status: 200 })));
     const api = new D2LApiClient({ baseUrl: "https://example.com",
