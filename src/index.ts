@@ -10,6 +10,7 @@
 import { enableStdoutGuard, log } from "./utils/logger.js";
 import { guardServerProcess } from "./utils/process-guard.js";
 import { loadConfig } from "./utils/config.js";
+import { startupPhase } from "./utils/startup-phase.js";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
@@ -70,8 +71,11 @@ if (subcommand === 'setup') {
 
   async function main(): Promise<void> {
     try {
-      // Load configuration
-      const config = await loadConfig();
+      // Announce startup before any await: loading the configuration reads the
+      // OS credential store, which can stall, and a client that times out
+      // needs these timestamped lines to see where. No account details.
+      log("INFO", `Brightspace MCP Server v${PKG_VERSION} starting (Node ${process.version}, ${process.platform}, ${mode})`);
+      const config = await startupPhase("loading configuration", loadConfig);
       log("DEBUG", "Configuration loaded", { sessionDir: config.sessionDir });
 
       log("INFO", "");

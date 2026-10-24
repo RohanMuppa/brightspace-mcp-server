@@ -17,6 +17,7 @@ import { getStoredTotpUri } from "../auth/credential-store.js";
 import { canonicalUsername } from "../auth/username.js";
 import { normalizeTotpEnrollment } from "../auth/totp.js";
 import { migrateLegacyState } from "../auth/legacy-state.js";
+import { startupPhase } from "./startup-phase.js";
 
 /**
  * The saved settings, or null when there are none to use. A corrupt or
@@ -148,7 +149,9 @@ export async function loadConfig(): Promise<AppConfig> {
   const envSessionCookie = rawSessionCookie ? parseSessionCookieEnv(rawSessionCookie) : undefined;
 
   const { baseUrl, username, sessionRoot, sessionDir } = resolveAccountLocation(store);
-  const password = passwordless ? undefined : await resolveStoredPassword(baseUrl, username, store);
+  const password = passwordless
+    ? undefined
+    : await startupPhase("reading the saved password from the OS credential store", () => resolveStoredPassword(baseUrl, username, store));
   // Opt-in: only an enrollment the user deliberately saved makes the Entra
   // sign-in answer a verification-code challenge itself. With none, every MFA
   // challenge is handled exactly as before. The keyring entry is per account;
@@ -162,7 +165,9 @@ export async function loadConfig(): Promise<AppConfig> {
     // an optional extra, and resolveStoredPassword above is already the place
     // that reports a locked or missing store, loudly, for the credential the
     // server genuinely cannot work without.
-    : username ? (await getStoredTotpUri(baseUrl, username).catch(() => null)) ?? undefined : undefined;
+    : username
+      ? (await startupPhase("reading the saved authenticator key from the OS credential store", () => getStoredTotpUri(baseUrl, username).catch(() => null))) ?? undefined
+      : undefined;
   const legacyMigration = sessionDir !== sessionRoot ? await migrateLegacyState(sessionRoot) : undefined;
 
   return {

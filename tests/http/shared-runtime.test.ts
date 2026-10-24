@@ -134,6 +134,19 @@ describe("shared runtime behind the default stdio command", { timeout: 30_000 },
     expect(existsSync(join(dir, "state.json"))).toBe(false);
   });
 
+  it("puts the wait for the shared runtime in the client's own log (#312)", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const client = await chat();
+      await client.listTools();
+      const printed = spy.mock.calls.map((call) => call.join(" "));
+      expect(printed.some((line) => line.includes("Startup: starting the shared runtime..."))).toBe(true);
+      expect(printed.some((line) => /Startup: starting the shared runtime done in \d+ ms/.test(line))).toBe(true);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it("serves every tool through the relay, and concurrent cold starts converge on one runtime", async () => {
     const chats = await Promise.all([chat(), chat(), chat()]);
     const lists = await Promise.all(chats.map((client) => client.listTools()));
