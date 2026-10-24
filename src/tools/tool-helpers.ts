@@ -18,6 +18,7 @@ import {
   isSafeDetail,
   type DownloadFailureKind,
 } from "../utils/download-errors.js";
+import { tagErrorKind, withErrorKind, type ErrorKind } from "../utils/error-kind.js";
 
 /**
  * Append an available-update notice to an already-built content array and
@@ -72,8 +73,8 @@ export function toolResponseWithNotice(data: unknown, notice: string): CallToolR
 /**
  * Wrap error message as MCP-compatible tool result
  */
-export function errorResponse(message: string): CallToolResult {
-  return {
+export function errorResponse(message: string, kind?: ErrorKind): CallToolResult {
+  const result: CallToolResult = {
     content: [
       {
         type: "text",
@@ -82,6 +83,8 @@ export function errorResponse(message: string): CallToolResult {
     ],
     isError: true,
   };
+  // The dev activity log records the category, never the message.
+  return kind ? tagErrorKind(result, kind) : result;
 }
 
 /**
@@ -264,6 +267,10 @@ export function authPendingNotice(error: unknown): string {
 export function sanitizeError(error: unknown): CallToolResult {
   // Log full error to stderr for debugging (token redaction handled by logger)
   log("ERROR", "Tool error", error);
+  return withErrorKind(describeError(error), error);
+}
+
+function describeError(error: unknown): CallToolResult {
 
   // Authentication runs inside the tool call now, so its failures surface
   // here rather than from a dedicated auth tool. Checked first: the kind
