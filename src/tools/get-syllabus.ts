@@ -182,7 +182,7 @@ export function registerGetSyllabus(
     {
       title: "Get Course Syllabus",
       description:
-        "Fetch the syllabus/overview text and optional attachment for a course. Returns the course overview description as markdown. When the syllabus lives in an external LTI tool (e.g. Simple Syllabus), lists those sources in externalSyllabusSources; their contents cannot be read. If some of those lookups could not be completed (e.g. permission denied), externalSyllabusDiscovery says which, and an empty result is then not proof the course has no syllabus. If downloadPath is provided, also downloads the syllabus attachment (e.g. PDF). IMPORTANT: You MUST ask the user where they want to save the file before calling this tool with a downloadPath.",
+        "Fetch the syllabus/overview text and optional attachment for a course. Returns the course overview description as markdown. When the syllabus lives in an external LTI tool (e.g. Simple Syllabus), lists those sources in externalSyllabusSources; their contents cannot be read. If some of those lookups could not be completed (e.g. permission denied), externalSyllabusDiscovery says which, and an empty result is then not proof the course has no syllabus. If downloadPath is provided, also downloads the syllabus attachment (e.g. PDF); the directory must already exist, since it is not created for you. IMPORTANT: You MUST ask the user where they want to save the file before calling this tool with a downloadPath.",
       inputSchema: GetSyllabusSchema,
     },
     async (args: any) => {
@@ -208,7 +208,7 @@ export function registerGetSyllabus(
           } catch (error: any) {
             if (error?.code === "ENOENT") {
               return errorResponse(
-                `Download directory does not exist: ${downloadPath}`, "destination"
+                `Download directory does not exist: ${downloadPath}. Create it, then retry, or choose an existing directory.`, "destination"
               );
             }
             throw error;

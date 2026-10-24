@@ -100,7 +100,7 @@ export const GetSyllabusSchema = z.object({
   courseId: z.coerce.number().int().positive()
     .describe("Course ID to get syllabus for."),
   downloadPath: z.string().min(1).optional()
-    .describe("Absolute path to the directory where the attachment should be saved."),
+    .describe("Absolute path to an existing directory where the attachment should be saved. The directory must already exist; it is not created for you, so create it first if needed."),
 });
 
 export const GetDiscussionsSchema = z.object({
@@ -250,7 +250,7 @@ export const DownloadDropboxSubmissionFileSchema = z.object({
   fileId: z.coerce.number().int().positive()
     .describe("File ID within that submission."),
   downloadPath: z.string().min(1)
-    .describe("Absolute path to the local directory where the file should be saved."),
+    .describe("Absolute path to an existing local directory where the file should be saved. The directory must already exist; it is not created for you, so create it first if needed."),
   customFilename: z.string().max(255).optional()
     .describe("Custom filename for the downloaded file (include extension). If omitted, uses the original submission filename."),
 });
