@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -23,6 +24,19 @@ function alive(pid: number): boolean {
   }
 }
 
+/**
+ * Windows only: the processes still running whose command line names `home`,
+ * which every shared runtime this test starts does (`runtime <dir>`).
+ */
+function processesUsing(home: string): string[] {
+  const script = "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like $env:BS_HOME_PATTERN } | " +
+    "ForEach-Object { \"$($_.ProcessId) $($_.CommandLine)\" }";
+  const out = execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], {
+    encoding: "utf8", env: { ...process.env, BS_HOME_PATTERN: `*${home}*` }, windowsHide: true,
+  });
+  return out.split(/\r?\n/).map((line) => line.trim()).filter((line) => line && !line.includes("Get-CimInstance"));
+}
+
 describe.skipIf(!existsSync(entry))("brightspace-mcp-server default command (real processes)", () => {
   const homes: string[] = [];
   const clients: Client[] = [];
@@ -37,9 +51,23 @@ describe.skipIf(!existsSync(entry))("brightspace-mcp-server default command (rea
       if (alive(pid)) process.kill(pid);
       await vi.waitFor(() => expect(alive(pid)).toBe(false), { timeout: 10_000 });
     }
-    // A relay that was just closed, or a runtime still starting up, can take a
-    // moment to exit on Windows, and until it does its folder cannot be removed.
-    for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true, maxRetries: 60, retryDelay: 250 });
+    for (const home of homes.splice(0)) {
+      if (process.platform === "win32") {
+        // Every process this test started must be gone; one still running is
+        // a leaked runtime, and it is named here rather than surfacing later
+        // as a folder that cannot be removed.
+        await vi.waitFor(() => expect(processesUsing(home)).toEqual([]), { timeout: 15_000, interval: 1_000 });
+      }
+      try {
+        rmSync(home, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
+      } catch (error) {
+        // With no process of ours left, Windows can still hold a just-written
+        // file for a while (antivirus or the search indexer). The temporary
+        // folder is left for the system to clear rather than failing the run.
+        if (process.platform !== "win32") throw error;
+        console.warn(`Left ${home} in place: ${(error as NodeJS.ErrnoException).code}`);
+      }
+    }
   });
 
   function runtimeStates(home: string): Array<{ pid: number }> {
