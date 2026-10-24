@@ -83,6 +83,7 @@ export function createRuntime(config: AppConfig, version: string): ServerRuntime
     tokenTtl: config.tokenTtl,
     envAccessToken: config.envAccessToken,
     envSessionCookie: config.envSessionCookie,
+    mintEnvCookie: true,
   });
 
   // D2L_ACCESS_TOKEN / D2L_SESSION_COOKIE are opt-in browser-free sign-in
