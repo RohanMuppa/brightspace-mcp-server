@@ -141,6 +141,48 @@ describe("dev activity", () => {
     expect(JSON.stringify(records())).not.toContain("123456");
     expect(JSON.stringify(records())).not.toContain("otpauth");
   });
+  it("tags every event of an authentication child with the recovery id its parent passed", () => {
+    vi.stubEnv("D2L_RECOVERY_ID", "11111111-1111-4111-8111-111111111111");
+    configureDevActivity(root);
+    devActivity("mfa_method_selected");
+    devActivity("mfa_code_submitted", { recoveryId: "22222222-2222-4222-8222-222222222222" });
+    expect(records().map(r => r.recoveryId)).toEqual([
+      "11111111-1111-4111-8111-111111111111", "11111111-1111-4111-8111-111111111111"]);
+  });
+  it("records the parent's recovery id on its own recovery events", () => {
+    devActivity("recovery_started", { recoveryId: "33333333-3333-4333-8333-333333333333" });
+    devActivity("http_response", { status: 200 });
+    expect(records()[0]).toMatchObject({ event: "recovery_started", recoveryId: "33333333-3333-4333-8333-333333333333" });
+    expect(records()[1]).not.toHaveProperty("recoveryId");
+  });
+  it("drops a recovery id that is not a plain identifier", () => {
+    vi.stubEnv("D2L_RECOVERY_ID", "private-secret");
+    configureDevActivity(root);
+    devActivity("mfa_code_submitted");
+    devActivity("recovery_started", { recoveryId: "private-password" } as any);
+    expect(JSON.stringify(records())).not.toContain("private-");
+    expect(records()[0]).not.toHaveProperty("recoveryId");
+  });
+  it("records one run_started with the package version, Node version and process role, and no arguments", () => {
+    vi.stubEnv("D2L_RECOVERY_ID", "44444444-4444-4444-8444-444444444444");
+    configureDevActivity(root, { version: "9.8.7", role: "auth" });
+    devActivity("mfa_method_selected");
+    const started = records().filter(r => r.event === "run_started");
+    expect(started).toHaveLength(1);
+    expect(started[0]).toMatchObject({ version: "9.8.7", node: process.versions.node, role: "auth",
+      recoveryId: "44444444-4444-4444-8444-444444444444" });
+    expect(Object.keys(started[0]).sort()).toEqual(["at", "event", "node", "pid", "recoveryId", "role", "runId", "version"]);
+  });
+  it("drops a run_started version or role outside the allowed shape", () => {
+    configureDevActivity(root, { version: "private-version", role: "private-role" } as any);
+    expect(records()[0]).toMatchObject({ event: "run_started", node: process.versions.node });
+    expect(JSON.stringify(records())).not.toContain("private-");
+  });
+  it("writes no run_started unless dev mode is on", () => {
+    vi.stubEnv("D2L_DEV_MODE", "");
+    configureDevActivity(root, { version: "1.0.0", role: "server" });
+    expect(readdirSync(root)).toEqual([]);
+  });
   it("records an automaticPending recovery reason", () => {
     devActivity("recovery_finished", { outcome: "error", reason: "automaticPending" });
     expect(records()[0]).toMatchObject({ event: "recovery_finished", reason: "automaticPending" });

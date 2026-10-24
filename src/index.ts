@@ -106,7 +106,7 @@ if (subcommand === 'setup') {
       const { setActiveShortcuts } = await import("./utils/two-factor-shortcuts.js");
       const { startUpdateChecks } = await import("./utils/update-checker.js");
       const { createRuntime } = await import("./server.js");
-      configureDevActivity(config.sessionDir);
+      configureDevActivity(config.sessionDir, { version: PKG_VERSION, role: "server" });
       // Lets the MFA approval message mention the setup options only to users
       // who have neither turned on. Booleans only; the key is never passed.
       setActiveShortcuts({ rememberMfa: config.rememberMfa === true, keySaved: Boolean(config.totpUri) });

@@ -9,9 +9,9 @@ import { ERROR_KINDS, errorKind, resultErrorKind, type ErrorKind } from "./error
 type Event = "tool_started" | "tool_finished" | "http_response" | "auth_required"
   | "token_mint_started" | "token_mint_finished" | "recovery_started"
   | "mfa_observed" | "recovery_finished" | "auth_phase"
-  | "mfa_method_selected" | "mfa_code_submitted";
+  | "mfa_method_selected" | "mfa_code_submitted" | "run_started";
 type Outcome = "success" | "error" | "sessionExpired" | "transport";
-interface Fields { elapsedMs?: number; status?: number; outcome?: Outcome; reason?: string; phase?: AuthPhase; errorKind?: ErrorKind; operation?: HttpOperation }
+interface Fields { elapsedMs?: number; status?: number; outcome?: Outcome; reason?: string; phase?: AuthPhase; errorKind?: ErrorKind; operation?: HttpOperation; recoveryId?: string }
 
 const API = String.raw`^/d2l/api/l[pe]/[^/]+/`;
 const COURSE = API + String.raw`\d+/`;
@@ -56,19 +56,34 @@ export function httpOperation(path: string): HttpOperation {
   return OPERATION_PATTERNS.find(([, pattern]) => pattern.test(bare))?.[0] ?? "other";
 }
 interface CallContext { callId: string; tool: string }
+/** What a process says about itself once, so runs can be told apart across upgrades. */
+export interface RunInfo { version: string; role: "server" | "auth" }
+/** Names one background recovery; the parent passes it to its auth child so their events join. */
+export const RECOVERY_ID_ENV = "D2L_RECOVERY_ID";
+const ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const calls = new AsyncLocalStorage<CallContext>();
 const runId = randomUUID();
 const MAX_BYTES = 5 * 1024 * 1024;
 let directory: string | undefined;
 let warned = false;
+/** Set in an auth child: the parent recovery every event of this process belongs to. */
+let processRecoveryId: string | undefined;
 let lastStart: number | undefined;
 let lastSuccess: number | undefined;
 
 /** Explicit opt-in; separate from ordinary stderr debugging. */
-export function configureDevActivity(sessionDir: string): void {
+export function configureDevActivity(sessionDir: string, run?: RunInfo): void {
   directory = process.env.D2L_DEV_MODE === "true" ? join(sessionDir, "dev-activity") : undefined;
   lastStart = lastSuccess = undefined;
   warned = false;
+  const inherited = process.env[RECOVERY_ID_ENV];
+  processRecoveryId = inherited && ID.test(inherited) ? inherited : undefined;
+  if (run) write("run_started", {}, undefined, undefined, undefined, run);
+}
+
+/** A fresh, non-secret id for one recovery; see RECOVERY_ID_ENV. */
+export function newRecoveryId(): string {
+  return randomUUID();
 }
 
 /** No arbitrary text, errors, URLs, request arguments or response content. */
@@ -76,14 +91,23 @@ export function devActivity(event: Event, fields: Fields = {}): void {
   write(event, fields);
 }
 
-function write(event: Event, fields: Fields, context = calls.getStore(), idleMs?: number, sinceSuccessMs?: number): void {
+function write(event: Event, fields: Fields, context = calls.getStore(), idleMs?: number, sinceSuccessMs?: number,
+  run?: RunInfo): void {
   if (!directory) return;
-  if (!["tool_started", "tool_finished", "http_response", "auth_required", "token_mint_started",
+  if (!["run_started", "tool_started", "tool_finished", "http_response", "auth_required", "token_mint_started",
     "token_mint_finished", "recovery_started", "mfa_observed", "recovery_finished", "auth_phase",
     "mfa_method_selected", "mfa_code_submitted"].includes(event)) return;
   const at = new Date().toISOString();
   const record: Record<string, unknown> = { at, runId, pid: process.pid, event };
   if (context) Object.assign(record, context);
+  // A child's inherited id wins: it is the one its parent recorded.
+  const recoveryId = processRecoveryId ?? fields.recoveryId;
+  if (recoveryId && ID.test(recoveryId)) record.recoveryId = recoveryId;
+  if (run) {
+    if (/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]{1,40})?$/.test(run.version)) record.version = run.version;
+    record.node = process.versions.node;
+    if (run.role === "server" || run.role === "auth") record.role = run.role;
+  }
   for (const [key, value] of Object.entries({ elapsedMs: fields.elapsedMs, status: fields.status, idleMs, sinceSuccessMs })) {
     if (typeof value === "number" && Number.isFinite(value) && value >= 0) record[key] = value;
   }

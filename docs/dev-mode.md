@@ -44,6 +44,16 @@ challenge), `approvalWait` (from that challenge until the login finished), and
 `token` (acquiring the API token). A stage is recorded when it ends, including
 when it fails, so the last one shows where a slow or stalled sign-in was.
 
+Each background recovery gets a random `recoveryId`. The server's
+`recovery_started`, `mfa_observed`, `auth_phase` and `recovery_finished` carry it,
+and it is handed to the sign-in child, whose own file (including
+`mfa_method_selected` and `mfa_code_submitted`) carries it on every record. Join a
+child's events to the recovery that started it on `recoveryId`, not timestamps.
+
+Each process writes one `run_started` record when it starts: the package
+`version`, Node `node` version, and `role` (`server` for the MCP server, `auth`
+for a sign-in process). No arguments or environment are recorded.
+
 To investigate inactivity, find the last `http_response` with a 2xx status and
 the next 401, `auth_required`, or `mfa_observed`. This bounds when authentication
 became unusable; it does **not** reveal the exact expiry time during an idle gap.
