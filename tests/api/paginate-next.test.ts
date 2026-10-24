@@ -101,6 +101,27 @@ describe("fetchAllObjects Next shapes", () => {
     }
   });
 
+  it("keeps the pages already fetched when an absolute Next does not parse", async () => {
+    vi.mocked(log).mockClear();
+    const { apiClient, requested } = client((path) =>
+      path.includes("bookmark=tok2")
+        ? { Objects: ["b"], Next: "https://[bad/d2l/api/x?d2lSessionVal=SECRET123" }
+        : { Objects: ["a"], Next: "tok2" }
+    );
+
+    const all = await fetchAllObjects<string>(
+      apiClient,
+      "/d2l/api/lp/1.0/1/classlist/paged/"
+    );
+
+    expect(all).toEqual(["a", "b"]);
+    expect(requested).toHaveLength(2);
+    expect(vi.mocked(log)).toHaveBeenCalled();
+    for (const call of vi.mocked(log).mock.calls) {
+      expect(JSON.stringify(call)).not.toContain("SECRET123");
+    }
+  });
+
   it("still follows a normal /d2l/api/... Next", async () => {
     const { apiClient, requested } = client((path) =>
       path === "/d2l/api/lp/1.0/1/classlist/paged/?bookmark=tok2"
