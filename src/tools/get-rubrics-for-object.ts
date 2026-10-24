@@ -87,7 +87,7 @@ export function registerGetRubricsForObject(
           if (error instanceof ApiError && error.status === 403) {
             return errorResponse(
               "Instructor or TA access required for this course. This tool reads dropbox rubric " +
-              "metadata, which Brightspace only grants to course staff."
+              "metadata, which Brightspace only grants to course staff.", "permission"
             );
           }
           if (error instanceof ApiError && error.status === 404) {

@@ -25,6 +25,7 @@ import {
 } from "../utils/transcript/errors.js";
 import type { FetchLike, TranscriptResult } from "../utils/transcript/types.js";
 import { log } from "../utils/logger.js";
+import type { ErrorKind } from "../utils/error-kind.js";
 import { stripD2lSessionParams } from "../utils/session-params.js";
 
 interface ContentTopic {
@@ -81,6 +82,19 @@ async function followLtiLaunch(apiClient: D2LApiClient, path: string): Promise<s
  * worked around here: the way past it is the user's own browser, and the
  * result says plainly that nothing was read.
  */
+/** The dev activity log's category for a transcript the platform would not serve. */
+function transcriptErrorKind(reason: TranscriptFailureReason): ErrorKind {
+  switch (reason) {
+    case "sign_in_required":
+    case "access_blocked":
+      return "providerBlocked";
+    case "unavailable":
+      return "notFound";
+    case "fetch_failed":
+      return "transport";
+  }
+}
+
 function transcriptRecovery(reason: TranscriptFailureReason, videoUrl: string): string {
   switch (reason) {
     case "sign_in_required":
@@ -206,7 +220,7 @@ export function registerGetVideoTranscript(
           resolvedUrl = resolved.url;
         } else {
           return errorResponse(
-            "Provide either videoUrl, or both courseId and topicId to look up the video from course content."
+            "Provide either videoUrl, or both courseId and topicId to look up the video from course content.", "invalidInput"
           );
         }
 
@@ -262,7 +276,7 @@ export function registerGetVideoTranscript(
         if ("failed" in outcome) {
           // The message stays the first block, as it always was; the second
           // carries the same failure in a shape a caller can branch on.
-          const failure = errorResponse(outcome.failed);
+          const failure = errorResponse(outcome.failed, transcriptErrorKind(outcome.reason));
           failure.content.push({
             type: "text",
             text: JSON.stringify({

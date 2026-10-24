@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { registerGetVideoTranscript } from "../../src/tools/get-video-transcript.js";
 import type { FetchLike } from "../../src/utils/transcript/types.js";
+import { resultErrorKind } from "../../src/utils/error-kind.js";
 
 const COURSE_ID = 101;
 const KALTURA_URL =
@@ -382,6 +383,8 @@ describe("get_video_transcript — YouTube refusals carry an actionable reason (
     expect(body.hasTranscript).toBe(false);
     expect(body.recovery).toContain(WATCH_URL);
     expect(body.recovery).toMatch(/Show transcript/);
+    // The dev activity log's category (#327).
+    expect(resultErrorKind(result)).toBe("providerBlocked");
   });
 
   it("labels a caption download YouTube blocked as access_blocked, not as missing captions", async () => {
@@ -392,6 +395,7 @@ describe("get_video_transcript — YouTube refusals carry an actionable reason (
 
     expect(result.isError).toBe(true);
     expect(details(result).reason).toBe("access_blocked");
+    expect(resultErrorKind(result)).toBe("providerBlocked");
   });
 
   it("labels a video with no caption tracks as no_captions, still a non-error answer", async () => {

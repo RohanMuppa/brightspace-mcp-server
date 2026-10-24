@@ -4,13 +4,57 @@ import { appendFileSync, mkdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { AUTH_PHASES, type AuthPhase } from "../auth/auth-phases.js";
+import { ERROR_KINDS, errorKind, resultErrorKind, type ErrorKind } from "./error-kind.js";
 
 type Event = "tool_started" | "tool_finished" | "http_response" | "auth_required"
   | "token_mint_started" | "token_mint_finished" | "recovery_started"
   | "mfa_observed" | "recovery_finished" | "auth_phase"
   | "mfa_method_selected" | "mfa_code_submitted" | "run_started";
 type Outcome = "success" | "error" | "sessionExpired" | "transport";
-interface Fields { elapsedMs?: number; status?: number; outcome?: Outcome; reason?: string; phase?: AuthPhase; recoveryId?: string }
+interface Fields { elapsedMs?: number; status?: number; outcome?: Outcome; reason?: string; phase?: AuthPhase; errorKind?: ErrorKind; operation?: HttpOperation; recoveryId?: string }
+
+const API = String.raw`^/d2l/api/l[pe]/[^/]+/`;
+const COURSE = API + String.raw`\d+/`;
+/** First match wins; a path that matches none is "other". Matched on the path alone, query dropped. */
+const HTTP_OPERATIONS = [
+  ["versions", "^/d2l/api/versions/"],
+  ["whoami", API + "users/whoami"],
+  ["enrollments", API + "enrollments/"],
+  ["groups", COURSE + String.raw`groupcategories/\d+/groups/`],
+  ["groupCategories", COURSE + "groupcategories/"],
+  ["ltiLinks", API + "lti/link/"],
+  ["quizList", COURSE + "quizzes/?$"],
+  ["quizAttempts", COURSE + String.raw`quizzes/\d+/attempts/`],
+  ["quiz", COURSE + "quizzes/"],
+  ["dropboxFolders", COURSE + "dropbox/folders/?$"],
+  ["dropboxSubmissions", COURSE + String.raw`dropbox/folders/\d+/submissions/`],
+  ["dropboxFeedback", COURSE + String.raw`dropbox/folders/\d+/feedback/`],
+  ["dropboxAttachment", COURSE + String.raw`dropbox/folders/\d+/attachments/`],
+  ["dropboxFolder", COURSE + "dropbox/folders/"],
+  ["dropboxFeedbackPage", "^/d2l/lms/dropbox/user/folder_user_view_feedback"],
+  ["rubrics", COURSE + "rubrics"],
+  ["grades", COURSE + "grades/"],
+  ["contentFile", COURSE + String.raw`content/topics/\d+/file`],
+  ["content", COURSE + "content/"],
+  ["newsAttachment", COURSE + String.raw`news/\d+/attachments/`],
+  ["news", COURSE + "news/"],
+  ["discussions", COURSE + "discussions/"],
+  ["overviewAttachment", COURSE + "overview/attachment"],
+  ["overview", COURSE + "overview"],
+  ["classlist", COURSE + "classlist/"],
+  ["quickLink", "^/d2l/common/dialogs/quickLink/"],
+  // The LTI launch page a video quickLink leads to (get_video_transcript).
+  ["ltiLaunch", String.raw`^/d2l/le/lti/\d+/toolLaunch/`],
+] as const;
+export type HttpOperation = typeof HTTP_OPERATIONS[number][0] | "other";
+const OPERATION_PATTERNS = HTTP_OPERATIONS.map(([name, pattern]) => [name, new RegExp(pattern)] as const);
+const OPERATION_NAMES: readonly string[] = [...HTTP_OPERATIONS.map(([name]) => name), "other"];
+
+/** Names what a request was for without keeping its endpoint, IDs or query. */
+export function httpOperation(path: string): HttpOperation {
+  const bare = path.split(/[?#]/, 1)[0]!;
+  return OPERATION_PATTERNS.find(([, pattern]) => pattern.test(bare))?.[0] ?? "other";
+}
 interface CallContext { callId: string; tool: string }
 /** What a process says about itself once, so runs can be told apart across upgrades. */
 export interface RunInfo { version: string; role: "server" | "auth" }
@@ -71,6 +115,8 @@ function write(event: Event, fields: Fields, context = calls.getStore(), idleMs?
   if (["busy", "cooldown", "unsupported", "secureStorage", "transport", "timeout", "failed", "mfaPending",
     "automaticPending", "inProgress"].includes(fields.reason ?? "")) record.reason = fields.reason;
   if ((AUTH_PHASES as readonly string[]).includes(fields.phase ?? "")) record.phase = fields.phase;
+  if ((ERROR_KINDS as readonly string[]).includes(fields.errorKind ?? "")) record.errorKind = fields.errorKind;
+  if (OPERATION_NAMES.includes(fields.operation ?? "")) record.operation = fields.operation;
   try {
     mkdirSync(directory, { recursive: true, mode: 0o700 });
     const file = join(directory, `activity-${at.slice(0, 10)}-${process.pid}-${runId}.jsonl`);
@@ -102,15 +148,21 @@ export function trackToolActivity(server: McpServer): void {
       lastStart = started;
       return calls.run(context, async () => {
         let outcome: Outcome = "error";
+        let kind: ErrorKind | undefined;
         try {
           const result = await callback(...args);
-          if (!(result as { isError?: boolean } | undefined)?.isError) {
+          if ((result as { isError?: boolean } | undefined)?.isError) {
+            kind = resultErrorKind(result);
+          } else {
             outcome = "success";
             lastSuccess = Date.now();
           }
           return result;
+        } catch (error) {
+          kind = errorKind(error);
+          throw error;
         } finally {
-          write("tool_finished", { outcome, elapsedMs: Date.now() - started });
+          write("tool_finished", { outcome, errorKind: kind, elapsedMs: Date.now() - started });
         }
       });
     }) as never)) as typeof server.registerTool;
