@@ -15,7 +15,7 @@ import { AUTH_COMMAND } from "../utils/commands.js";
 import { devActivity } from "../utils/dev-activity.js";
 import { parsePhaseMarker } from "./auth-phases.js";
 import { AUTOMATIC_PENDING_MARKER, RELAYED_CHALLENGE_MARKER, RELAYED_STARTING_MARKER, authLockPath, challengeRelayedAt, relayChallenge } from "./mfa-challenge.js";
-import { inspectLockOwner } from "./auth-lock.js";
+import { inspectLockOwner, liveAutomaticOwner } from "./auth-lock.js";
 
 /**
  * Timeout for the auth process. It has to outlast the child's own MFA wait,
@@ -157,7 +157,11 @@ const automaticPendingFailure = (relayed = false): AuthProcessError => new AuthP
   relayed,
 );
 
-export type AuthFailureKind = "busy" | "cooldown" | "unsupported" | "secureStorage" | "transport" | "timeout" | "failed" | "mfaPending" | "automaticPending" | "inProgress";
+export type AuthFailureKind = "busy" | "cooldown" | "unsupported" | "secureStorage" | "transport" | "timeout" | "failed" | "mfaPending" | "automaticPending" | "inProgress" | "cancelled";
+
+/** What every caller of a sign-in that was stopped from outside (sign_out, a kill) is answered. */
+const cancelledFailure = (relayed = false): AuthProcessError =>
+  new AuthProcessError("cancelled", "The sign-in was cancelled before it finished.", undefined, false, relayed);
 
 export class AuthProcessError extends AuthError {
   constructor(
@@ -235,6 +239,63 @@ function descendantPids(parentPid: number): number[] {
   };
   visit(parentPid);
   return descendants;
+}
+
+/**
+ * SIGKILL a sign-in child, its Chromium descendants and its process group.
+ * SIGKILL rather than SIGTERM: a graceful stop runs the MFA loop's failure
+ * path, which records the cooldown, and the user never had a chance to answer.
+ */
+function forceStop(pid: number): void {
+  if (process.platform === "win32") {
+    try {
+      execFileSync("taskkill", ["/pid", String(pid), "/t", "/f"], { stdio: "ignore", timeout: 5000 });
+    } catch { /* Already exited. */ }
+    return;
+  }
+  try {
+    for (const descendant of descendantPids(pid)) {
+      try { process.kill(descendant, "SIGKILL"); } catch { /* Already exited. */ }
+    }
+  } catch { /* Still terminate the owned process group if ps is unavailable. */ }
+  try { process.kill(-pid, "SIGKILL"); } catch { /* Not a group leader, or gone. */ }
+  try { process.kill(pid, "SIGKILL"); } catch { /* Already exited. */ }
+}
+
+/** How long a cancel waits for a stopped sign-in to actually exit. */
+const CANCEL_WAIT_MS = 5000;
+
+/**
+ * Stop a background sign-in that ANOTHER server process on this computer
+ * started and that holds the cross-process lock, so sign_out can cancel a
+ * sign-in whichever app began it. Only an "automatic" owner is stopped (a
+ * person's `auth` run in a terminal never is), and only after its command
+ * line confirms it is this package's sign-in child: the PID comes from a file,
+ * and a PID the system has since reused must never be killed. That check
+ * needs ps, so on Windows nothing is stopped and sign_out reports the sign-in
+ * as one it cannot cancel. Its own server's waiting calls are answered
+ * "cancelled" (see the close handler in spawnAuth). The dead owner leaves a
+ * stale lock the next lock holder reclaims. Resolves true once it has exited.
+ */
+export async function stopAutomaticSignIn(lockPath: string): Promise<boolean> {
+  if (process.platform === "win32") return false;
+  const pid = await liveAutomaticOwner(lockPath);
+  if (pid === undefined) return false;
+  let command = "";
+  try {
+    command = execFileSync("ps", ["-o", "command=", "-p", String(pid)], { encoding: "utf8", timeout: 1000 });
+  } catch {
+    return false;
+  }
+  if (!/auth-cli\.js\b/.test(command) || !command.includes("--automatic")) return false;
+  log("WARN", `Cancelling another app's background sign-in (pid ${pid}) for sign_out`);
+  forceStop(pid);
+  const deadline = Date.now() + CANCEL_WAIT_MS;
+  while (Date.now() < deadline) {
+    try { process.kill(pid, 0); } catch { return true; }
+    await new Promise<void>((resolve) => setTimeout(resolve, 50));
+  }
+  return false;
 }
 
 /**
@@ -400,6 +461,8 @@ export class AuthRunner {
    * which can linger for seconds after it has said everything it will say.
    */
   private relayProbe: AuthProcessError | null = null;
+  /** Stops the current child and resolves once it has exited; null between children. */
+  private cancelChild: (() => Promise<void>) | null = null;
   private readonly scriptPath: string;
   private readonly timeoutMs: number;
   private readonly onProgress?: (line: string) => void;
@@ -423,6 +486,22 @@ export class AuthRunner {
    */
   busy(): boolean {
     return this.inFlight !== null || this.childDone !== null;
+  }
+
+  /**
+   * Cancel this process's sign-in, if one is running: stop the child at once
+   * (no MFA cooldown is recorded, see forceStop) and answer every call waiting
+   * on it, here or behind the shared HTTP server, with a "cancelled" error
+   * instead of leaving it to time out. The next call starts a new sign-in and
+   * sends a new prompt. Resolves true once the child has exited, so the
+   * cross-process lock it held is reclaimable; false when nothing was running.
+   */
+  async cancel(): Promise<boolean> {
+    const cancelChild = this.cancelChild;
+    if (!cancelChild) return false;
+    log("INFO", "Cancelling the background sign-in for sign_out");
+    await cancelChild();
+    return true;
   }
 
   /**
@@ -622,9 +701,10 @@ export class AuthRunner {
         this.relayTold.clear();
         return true;
       }
-      // The owner died without releasing its lock. Waiting longer only runs
-      // the clock down; the next call's sign-in reclaims the dead lock.
-      if ((await inspectLockOwner(lockPath))?.gone) throw new AuthProcessError("inProgress", STILL_SIGNING_IN);
+      // The owner died without releasing its lock: cancelled (sign_out) or
+      // crashed. Waiting longer only runs the clock down; the next call's
+      // sign-in reclaims the dead lock.
+      if ((await inspectLockOwner(lockPath))?.gone) throw cancelledFailure(true);
       const relayed = await relayChallenge(lockPath);
       if (relayed) {
         const next: Seen = relayed.kind === "automatic"
@@ -829,6 +909,7 @@ export class AuthRunner {
       };
       const onExit = () => kill("SIGTERM");
       process.once("exit", onExit);
+      const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()));
 
       const settleCaller = (error?: AuthProcessError) => {
         if (callerSettled) return;
@@ -857,10 +938,19 @@ export class AuthRunner {
           this.challengeTold = null;
           this.challengeToldKey = null;
           this.relayProbe = null;
+          this.cancelChild = null;
         }
       });
       trackedCompletion.catch(() => { /* see comment above */ });
       this.childDone = trackedCompletion;
+      this.cancelChild = async () => {
+        if (!childFinished) {
+          if (child.pid) forceStop(child.pid);
+          else child.kill("SIGKILL");
+          finishChild(cancelledFailure());
+        }
+        await Promise.race([exited, new Promise<void>((resolve) => setTimeout(resolve, CANCEL_WAIT_MS).unref?.())]);
+      };
       this.pendingChallenge = null;
       this.challengeToldKey = null;
       this.relayProbe = null;
@@ -1009,9 +1099,14 @@ export class AuthRunner {
         finishChild(new AuthProcessError("failed", `Could not start authentication. Run ${AUTH_COMMAND} for details.`));
       });
 
-      child.on("close", (code) => {
+      child.on("close", (code, signal) => {
         if (childFinished) return;
-        if (timedOut) {
+        if (!timedOut && signal === "SIGKILL") {
+          // Stopped from outside this process: another app's sign_out (see
+          // stopAutomaticSignIn), or someone killed it. Either way it will not
+          // finish, and the next call starts a new sign-in.
+          finishChild(cancelledFailure());
+        } else if (timedOut) {
           kill("SIGKILL");
           finishChild(new AuthProcessError("timeout", `Authentication timed out. Run ${AUTH_COMMAND} to try again.`));
         } else if (code === 0) {

@@ -136,6 +136,17 @@ export async function inspectLockOwner(lockPath: string): Promise<{ mode: "autom
   return { mode: owner.mode === "automatic" ? "automatic" : "explicit", gone: lockOps.isDead(owner) };
 }
 
+/**
+ * The PID of a live "automatic" owner (a background AuthRunner child), or
+ * undefined when the lock is free, its owner is gone, or it is held some other
+ * way. Used by sign_out to cancel another app's waiting sign-in.
+ */
+export async function liveAutomaticOwner(lockPath: string): Promise<number | undefined> {
+  const owner = await readOwner(lockPath);
+  if (!owner || owner.mode !== "automatic" || lockOps.isDead(owner)) return undefined;
+  return owner.pid;
+}
+
 /** Remove only our fixed metadata names, after the directory was retired. */
 async function cleanRetired(lockPath: string): Promise<void> {
   await fs.unlink(path.join(lockPath, "owner.json")).catch(() => {});

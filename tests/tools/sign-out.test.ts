@@ -7,7 +7,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { acquireProcessLock } from "../../src/auth/auth-lock.js";
 import { authLockPath } from "../../src/auth/mfa-challenge.js";
-import { RemoveError } from "../../src/auth/logout.js";
+import { clearSavedSession, RemoveError } from "../../src/auth/logout.js";
 import { registerSignOut } from "../../src/tools/sign-out.js";
 import { acceptOmittedArguments } from "../../src/tools/omitted-arguments.js";
 import type { AppConfig } from "../../src/types/index.js";
@@ -51,11 +51,13 @@ async function seed(files = SESSION_FILES): Promise<void> {
 const exists = (file: string) => fs.access(path.join(dir, file)).then(() => true, () => false);
 
 type Clear = Parameters<typeof registerSignOut>[5];
+type Runner = { cancel(): Promise<boolean> };
+type StopElsewhere = Parameters<typeof registerSignOut>[6];
 
-async function connect(appConfig: AppConfig, clear?: Clear, authRunner?: { busy(): boolean }) {
+async function connect(appConfig: AppConfig, clear?: Clear, authRunner?: Runner, stopElsewhere?: StopElsewhere) {
   const server = new McpServer({ name: "sign-out-test", version: "1" });
   acceptOmittedArguments(server); // as src/index.ts does: this test calls sign_out without an arguments field
-  registerSignOut(server, appConfig, { clearCache } as any, { forgetSession }, authRunner, clear);
+  registerSignOut(server, appConfig, { clearCache } as any, { forgetSession }, authRunner, clear, stopElsewhere);
   const client = new Client({ name: "sign-out-test", version: "1" });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
@@ -68,8 +70,8 @@ async function connect(appConfig: AppConfig, clear?: Clear, authRunner?: { busy(
   };
 }
 
-async function signOut(appConfig: AppConfig, clear?: Clear, authRunner?: { busy(): boolean }) {
-  const { client, close } = await connect(appConfig, clear, authRunner);
+async function signOut(appConfig: AppConfig, clear?: Clear, authRunner?: Runner, stopElsewhere?: StopElsewhere) {
+  const { client, close } = await connect(appConfig, clear, authRunner, stopElsewhere);
   try {
     const result = await client.callTool({ name: "sign_out" });
     const blocks = result.content as Array<{ type: string; text: string }>;
@@ -105,8 +107,10 @@ describe("sign_out registration", () => {
       const { tools } = await client.listTools();
       const description = tools.find((entry) => entry.name === "sign_out")!.description!;
       expect(description).toMatch(/only when the user explicitly asks/i);
-      expect(description).toMatch(/never call it to fix an error/i);
-      expect(description).toMatch(/retry/i);
+      expect(description).toMatch(/never call it on your own to fix an error/i);
+      // A user who missed the prompt has to be able to get a new one now.
+      expect(description).toMatch(/cancel a sign-in that is waiting for approval and get a new prompt now/);
+      expect(description).toMatch(/the next Brightspace call starts a new sign-in right away/);
       expect(description).toMatch(/sign in again from scratch/);
       expect(description).not.toMatch(/with MFA/);
     } finally {
@@ -180,7 +184,7 @@ describe("sign_out", () => {
     expect(text).toMatch(/already signed out/);
   });
 
-  it("deletes nothing and tells the model not to retry when a sign-in holds the lock, without an error flag", async () => {
+  it("deletes nothing and tells the model not to retry when a sign-in it can't cancel holds the lock, without an error flag", async () => {
     await seed();
     const release = await acquireProcessLock(authLockPath(dir));
     try {
@@ -188,7 +192,7 @@ describe("sign_out", () => {
 
       expect(isError).toBe(false);
       expect(text).toBe(
-        "Not signed out: a sign-in is in progress on this computer, so nothing was deleted. If you don't want to sign in, don't approve the prompt. Tell the user to ask again after the sign-in finishes or times out; do not call sign_out again on your own."
+        "Not signed out: a sign-in that sign_out can't cancel is in progress on this computer (one started in a terminal with `auth`, for example), so nothing was deleted and it was left running. Tell the user to finish or close that sign-in, then ask again; do not call sign_out again on your own."
       );
     } finally {
       await release();
@@ -198,25 +202,49 @@ describe("sign_out", () => {
     expect(forgetSession).not.toHaveBeenCalled();
   });
 
-  it("deletes nothing when this process's own sign-in has spawned but not yet taken the lock", async () => {
+  it("cancels this server's waiting sign-in before deleting, and says the next question starts a new one", async () => {
     await seed();
-    const clear = vi.fn(async () => ({ removed: [] as string[] }));
-    const { text, isError } = await signOut(config(), clear, { busy: () => true });
+    const order: string[] = [];
+    const cancel = vi.fn(async () => { order.push("cancel"); return true; });
+    const clear = vi.fn(async (sessionDir: string) => { order.push("clear"); return clearSavedSession(sessionDir); });
+    const { text, isError } = await signOut(config(), clear, { cancel }, async () => false);
 
     expect(isError).toBe(false);
-    expect(text).toMatch(/^Not signed out: a sign-in is in progress on this computer, so nothing was deleted\./);
-    expect(text).toMatch(/do not call sign_out again on your own/);
-    expect(clear).not.toHaveBeenCalled();
-    for (const name of SESSION_FILES) expect(await exists(name)).toBe(true);
-    expect(clearCache).not.toHaveBeenCalled();
-    expect(forgetSession).not.toHaveBeenCalled();
+    expect(order).toEqual(["cancel", "clear"]);
+    expect(text).toMatch(/^Cancelled the Brightspace sign-in that was waiting for approval, so the prompt or number from it no longer works\.\nSigned out of Brightspace on this computer\./);
+    expect(text).toContain("The next Brightspace question starts a new sign-in right away and sends a new prompt");
+    for (const name of SESSION_FILES) expect(await exists(name)).toBe(false);
   });
 
-  it("signs out normally when the auth runner is idle", async () => {
+  it("reports a cancel even when there was no saved session to remove", async () => {
+    const { text } = await signOut(config(), async () => ({ removed: [] }), { cancel: async () => false }, async () => true);
+
+    expect(text).toBe(
+      "Cancelled the Brightspace sign-in that was waiting for approval, so the prompt or number from it no longer works.\n" +
+      "There was no saved session to remove.\n" +
+      "The next Brightspace question starts a new sign-in right away and sends a new prompt; give the user the new number it returns."
+    );
+  });
+
+  it("signs out normally when no sign-in is running", async () => {
     await seed();
-    const { text } = await signOut(config(), undefined, { busy: () => false });
-    expect(text).toContain("Signed out of Brightspace on this computer.");
+    const { text } = await signOut(config(), undefined, { cancel: async () => false }, async () => false);
+    expect(text).toMatch(/^Signed out of Brightspace on this computer\./);
+    expect(text).not.toContain("Cancelled");
     for (const name of SESSION_FILES) expect(await exists(name)).toBe(false);
+  });
+
+  // The PID in owner.json comes from a file: a process that is not this
+  // package's sign-in child (here, the test runner itself) must never be killed.
+  it("leaves an automatic lock owner alone unless it is a sign-in child, and deletes nothing", async () => {
+    await seed();
+    await fs.mkdir(authLockPath(dir), { recursive: true });
+    await fs.writeFile(path.join(authLockPath(dir), "owner.json"), JSON.stringify({ pid: process.pid, host: "h", nonce: "n", mode: "automatic" }));
+    const { text, isError } = await signOut(config());
+
+    expect(isError).toBe(false);
+    expect(text).toMatch(/^Not signed out: a sign-in that sign_out can't cancel is in progress/);
+    for (const name of SESSION_FILES) expect(await exists(name)).toBe(true);
   });
 
   it.each([
