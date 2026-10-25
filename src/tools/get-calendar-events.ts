@@ -7,7 +7,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { D2LApiClient } from "../api/index.js";
 import { GetCalendarEventsSchema } from "./schemas.js";
-import { toolResponse, toolResponseWithNotice, errorResponse, sanitizeError, isAuthUnavailable, authPendingNotice } from "./tool-helpers.js";
+import { toolResponse, toolResponseWithNotice, errorResponse, sanitizeError, isAuthUnavailable, authPendingNotice, throwIfCredentialRejected } from "./tool-helpers.js";
 import { log } from "../utils/logger.js";
 import { resolveCourses } from "./resolve-courses.js";
 import { fetchCourseCalendarEvents } from "./calendar-events.js";
@@ -97,6 +97,7 @@ export function registerGetCalendarEvents(
         // which names which course ids are unavailable.
         const notices: string[] = [];
         if (pendingCourseIds.length > 0) {
+          throwIfCredentialRejected(firstAuthError);
           notices.push(
             "Sign-in to Brightspace is still in progress, so calendar events for " +
               `${pendingCourseIds.length} course(s) (${pendingCourseIds.join(", ")}) could not be fetched ` +

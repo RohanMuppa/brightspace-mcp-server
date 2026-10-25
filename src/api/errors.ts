@@ -20,6 +20,18 @@ export class ApiError extends AuthError {
   }
 }
 
+/**
+ * A 401 for a credential pasted into the environment (D2L_ACCESS_TOKEN or
+ * D2L_SESSION_COOKIE). No browser sign-in stands behind it, so the user is
+ * told how to replace the credential rather than to run the auth command.
+ */
+export class CredentialRejectedError extends ApiError {
+  constructor(endpoint: string, public readonly guidance: string) {
+    super(401, endpoint, guidance);
+    this.name = "CredentialRejectedError";
+  }
+}
+
 // Generic HTTP error (non-401/429) - semantic alias for ApiError
 export class HttpError extends ApiError {
   constructor(

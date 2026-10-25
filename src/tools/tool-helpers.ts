@@ -7,7 +7,7 @@
 import { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { ZodError } from "zod";
 import { ApiError, RateLimitError, NetworkError } from "../api/index.js";
-import { TokenRefreshError } from "../api/errors.js";
+import { CredentialRejectedError, TokenRefreshError } from "../api/errors.js";
 import { AuthProcessError, type AuthFailureKind } from "../auth/auth-runner.js";
 import { log } from "../utils/logger.js";
 import { AUTH_COMMAND } from "../utils/commands.js";
@@ -263,6 +263,16 @@ export function authPendingNotice(error: unknown): string {
 }
 
 /**
+ * A rejected pasted credential (D2L_ACCESS_TOKEN or D2L_SESSION_COOKIE) never
+ * recovers by waiting, unlike a pending sign-in. Tools call this before
+ * reporting "sign-in is still in progress", so the whole call fails instead
+ * and sanitizeError tells the user how to replace the credential.
+ */
+export function throwIfCredentialRejected(error: unknown): void {
+  if (error instanceof CredentialRejectedError) throw error;
+}
+
+/**
  * Sanitize errors for user-friendly messages
  *
  * SECURITY: Never include stack traces, raw API responses, or token values
@@ -312,6 +322,9 @@ function describeError(error: unknown): CallToolResult {
       return errorResponse(
         "Resource not found. The course or item may not exist, or you may not have access."
       );
+    }
+    if (error instanceof CredentialRejectedError) {
+      return errorResponse(error.guidance);
     }
     if (error.status === 401) {
       // A stale install is a common cause of sign-in failing, so this is the

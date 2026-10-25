@@ -16,6 +16,7 @@ import {
   errorResponse,
   isAuthUnavailable,
   authPendingNotice,
+  throwIfCredentialRejected,
 } from "./tool-helpers.js";
 import { log } from "../utils/logger.js";
 import { applyCourseFilter } from "../utils/course-filter.js";
@@ -186,6 +187,7 @@ export function registerGetMyGrades(
             // working — with authPending/notice added for callers that want
             // to tell "no grades" apart from "couldn't check".
             if (isAuthUnavailable(error)) {
+              throwIfCredentialRejected(error);
               log("DEBUG", `get_my_grades: sign-in pending for course ${courseId}`, error);
               return toolResponse({
                 courseId,
@@ -367,6 +369,7 @@ export function registerGetMyGrades(
         };
         const notices: string[] = [];
         if (pending.length > 0) {
+          throwIfCredentialRejected(pending[0].authError);
           response.authPending = true;
           response.unavailableCourseIds = pending.map((c) => c.courseId);
           notices.push(

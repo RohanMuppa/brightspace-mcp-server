@@ -6,14 +6,14 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AuthProcessError, type AuthFailureKind } from "../../src/auth/auth-runner.js";
-import { ApiError, NetworkError, RateLimitError, TokenRefreshError } from "../../src/api/errors.js";
+import { ApiError, CredentialRejectedError, NetworkError, RateLimitError, TokenRefreshError } from "../../src/api/errors.js";
 import { DownloadError } from "../../src/utils/download-errors.js";
 
 vi.mock("../../src/utils/logger.js", () => ({ log: vi.fn() }));
 vi.mock("../../src/utils/update-checker.js", () => ({ getUpdateNotice: vi.fn(() => null) }));
 
 const { getUpdateNotice } = await import("../../src/utils/update-checker.js");
-const { sanitizeError, toolResponse, errorResponse } = await import("../../src/tools/tool-helpers.js");
+const { sanitizeError, toolResponse, errorResponse, authPendingNotice, throwIfCredentialRejected } = await import("../../src/tools/tool-helpers.js");
 const {
   SHORTCUTS_DOCS_URL, mfaShortcutTip, resetActiveShortcuts, setActiveShortcuts,
 } = await import("../../src/utils/two-factor-shortcuts.js");
@@ -234,5 +234,28 @@ describe("sanitizeError: download failures (issue #24)", () => {
       expect(text).not.toContain("An unexpected error occurred");
       expect(text).not.toContain("undefined");
     }
+  });
+});
+
+describe("a rejected pasted credential", () => {
+  const guidance = "The pasted D2L_SESSION_COOKIE has expired. Copy a fresh pair and update the environment variable.";
+
+  it("sanitizeError shows how to replace the credential instead of the auth command", () => {
+    const result = sanitizeError(new CredentialRejectedError("/d2l/api/lp/1.56/users/whoami", guidance));
+    expect(result.isError).toBe(true);
+    expect((result.content[0] as { text: string }).text).toBe(guidance);
+  });
+
+  it("throwIfCredentialRejected rethrows only a rejected pasted credential", () => {
+    const rejected = new CredentialRejectedError("/x", guidance);
+    expect(() => throwIfCredentialRejected(rejected)).toThrow(rejected);
+    expect(() => throwIfCredentialRejected(new ApiError(401, "/x", "Session expired"))).not.toThrow();
+    expect(() => throwIfCredentialRejected(new TokenRefreshError("down"))).not.toThrow();
+  });
+
+  it("an ordinary 401 still points at the auth command", () => {
+    const text = (sanitizeError(new ApiError(401, "/x", "Session expired")).content[0] as { text: string }).text;
+    expect(text).toContain("Auto-reauthentication was attempted but failed");
+    expect(authPendingNotice(new ApiError(401, "/x", "Session expired"))).toContain("in your terminal");
   });
 });

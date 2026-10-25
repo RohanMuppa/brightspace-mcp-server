@@ -9,7 +9,7 @@ import { DEFAULT_CACHE_TTLS } from "./types.js";
 import { TTLCache } from "./cache.js";
 import { TokenBucket } from "./rate-limiter.js";
 import { discoverVersions } from "./version-discovery.js";
-import { ApiError, RateLimitError, NetworkError } from "./errors.js";
+import { ApiError, CredentialRejectedError, RateLimitError, NetworkError } from "./errors.js";
 import {
   withRetry,
   isRetryableFailure,
@@ -502,7 +502,8 @@ export class D2LApiClient {
       }
       log("WARN", "Auto-reauthentication did not produce a valid token");
     }
-    throw new ApiError(401, path, this.authExpiredMessage ?? `Session expired. Please re-authenticate via ${AUTH_COMMAND}.`);
+    if (this.authExpiredMessage) throw new CredentialRejectedError(path, this.authExpiredMessage);
+    throw new ApiError(401, path, `Session expired. Please re-authenticate via ${AUTH_COMMAND}.`);
   }
 
   /**
