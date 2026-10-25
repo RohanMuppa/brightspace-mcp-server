@@ -1,43 +1,52 @@
 /**
  * Brightspace MCP Server. Copyright (c) 2026 Rohan Muppa. MIT licensed.
  *
- * Recognising a missing Playwright browser.
- *
- * This package's postinstall downloads Chromium. npm skips postinstall under
- * `--ignore-scripts` and under the newer allow-scripts policy, both of which
- * are common on global installs, so the package can land without a browser and
- * fail only later, at first sign-in.
- *
- * Playwright's own message does say what to run, but by the time it has been
- * wrapped in BrowserAuthError and then flattened into a generic
- * "Authentication failed" by the auth runner, the actionable command is gone.
- * Matching the error lets us keep the fix attached to the failure.
- *
- * Sign-in matches reactively, so it never reports a missing browser unless a
- * launch really failed. `setup --prepare` and `doctor` check up front instead
- * (chromiumStatus), through Playwright's public API only, and prepare installs
- * a missing browser with the package's own Playwright (installChromium).
+ * Browser downloads are disposable; installed dependency code is not.
+ * Repair downloads through this installation's own Playwright CLI. Sign-in
+ * repairs only a missing executable and retries once; it never runs npm.
  */
 
-import { spawn } from "node:child_process";
+import { spawn, execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { createRequire } from "node:module";
-import { CLEAR_NPX_CACHE_COMMAND } from "./commands.js";
+import { fileURLToPath } from "node:url";
+
+/** Run the installation that reported the error, even from another project. */
+export const BROWSER_REPAIR_COMMAND = `node "${fileURLToPath(new URL("../index.js", import.meta.url)).replaceAll("\\", "/")}" repair`;
+
+export function dependencyRepairHint(): string {
+  const root = fileURLToPath(new URL("../../", import.meta.url)).replaceAll("\\", "/");
+  const reinstall = root.split("/").includes("node_modules")
+    ? `npm install --prefix "${root}" --omit=dev`
+    : `npm ci --prefix "${root}", then npm run build in that directory`;
+  return "Playwright's package code is missing. Restore this installation's declared dependencies with " +
+    `${reinstall}, then run: ${BROWSER_REPAIR_COMMAND}`;
+}
+
+export class BrowserInstallError extends Error {
+  constructor(readonly dependencyMissing = false) {
+    super(dependencyMissing ? dependencyRepairHint() : PLAYWRIGHT_INSTALL_HINT);
+    this.name = "BrowserInstallError";
+  }
+}
+
+export function isMissingPlaywrightError(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  return (code === "ERR_MODULE_NOT_FOUND" || code === "MODULE_NOT_FOUND") &&
+    /playwright/.test(error instanceof Error ? error.message : "");
+}
 
 export const PLAYWRIGHT_INSTALL_HINT =
-  "Chromium is not installed, so sign-in cannot start. Your package manager " +
-  "skipped this package's postinstall script, which is what normally downloads it " +
-  "(common with --ignore-scripts or an allow-scripts policy). Run: " +
-  "npx playwright install chromium" +
-  `. If that does not help, reinstall and clear caches with ${CLEAR_NPX_CACHE_COMMAND}.`;
+  "Chromium is missing or could not be restored. It may have been removed after installation, " +
+  `or the install script may have been skipped. Run: ${BROWSER_REPAIR_COMMAND}`;
 
 /** True when an error is Playwright reporting that no browser binary exists. */
 export function isMissingBrowserError(error: unknown): boolean {
   const message =
     error instanceof Error ? error.message : typeof error === "string" ? error : "";
   if (!message) return false;
-  return /Executable doesn't exist|playwright install|Failed to launch.*because executable doesn't exist/i.test(
+  return /Executable doesn't exist|Failed to launch.*because executable doesn't exist/i.test(
     message
   );
 }
@@ -48,7 +57,7 @@ export interface ChromiumStatus {
    * found by really launching it. "unknown" means the launch failed for a
    * reason other than a missing browser, such as an agent's sandbox.
    */
-  headless: "present" | "missing" | "unknown";
+  headless: "present" | "missing" | "unknown" | "dependency_missing";
   /** The full browser that "show me the sign-in page" opens. */
   visible: boolean;
   /** Why `headless` is "unknown". */
@@ -82,7 +91,9 @@ export async function chromiumStatus(overrides: Partial<ChromiumProbe> = {}): Pr
   try {
     await probe.launchHeadless();
   } catch (error) {
-    if (isMissingBrowserError(error)) {
+    if (isMissingPlaywrightError(error)) {
+      headless = "dependency_missing";
+    } else if (isMissingBrowserError(error)) {
       headless = "missing";
     } else {
       headless = "unknown";
@@ -100,7 +111,35 @@ export async function chromiumStatus(overrides: Partial<ChromiumProbe> = {}): Pr
 
 /** True when sign-in has every browser it might need. */
 export function chromiumReady(status: ChromiumStatus): boolean {
-  return status.headless !== "missing" && status.visible;
+  return status.headless === "present" && status.visible;
+}
+
+/** One repair and one retry; unrelated launch failures never download anything.
+ * Authentication already holds its process lock; Playwright's installer also
+ * locks the shared browser cache across installations and accounts.
+ */
+export async function launchWithBrowserRecovery<T>(
+  launch: () => Promise<T>,
+  install: () => Promise<{ ok: boolean }> = installChromium,
+  progress: () => void = () => console.error("Restoring Chromium for Brightspace sign-in..."),
+): Promise<T> {
+  try {
+    return await launch();
+  } catch (error) {
+    if (isMissingPlaywrightError(error)) throw new BrowserInstallError(true);
+    if (!isMissingBrowserError(error)) throw error;
+  }
+  progress();
+  let installed: { ok: boolean };
+  try { installed = await install(); } catch { throw new BrowserInstallError(); }
+  if (!installed.ok) throw new BrowserInstallError();
+  try {
+    return await launch();
+  } catch (error) {
+    if (isMissingPlaywrightError(error)) throw new BrowserInstallError(true);
+    if (isMissingBrowserError(error)) throw new BrowserInstallError();
+    throw error;
+  }
 }
 
 /** The CLI of the Playwright this package depends on, so the browser revision matches. */
@@ -113,6 +152,7 @@ export interface InstallChromiumOptions {
   spawnImpl?: typeof spawn;
   execPath?: string;
   cliPath?: string;
+  timeoutMs?: number;
 }
 
 /**
@@ -131,7 +171,24 @@ export function installChromium(options: InstallChromiumOptions = {}): Promise<{
     return Promise.resolve({ ok: false, message: error instanceof Error ? error.message : String(error) });
   }
   return new Promise((resolve) => {
-    const child = spawnImpl(execPath, [cliPath, "install", "chromium"], { stdio: ["ignore", 2, 2] });
+    const child = spawnImpl(execPath, [cliPath, "install", "chromium"], {
+      stdio: ["ignore", 2, 2], detached: process.platform !== "win32",
+    });
+    const timer = setTimeout(() => {
+      // Include Playwright's download worker, so a timeout cannot leave an
+      // orphan downloading into the cache or holding its installation lock.
+      try {
+        if (child.pid && process.platform === "win32") {
+          execFileSync("taskkill", ["/pid", String(child.pid), "/t", "/f"], { stdio: "ignore", timeout: 5000 });
+        } else if (child.pid) {
+          process.kill(-child.pid, "SIGKILL");
+        } else child.kill("SIGKILL");
+      } catch { child.kill("SIGKILL"); }
+      resolve({ ok: false, message: "Chromium installation timed out. Check your connection and run repair again." });
+    }, options.timeoutMs ?? 120_000);
+    timer.unref();
+    child.once("close", () => clearTimeout(timer));
+    child.once("error", () => clearTimeout(timer));
     child.once("error", (error) => resolve({ ok: false, message: error.message }));
     child.once("close", (code) =>
       resolve(code === 0 ? { ok: true } : { ok: false, message: `Playwright's installer exited with code ${code}.` }));

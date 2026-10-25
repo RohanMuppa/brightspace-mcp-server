@@ -138,7 +138,15 @@ export async function fetchAllObjects<T>(
  */
 function nextPath(firstPath: string, next: string): string | null {
   if (/^https?:\/\//i.test(next)) {
-    const url = new URL(next);
+    let url: URL;
+    try {
+      url = new URL(next);
+    } catch {
+      // Stop here rather than throw away the pages already fetched. The raw
+      // Next is not logged: it can carry a `d2lSessionVal=` token.
+      log("WARN", "Pagination stopped: Next link was not a valid URL", { firstPath });
+      return null;
+    }
     if (!isApiPath(url.pathname)) {
       log("INFO", "Pagination stopped: Next link left the D2L API", {
         firstPath,

@@ -38,7 +38,7 @@ interface D2LSubmission {
 function tooLargeResponse(bytes: number) {
   return errorResponse(
     `File too large (${Math.round(bytes / 1024 / 1024)}MB). ` +
-      `Maximum allowed: ${DISK_MAX_FILE_SIZE / 1024 / 1024}MB`
+      `Maximum allowed: ${DISK_MAX_FILE_SIZE / 1024 / 1024}MB`, "rejectedFile"
   );
 }
 
@@ -54,7 +54,8 @@ export function registerDownloadDropboxSubmissionFile(
     {
       title: "Download Dropbox Submission File",
       description:
-        "Download a specific file from a student's (or group's) dropbox submission to a local directory, " +
+        "Download a specific file from a student's (or group's) dropbox submission to an existing local directory " +
+        "(it is not created for you), " +
         "for an instructor or TA. Use get_dropbox_submissions or get_dropbox_user_submissions first to " +
         "find submissionId and fileId. Requires instructor or TA access to the course. " +
         "IMPORTANT: Ask the user where they want to save the file before calling this tool. " +
@@ -75,18 +76,18 @@ export function registerDownloadDropboxSubmissionFile(
 
         if (!path.isAbsolute(downloadPath)) {
           return errorResponse(
-            "downloadPath must be an absolute path (e.g., /Users/username/Downloads or C:\\Users\\username\\Downloads)"
+            "downloadPath must be an absolute path (e.g., /Users/username/Downloads or C:\\Users\\username\\Downloads)", "invalidInput"
           );
         }
 
         try {
           const stats = await fs.stat(downloadPath);
           if (!stats.isDirectory()) {
-            return errorResponse(`downloadPath is not a directory: ${downloadPath}`);
+            return errorResponse(`downloadPath is not a directory: ${downloadPath}`, "destination");
           }
         } catch (error: any) {
           if (error?.code === "ENOENT") {
-            return errorResponse(`Download directory does not exist: ${downloadPath}`);
+            return errorResponse(`Download directory does not exist: ${downloadPath}. Create it, then retry, or choose an existing directory.`, "destination");
           }
           throw error;
         }
@@ -108,25 +109,25 @@ export function registerDownloadDropboxSubmissionFile(
           if (!submission) {
             return errorResponse(
               `Submission ${submissionId} not found in folder ${folderId}. ` +
-                "Use get_dropbox_submissions to list available submissions."
+                "Use get_dropbox_submissions to list available submissions.", "notFound"
             );
           }
           targetFile = submission.Files.find((f) => f.FileId === fileId) ?? null;
           if (!targetFile) {
             const available = submission.Files.map((f) => `${f.FileName} (ID: ${f.FileId})`).join(", ");
             return errorResponse(
-              `File ID ${fileId} not found in submission ${submissionId}. Available files: ${available}`
+              `File ID ${fileId} not found in submission ${submissionId}. Available files: ${available}`, "notFound"
             );
           }
         } catch (error) {
           if (error instanceof ApiError && error.status === 403) {
             return errorResponse(
               "Instructor or TA access required for this course. This tool downloads another user's " +
-              "dropbox submission file, which Brightspace only grants to course staff."
+              "dropbox submission file, which Brightspace only grants to course staff.", "permission"
             );
           }
           if (error instanceof ApiError && error.status === 404) {
-            return errorResponse(`Folder ${folderId} not found in course ${courseId}.`);
+            return errorResponse(`Folder ${folderId} not found in course ${courseId}.`, "notFound");
           }
           throw error;
         }
@@ -147,11 +148,11 @@ export function registerDownloadDropboxSubmissionFile(
         } catch (error) {
           if (error instanceof ApiError && error.status === 403) {
             return errorResponse(
-              "Instructor or TA access required for this course. Brightspace refused this download."
+              "Instructor or TA access required for this course. Brightspace refused this download.", "permission"
             );
           }
           if (error instanceof ApiError && error.status === 404) {
-            return errorResponse("File not found on the server. It may have been deleted.");
+            return errorResponse("File not found on the server. It may have been deleted.", "notFound");
           }
           throw error;
         }
