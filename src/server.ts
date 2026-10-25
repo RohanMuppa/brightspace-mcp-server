@@ -150,7 +150,7 @@ export function createMcpServer(runtime: ServerRuntime): McpServer {
   registerGetRoster(server, apiClient);
   registerGetMyGroups(server, apiClient);
   registerGetSyllabus(server, apiClient);
-  registerGetDiscussions(server, apiClient);
+  registerGetDiscussions(server, apiClient, config.baseUrl);
   registerGetVideoTranscript(server, apiClient);
   registerGetServerInfo(server, config, version, apiClient);
   registerSearchCourse(server, apiClient);
