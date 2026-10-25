@@ -112,8 +112,16 @@ describe("shared runtime behind the default stdio command", { timeout: 30_000 },
   /** What spawning `brightspace-mcp-server runtime` does, in this process. */
   function startRuntime(): void {
     starts += 1;
+    // A start that lost the race keeps waiting for the owner lock, so it can
+    // win only after its own test has ended and released it. It belongs to
+    // that test, not to whichever one is running by then: on a slow runner it
+    // landed in the next test's list with the default idle time, and that test
+    // waited 60 s for it to idle out.
+    const owner = served;
     void serveSharedRuntime(makeRuntime(), { dir, idleMs }).then((runtime) => {
-      if (runtime) served.push(runtime);
+      if (!runtime) return;
+      if (owner === served) served.push(runtime);
+      else void runtime.stop();
     });
   }
 
@@ -166,11 +174,9 @@ describe("shared runtime behind the default stdio command", { timeout: 30_000 },
     expect(served).toHaveLength(1);
   });
 
-  // This test has timed out on a Windows runner (Node 22), once in a publish
-  // run, and has not reproduced since in 100 targeted repeats. Until the cause
-  // is known it has twice the default time, and a failure prints a timeline of
-  // each awaited step and the runtime's own log lines, so the next one shows
-  // where it stalled.
+  // A failure prints a timeline of each awaited step and the runtime's own log
+  // lines. That is how a runtime left over from the previous test was found
+  // here (see startRuntime).
   it("stops after it has been idle, and starts again on a later request", { timeout: 60_000 }, async ({ onTestFailed }) => {
     const timeline: string[] = [];
     const started = Date.now();

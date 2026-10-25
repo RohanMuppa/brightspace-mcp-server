@@ -68,7 +68,9 @@ describe.skipIf(!existsSync(entry))("brightspace-mcp-server default command (rea
         console.warn(`Left ${home} in place: ${(error as NodeJS.ErrnoException).code}`);
       }
     }
-  });
+    // The waits above can add up to more than vitest's default 10 s for a hook
+    // on a slow Windows runner, which then timed out before naming anything.
+  }, 60_000);
 
   function runtimeStates(home: string): Array<{ pid: number }> {
     const root = join(home, "sessions", "shared-runtime");
