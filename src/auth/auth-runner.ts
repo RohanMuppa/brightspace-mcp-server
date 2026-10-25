@@ -12,7 +12,8 @@ import * as path from "node:path";
 import { log } from "../utils/logger.js";
 import { AuthError } from "../utils/errors.js";
 import { AUTH_COMMAND } from "../utils/commands.js";
-import { devActivity } from "../utils/dev-activity.js";
+import { dependencyRepairHint, PLAYWRIGHT_INSTALL_HINT } from "../utils/browser-install.js";
+import { devActivity, newRecoveryId, RECOVERY_ID_ENV } from "../utils/dev-activity.js";
 import { parsePhaseMarker } from "./auth-phases.js";
 import { AUTOMATIC_PENDING_MARKER, RELAYED_CHALLENGE_MARKER, RELAYED_STARTING_MARKER, authLockPath, challengeRelayedAt, relayChallenge } from "./mfa-challenge.js";
 import { inspectLockOwner } from "./auth-lock.js";
@@ -157,7 +158,7 @@ const automaticPendingFailure = (relayed = false): AuthProcessError => new AuthP
   relayed,
 );
 
-export type AuthFailureKind = "busy" | "cooldown" | "unsupported" | "secureStorage" | "transport" | "timeout" | "failed" | "mfaPending" | "automaticPending" | "inProgress";
+export type AuthFailureKind = "busy" | "cooldown" | "unsupported" | "secureStorage" | "transport" | "timeout" | "failed" | "mfaPending" | "automaticPending" | "inProgress" | "browserInstall" | "dependencyMissing";
 
 export class AuthProcessError extends AuthError {
   constructor(
@@ -615,8 +616,8 @@ export class AuthRunner {
     type Seen = { phase: "starting" } | { phase: "automatic" } | { phase: "approval"; numberMatch?: string };
     let latest: Seen = error.kind === "inProgress" ? { phase: "starting" }
       : error.kind === "automaticPending" ? { phase: "automatic" }
-      : { phase: "approval", numberMatch: error.numberMatch };
-    for (;;) {
+        : { phase: "approval", numberMatch: error.numberMatch };
+    for (; ;) {
       const held = await fs.access(lockPath).then(() => true, () => false);
       if (!held) {
         this.relayTold.clear();
@@ -700,7 +701,7 @@ export class AuthRunner {
    */
   private async joinBackgroundChild(childDone: Promise<boolean>, startedAt: number): Promise<boolean> {
     if (!this.pendingChallenge && this.challengeSignal) {
-      await Promise.race([childDone.catch(() => {}), this.challengeSignal]);
+      await Promise.race([childDone.catch(() => { }), this.challengeSignal]);
     }
 
     if (!this.pendingChallenge) return childDone;
@@ -769,7 +770,8 @@ export class AuthRunner {
    */
   private async spawnAuth(): Promise<boolean> {
     const started = Date.now();
-    devActivity("recovery_started");
+    const recoveryId = newRecoveryId();
+    devActivity("recovery_started", { recoveryId });
     log("INFO", "Auto-launching brightspace-auth...");
 
     return await new Promise<boolean>((resolve, reject) => {
@@ -781,7 +783,8 @@ export class AuthRunner {
           // Background recovery never opens a browser over the user's work
           // unless D2L_HEADLESS explicitly asks for one; the saved
           // visible-browser preference applies to manual sign-in only.
-          env: { D2L_HEADLESS: "true", ...process.env },
+          // The recovery id lets the child's dev activity join this recovery.
+          env: { D2L_HEADLESS: "true", ...process.env, [RECOVERY_ID_ENV]: recoveryId },
           stdio: ["ignore", "pipe", "pipe"],
           detached: process.platform !== "win32",
           windowsHide: true,
@@ -903,7 +906,7 @@ export class AuthRunner {
         // is told the number instead of "still working".
         const firstChallenge = this.pendingChallenge === null || this.pendingChallenge.kind === "automaticPending";
         startWatching();
-        if (firstChallenge) devActivity("mfa_observed", { elapsedMs: Date.now() - started });
+        if (firstChallenge) devActivity("mfa_observed", { elapsedMs: Date.now() - started, recoveryId });
         if (firstChallenge || matched) {
           this.pendingChallenge = { kind: "mfaPending", numberMatch: matched ?? this.pendingChallenge?.numberMatch };
         }
@@ -939,7 +942,7 @@ export class AuthRunner {
       const finishChild = (error?: AuthProcessError) => {
         if (childFinished) return;
         childFinished = true;
-        devActivity("recovery_finished", { outcome: error ? "error" : "success", reason: error?.kind, elapsedMs: Date.now() - started });
+        devActivity("recovery_finished", { outcome: error ? "error" : "success", reason: error?.kind, elapsedMs: Date.now() - started, recoveryId });
         clearTimeout(timer);
         if (killTimer) clearTimeout(killTimer);
         if (abandonTimer) clearTimeout(abandonTimer);
@@ -974,7 +977,7 @@ export class AuthRunner {
         const numberMarker = MFA_NUMBER_MARKER.exec(line);
         const phaseMarker = parsePhaseMarker(line);
         if (phaseMarker) {
-          devActivity("auth_phase", phaseMarker);
+          devActivity("auth_phase", { ...phaseMarker, recoveryId });
         } else if (numberMarker) {
           numberMatch = numberMarker[1];
           publishChallenge(numberMatch);
@@ -1019,6 +1022,8 @@ export class AuthRunner {
           finishChild();
         } else {
           const failures: Record<number, [AuthFailureKind, string]> = {
+            8: ["browserInstall", PLAYWRIGHT_INSTALL_HINT],
+            9: ["dependencyMissing", dependencyRepairHint()],
             2: ["busy", `Authentication already in progress in another process. Complete that attempt, then retry, or run \`${AUTH_COMMAND}\` in a terminal to take over that background attempt.`],
             3: ["cooldown", `Automatic MFA is paused after an unsuccessful attempt. Run ${AUTH_COMMAND} to retry immediately.`],
             4: ["unsupported", "This identity provider cannot complete headless authentication. See the authentication logs."],

@@ -1,6 +1,6 @@
 {
   "name": "brightspace-mcp-server",
-  "version": "5.0.12",
+  "version": "5.1.12",
   "mcpName": "io.github.RohanMuppa/brightspace",
   "description": "MCP server for Brightspace (D2L). Check grades, due dates, assignments, announcements, syllabus, rosters and more via Claude, ChatGPT, Cursor, Windsurf, or any MCP client.",
   "type": "module",
@@ -12,6 +12,7 @@
   },
   "files": [
     "build",
+    "scripts/install-browser.cjs",
     "README.md",
     "LICENSE"
   ],
@@ -24,12 +25,13 @@
     "dev": "tsc --watch",
     "test": "vitest",
     "test:run": "vitest run",
-    "postinstall": "npx playwright install chromium"
+    "test:install": "node scripts/install-smoke.mjs",
+    "postinstall": "node scripts/install-browser.cjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.26.0",
     "@napi-rs/keyring": "^2.0.0",
-    "dotenv": "^17.2.4",
+    "dotenv": "^18.0.8",
     "file-type": "^22.1.1",
     "playwright": "^1.58.2",
     "sanitize-filename": "^1.6.3",

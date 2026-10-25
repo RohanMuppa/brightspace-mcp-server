@@ -45,7 +45,7 @@ function tooLargeResponse(bytes: number | null, downloadPath: string | undefined
   // null: the body was cut off at the cap, so its full size is unknown.
   const size = bytes === null ? "over the limit" : `${Math.round(bytes / 1024 / 1024)}MB`;
   return errorResponse(
-    `File too large (${size}). Maximum allowed: ${maxFileSize(downloadPath) / 1024 / 1024}MB.${hint}`
+    `File too large (${size}). Maximum allowed: ${maxFileSize(downloadPath) / 1024 / 1024}MB.${hint}`, "rejectedFile"
   );
 }
 
@@ -136,7 +136,7 @@ async function respondInline(
 
   if (buffer.length > INLINE_MAX_SIZE) {
     return errorResponse(
-      `File too large for inline delivery (${Math.round(buffer.length / 1024 / 1024)}MB, inline max ${INLINE_MAX_SIZE / 1024 / 1024}MB). Provide an absolute downloadPath to save it to disk instead.`
+      `File too large for inline delivery (${Math.round(buffer.length / 1024 / 1024)}MB, inline max ${INLINE_MAX_SIZE / 1024 / 1024}MB). Provide an absolute downloadPath to save it to disk instead.`, "rejectedFile"
     );
   }
 
@@ -323,7 +323,7 @@ export function registerDownloadFile(
     {
       title: "Download File",
       description:
-        "Download a file from course content, files linked by path inside a module description (coursePath, from get_course_content's quickLink URLs with type=coursefile), instructor assignment attachments (source: assignmentAttachment with folderId + fileId), assignment submissions, or an announcement's attachments. Use this when the user wants a file from Brightspace course content, dropbox submissions, or an announcement (newsId + fileId, from get_announcements). Two response modes: (1) INLINE (default — omit downloadPath): the file comes back directly in the tool response — extracted text for PDFs and Office documents, an image block for jpeg/png/gif/webp, or a short description for anything else — so it can be read immediately without touching any filesystem. This is the right choice in clients like Claude Desktop, whose analysis/sandbox tools cannot see a file the MCP server writes to its own host filesystem. (2) DISK (set downloadPath to an absolute path on the HOST filesystem the MCP server runs on): the file is saved there. Ask the user where to save it before using disk mode — never guess a directory. After identifying the file, suggest a clean readable filename (e.g., 'Lecture 7 - Memory Management.pdf' instead of 'L07_CS251_2026SP_v2.pdf') and pass it as customFilename, or omit it to keep the original. If a content-topic download fails because the file isn't released yet, the response explains why when Brightspace's module/topic metadata supports it (not yet open, ended, locked, or hidden).",
+        "Download a file from course content, files linked by path inside a module description (coursePath, from get_course_content's quickLink URLs with type=coursefile), instructor assignment attachments (source: assignmentAttachment with folderId + fileId), assignment submissions, or an announcement's attachments. Use this when the user wants a file from Brightspace course content, dropbox submissions, or an announcement (newsId + fileId, from get_announcements). Two response modes: (1) INLINE (default — omit downloadPath): the file comes back directly in the tool response — extracted text for PDFs and Office documents, an image block for jpeg/png/gif/webp, or a short description for anything else — so it can be read immediately without touching any filesystem. This is the right choice in clients like Claude Desktop, whose analysis/sandbox tools cannot see a file the MCP server writes to its own host filesystem. (2) DISK (set downloadPath to an absolute path on the HOST filesystem the MCP server runs on): the file is saved there. The directory must already exist; it is not created for you. Ask the user where to save it before using disk mode — never guess a directory. After identifying the file, suggest a clean readable filename (e.g., 'Lecture 7 - Memory Management.pdf' instead of 'L07_CS251_2026SP_v2.pdf') and pass it as customFilename, or omit it to keep the original. If a content-topic download fails because the file isn't released yet, the response explains why when Brightspace's module/topic metadata supports it (not yet open, ended, locked, or hidden).",
       inputSchema: DownloadFileSchema,
     },
     async (args: any) => {
@@ -335,11 +335,11 @@ export function registerDownloadFile(
           DownloadFileSchema.parse(args);
 
         if (coursePath !== undefined && (topicId !== undefined || folderId !== undefined || newsId !== undefined || fileId !== undefined || source !== undefined)) {
-          return errorResponse("coursePath cannot be combined with topicId, folderId, newsId, fileId, or source.");
+          return errorResponse("coursePath cannot be combined with topicId, folderId, newsId, fileId, or source.", "invalidInput");
         }
 
         if (source !== undefined && (topicId !== undefined || newsId !== undefined || folderId === undefined || fileId === undefined)) {
-          return errorResponse("source requires folderId and fileId and cannot be combined with topicId or newsId.");
+          return errorResponse("source requires folderId and fileId and cannot be combined with topicId or newsId.", "invalidInput");
         }
 
         // Validate courseId
@@ -352,7 +352,7 @@ export function registerDownloadFile(
           // Validate download path is absolute
           if (!path.isAbsolute(downloadPath)) {
             return errorResponse(
-              "Download path must be an absolute path (e.g., /Users/username/Downloads on Mac or C:\\Users\\username\\Downloads on Windows)"
+              "Download path must be an absolute path (e.g., /Users/username/Downloads on Mac or C:\\Users\\username\\Downloads on Windows)", "invalidInput"
             );
           }
 
@@ -361,13 +361,13 @@ export function registerDownloadFile(
             const stats = await fs.stat(downloadPath);
             if (!stats.isDirectory()) {
               return errorResponse(
-                `Download path is not a directory: ${downloadPath}`
+                `Download path is not a directory: ${downloadPath}`, "destination"
               );
             }
           } catch (error: any) {
             if (error?.code === "ENOENT") {
               return errorResponse(
-                `Download directory does not exist: ${downloadPath}`
+                `Download directory does not exist: ${downloadPath}. Create it, then retry, or choose an existing directory.`, "destination"
               );
             }
             throw error;
@@ -377,7 +377,7 @@ export function registerDownloadFile(
         // Determine download source
         if (coursePath !== undefined) {
           const filePath = parseCoursePath(coursePath, courseId, apiClient.origin);
-          if (typeof filePath !== "string") return errorResponse(filePath.error);
+          if (typeof filePath !== "string") return errorResponse(filePath.error, "invalidInput");
           return await downloadCourseFile(apiClient, courseId, filePath, downloadPath, customFilename);
         } else if (topicId !== undefined) {
           // Content file download
@@ -415,7 +415,7 @@ export function registerDownloadFile(
           );
         } else {
           return errorResponse(
-            "Either topicId (for content files), coursePath (for course files linked from a module description), both folderId and fileId (for submission files), or both newsId and fileId (for announcement attachments) must be provided"
+            "Either topicId (for content files), coursePath (for course files linked from a module description), both folderId and fileId (for submission files), or both newsId and fileId (for announcement attachments) must be provided", "invalidInput"
           );
         }
       } catch (error) {
@@ -445,7 +445,7 @@ async function downloadCourseFile(
   );
   if (!response) {
     return errorResponse(
-      `Course files are served only to a signed-in Brightspace web session, and there is no valid one: the session cookie is missing or has expired. Sign in again with \`${AUTH_COMMAND}\` and retry. A server that runs on D2L_ACCESS_TOKEN alone has no cookie: set D2L_SESSION_COOKIE as well, or sign in through the browser.`
+      `Course files are served only to a signed-in Brightspace web session, and there is no valid one: the session cookie is missing or has expired. Sign in again with \`${AUTH_COMMAND}\` and retry. A server that runs on D2L_ACCESS_TOKEN alone has no cookie: set D2L_SESSION_COOKIE as well, or sign in through the browser.`, "auth"
     );
   }
 
@@ -477,10 +477,10 @@ async function downloadAssignmentAttachment(
   const raw = await apiClient.get<unknown>(apiClient.le(courseId, "/dropbox/folders/"));
   const folders = Array.isArray(raw) ? raw : (raw as any)?.Objects ?? [];
   const folder = folders.find((candidate: any) => candidate.Id === folderId && candidate.IsHidden !== true);
-  if (!folder) return errorResponse(`No visible assignment with id ${folderId} in course ${courseId}.`);
+  if (!folder) return errorResponse(`No visible assignment with id ${folderId} in course ${courseId}.`, "notFound");
   const attachments = folder.Attachments ?? [];
   const file = attachments.find((candidate: any) => candidate.FileId === fileId);
-  if (!file) return errorResponse(`File ID ${fileId} not found on this assignment. Available files: ${attachments.map((candidate: any) => `${candidate.FileName} (ID: ${candidate.FileId})`).join(", ")}`);
+  if (!file) return errorResponse(`File ID ${fileId} not found on this assignment. Available files: ${attachments.map((candidate: any) => `${candidate.FileName} (ID: ${candidate.FileId})`).join(", ")}`, "notFound");
   if (file.Size > maxFileSize(downloadPath)) return tooLargeResponse(file.Size, downloadPath);
   const response = await apiClient.getRaw(apiClient.le(courseId, `/dropbox/folders/${folderId}/attachments/${fileId}`));
   const filename = parseContentDispositionFilename(response.headers.get("Content-Disposition") ?? "") ?? file.FileName;
@@ -596,7 +596,7 @@ async function downloadSubmissionFile(
 
   if (!submissions || submissions.length === 0) {
     return errorResponse(
-      "No submissions found for this assignment. Upload a submission first."
+      "No submissions found for this assignment. Upload a submission first.", "notFound"
     );
   }
 
@@ -622,7 +622,7 @@ async function downloadSubmissionFile(
   if (!submission || !file) {
     const available = submissions.flatMap((s) => s.Files ?? []);
     return errorResponse(
-      `File ID ${fileId} not found in submission. Available files: ${available.map((f) => `${f.FileName} (ID: ${f.FileId})`).join(", ")}`
+      `File ID ${fileId} not found in submission. Available files: ${available.map((f) => `${f.FileName} (ID: ${f.FileId})`).join(", ")}`, "notFound"
     );
   }
 
@@ -680,7 +680,7 @@ async function downloadNewsAttachment(
 
   if (!file) {
     return errorResponse(
-      `File ID ${fileId} not found on this announcement. Available files: ${attachments.map((f) => `${f.FileName} (ID: ${f.FileId})`).join(", ")}`
+      `File ID ${fileId} not found on this announcement. Available files: ${attachments.map((f) => `${f.FileName} (ID: ${f.FileId})`).join(", ")}`, "notFound"
     );
   }
 

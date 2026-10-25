@@ -19,6 +19,7 @@ import { saveSecureConfig } from "../utils/secure-config.js";
 import {
   chromiumReady,
   chromiumStatus,
+  dependencyRepairHint,
   installChromium,
   PLAYWRIGHT_INSTALL_HINT,
   type ChromiumStatus,
@@ -186,20 +187,20 @@ export async function runPrepare(args: SetupArgs, overrides: Partial<PrepareDeps
 
   // ── Chromium ──
   let browser = await deps.chromiumStatus();
-  if (!chromiumReady(browser) && args.installBrowser) {
+  if (!chromiumReady(browser) && args.installBrowser && browser.headless !== "dependency_missing" && browser.headless !== "unknown") {
     deps.progress("  Downloading Chromium for sign-in (this can take a few minutes)...");
     const installed = await deps.installChromium();
     browser = installed.ok ? await deps.chromiumStatus() : browser;
     if (!installed.ok && installed.message) deps.progress(`  ${installed.message}`);
   }
   if (chromiumReady(browser)) {
-    steps.push(ok("browser", browser.headless === "unknown"
-      ? `Chromium is installed (a test launch didn't work here: ${browser.detail ?? "unknown reason"}; sign-in in a terminal normally still works)`
-      : "Chromium is installed for sign-in"));
+    steps.push(ok("browser", "Chromium is installed for sign-in"));
   } else {
-    steps.push(fail("browser", args.installBrowser
-      ? `Chromium could not be installed. ${PLAYWRIGHT_INSTALL_HINT}`
-      : "Chromium is missing — run prepare again without --no-browser-install"));
+    steps.push(fail("browser", browser.headless === "dependency_missing" ? dependencyRepairHint()
+      : browser.headless === "unknown" ? "Chromium's test launch failed. Check operating system permissions and browser system dependencies."
+        : args.installBrowser
+          ? `Chromium could not be installed. ${PLAYWRIGHT_INSTALL_HINT}`
+          : "Chromium is missing — run prepare again without --no-browser-install"));
   }
 
   // ── Network, settings, session (need a school) ──

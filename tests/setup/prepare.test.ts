@@ -86,7 +86,7 @@ function harness(options: Harness = {}) {
     detectClients: () => options.targets ?? [],
     getSessionToken: async () =>
       options.signedIn ? { accessToken: "t", capturedAt: 0, expiresAt: 0, source: "cache" as const } : null,
-    progress: () => {},
+    progress: () => { },
   };
   return { deps, saves, installs, stored: () => stored };
 }
@@ -236,7 +236,7 @@ describe("setup --prepare", () => {
     const h = harness({ browser: { headless: "missing", visible: false }, installOk: false });
     const result = await runPrepare(args("--purdue"), h.deps);
     expect(result.state).toBe("blocked");
-    expect(result.steps.find((s) => s.id === "browser")?.line).toContain("playwright install chromium");
+    expect(result.steps.find((s) => s.id === "browser")?.line).toContain(" repair");
     expect(result.next.command).toBe("npx -y brightspace-mcp-server@latest setup --purdue --prepare");
   });
 

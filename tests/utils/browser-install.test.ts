@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { EventEmitter } from "node:events";
 import {
   chromiumReady,
@@ -7,6 +7,8 @@ import {
   isMissingBrowserError,
   playwrightCliPath,
   PLAYWRIGHT_INSTALL_HINT,
+  launchWithBrowserRecovery,
+  BrowserInstallError,
 } from "../../src/utils/browser-install.js";
 
 /**
@@ -20,18 +22,19 @@ describe("isMissingBrowserError", () => {
   it("matches Playwright's missing-executable error", () => {
     const real = new Error(
       "browserType.launch: Executable doesn't exist at " +
-        "/Users/me/Library/Caches/ms-playwright/chromium-1243/chrome-mac/Chromium.app\n" +
-        "╔═══════════════════════════════════════════════════════════════════════════╗\n" +
-        "║ Looks like Playwright was just installed or updated.                      ║\n" +
-        "║ Please run the following command to download new browsers:                ║\n" +
-        "║     npx playwright install                                                ║\n" +
-        "╚═══════════════════════════════════════════════════════════════════════════╝"
+      "/Users/me/Library/Caches/ms-playwright/chromium-1243/chrome-mac/Chromium.app\n" +
+      "╔═══════════════════════════════════════════════════════════════════════════╗\n" +
+      "║ Looks like Playwright was just installed or updated.                      ║\n" +
+      "║ Please run the following command to download new browsers:                ║\n" +
+      "║     npx playwright install                                                ║\n" +
+      "╚═══════════════════════════════════════════════════════════════════════════╝"
     );
     expect(isMissingBrowserError(real)).toBe(true);
   });
 
-  it("matches a bare install instruction", () => {
-    expect(isMissingBrowserError(new Error("please run npx playwright install chromium"))).toBe(true);
+  it("does not guess a missing executable from installation advice alone", () => {
+    expect(isMissingBrowserError(new Error("please run npx playwright install chromium"))).toBe(false);
+    expect(isMissingBrowserError(new Error("Host system is missing dependencies. Run npx playwright install-deps"))).toBe(false);
   });
 
   it("accepts a string as well as an Error", () => {
@@ -54,12 +57,13 @@ describe("isMissingBrowserError", () => {
 
 describe("PLAYWRIGHT_INSTALL_HINT", () => {
   it("names the command that actually fixes it", () => {
-    expect(PLAYWRIGHT_INSTALL_HINT).toContain("npx playwright install chromium");
+    expect(PLAYWRIGHT_INSTALL_HINT).toContain(" repair");
+    expect(PLAYWRIGHT_INSTALL_HINT).not.toContain("npx playwright");
   });
 
   it("explains why the browser is missing, not just what to run", () => {
-    expect(PLAYWRIGHT_INSTALL_HINT).toMatch(/postinstall/i);
-    expect(PLAYWRIGHT_INSTALL_HINT).toMatch(/ignore-scripts|allow-scripts/i);
+    expect(PLAYWRIGHT_INSTALL_HINT).toContain("removed after installation");
+    expect(PLAYWRIGHT_INSTALL_HINT).toContain("skipped");
   });
 });
 
@@ -67,7 +71,7 @@ describe("chromiumStatus", () => {
   const missing = new Error("browserType.launch: Executable doesn't exist at /x/chrome-headless-shell");
 
   it("is ready when both browsers are there", async () => {
-    const status = await chromiumStatus({ launchHeadless: async () => {}, executablePath: async () => "/x/chrome", existsSync: () => true });
+    const status = await chromiumStatus({ launchHeadless: async () => { }, executablePath: async () => "/x/chrome", existsSync: () => true });
     expect(status).toEqual({ headless: "present", visible: true });
     expect(chromiumReady(status)).toBe(true);
   });
@@ -83,7 +87,7 @@ describe("chromiumStatus", () => {
   });
 
   it("is not ready when only the headless shell is installed", async () => {
-    const status = await chromiumStatus({ launchHeadless: async () => {}, executablePath: async () => "/x/chrome", existsSync: () => false });
+    const status = await chromiumStatus({ launchHeadless: async () => { }, executablePath: async () => "/x/chrome", existsSync: () => false });
     expect(chromiumReady(status)).toBe(false);
   });
 
@@ -94,7 +98,40 @@ describe("chromiumStatus", () => {
       existsSync: () => true,
     });
     expect(status).toEqual({ headless: "unknown", visible: true, detail: "sandbox_host_linux.cc: Operation not permitted" });
-    expect(chromiumReady(status)).toBe(true);
+    expect(chromiumReady(status)).toBe(false);
+  });
+});
+
+describe("launchWithBrowserRecovery", () => {
+  const missing = new Error("Executable doesn't exist at /browser");
+  it("installs only after a missing-browser failure and retries once", async () => {
+    const launch = vi.fn().mockRejectedValueOnce(missing).mockResolvedValue("browser");
+    const install = vi.fn(async () => ({ ok: true }));
+    await expect(launchWithBrowserRecovery(launch, install, vi.fn())).resolves.toBe("browser");
+    expect(launch).toHaveBeenCalledTimes(2);
+    expect(install).toHaveBeenCalledOnce();
+  });
+  it("never installs on healthy or unrelated failures", async () => {
+    const install = vi.fn();
+    await expect(launchWithBrowserRecovery(async () => "browser", install)).resolves.toBe("browser");
+    await expect(launchWithBrowserRecovery(async () => { throw new Error("Permission denied"); }, install)).rejects.toThrow("Permission denied");
+    expect(install).not.toHaveBeenCalled();
+  });
+  it("stops on failed installation or a still-missing browser", async () => {
+    const launch = vi.fn().mockRejectedValue(missing);
+    const install = vi.fn(async () => ({ ok: false }));
+    await expect(launchWithBrowserRecovery(launch, install, vi.fn())).rejects.toBeInstanceOf(BrowserInstallError);
+    expect(launch).toHaveBeenCalledOnce();
+    install.mockResolvedValue({ ok: true });
+    launch.mockClear();
+    await expect(launchWithBrowserRecovery(launch, install, vi.fn())).rejects.toBeInstanceOf(BrowserInstallError);
+    expect(launch).toHaveBeenCalledTimes(2);
+  });
+  it("reports deleted dependency code without attempting a browser download", async () => {
+    const install = vi.fn();
+    const error = Object.assign(new Error("Cannot find package 'playwright'"), { code: "ERR_MODULE_NOT_FOUND" });
+    await expect(launchWithBrowserRecovery(async () => { throw error; }, install)).rejects.toMatchObject({ dependencyMissing: true });
+    expect(install).not.toHaveBeenCalled();
   });
 });
 
@@ -117,7 +154,7 @@ describe("installChromium", () => {
     expect(calls).toEqual([{
       command: "/usr/bin/node",
       args: ["/pkg/node_modules/playwright/cli.js", "install", "chromium"],
-      options: { stdio: ["ignore", 2, 2] },
+      options: { stdio: ["ignore", 2, 2], detached: process.platform !== "win32" },
     }]);
   });
 
@@ -125,6 +162,19 @@ describe("installChromium", () => {
     expect(await installChromium({ spawnImpl: fakeSpawn(1).spawnImpl, cliPath: "/cli.js" })).toMatchObject({ ok: false });
     expect(await installChromium({ spawnImpl: fakeSpawn(null, new Error("ENOENT")).spawnImpl, cliPath: "/cli.js" }))
       .toEqual({ ok: false, message: "ENOENT" });
+  });
+
+  it("bounds an installer that never exits", async () => {
+    vi.useFakeTimers();
+    const child = Object.assign(new EventEmitter(), { kill: vi.fn() });
+    try {
+      const spawnImpl = vi.fn(() => child) as unknown as typeof import("node:child_process").spawn;
+      const result = installChromium({ spawnImpl, cliPath: "/cli.js", timeoutMs: 100 });
+      await vi.advanceTimersByTimeAsync(100);
+      await expect(result).resolves.toMatchObject({ ok: false, message: expect.stringContaining("timed out") });
+      expect(child.kill).toHaveBeenCalledWith("SIGKILL");
+      child.emit("close", null);
+    } finally { vi.useRealTimers(); }
   });
 
   it("finds the Playwright CLI this package depends on", () => {

@@ -20,7 +20,7 @@ import { authLockPath, publishAutomaticProgress, publishChallenge, relayChalleng
 import type { AuthPhase } from "./auth-phases.js";
 import { AuthCooldown } from "./auth-cooldown.js";
 import { mintAccessToken } from "./token-mint.js";
-import { isMissingBrowserError, PLAYWRIGHT_INSTALL_HINT } from "../utils/browser-install.js";
+import { launchWithBrowserRecovery } from "../utils/browser-install.js";
 import { signInCommand } from "../utils/commands.js";
 
 const SILENT_SSO_TIMEOUT_MS = 30000;
@@ -107,7 +107,7 @@ export class BrowserAuth {
       this.challengeSeenAt ??= Date.now();
       // Other server processes sharing this session cannot see our caller's
       // tool response; the lock directory is where they look instead.
-      this.publishing = this.publishing.then(() => publishChallenge(this.lockPath, number)).catch(() => {});
+      this.publishing = this.publishing.then(() => publishChallenge(this.lockPath, number)).catch(() => { });
       onMfaChallenge(number);
     }), () => {
       // Published through the same lock-directory file as a number-match
@@ -115,7 +115,7 @@ export class BrowserAuth {
       // "automatic sign-in in progress" rather than an approval nobody asked
       // for — and the relay keeps this sign-in from being abandoned.
       this.challengeSeenAt ??= Date.now();
-      this.publishing = this.publishing.then(() => publishAutomaticProgress(this.lockPath)).catch(() => {});
+      this.publishing = this.publishing.then(() => publishAutomaticProgress(this.lockPath)).catch(() => { });
       try { onAutomaticPending?.(); } catch { /* Reporting must not interrupt authentication. */ }
     });
     this.stateStore = new BrowserStateStore(config.sessionDir);
@@ -191,24 +191,17 @@ export class BrowserAuth {
     let tokenStartedAt: number | undefined;
     const closeOnSignal = () => {
       interrupted = true;
-      void browser?.close().catch(() => {});
+      void browser?.close().catch(() => { });
     };
     try {
       state = await this.stateStore.load();
-      const { chromium } = await import("playwright");
       const args = ["--disable-blink-features=AutomationControlled"];
       if (BrowserAuth.isWSLOrDocker()) args.push("--no-sandbox", "--disable-setuid-sandbox");
       // Use Playwright's own timeout, which cleans up an unsuccessful launch.
-      try {
-        browser = await this.timed("launch", () => chromium.launch({ headless: this.config.headless, timeout: 60000, args }));
-      } catch (launchError) {
-        // Keep the remedy attached to the failure. Without this the hint is
-        // lost when the auth runner flattens errors into "Authentication failed".
-        if (isMissingBrowserError(launchError)) {
-          throw new BrowserAuthError(PLAYWRIGHT_INSTALL_HINT, "browser_missing", launchError as Error);
-        }
-        throw launchError;
-      }
+      browser = await this.timed("launch", () => launchWithBrowserRecovery(async () => {
+        const { chromium } = await import("playwright");
+        return chromium.launch({ headless: this.config.headless, timeout: 60000, args });
+      }));
       process.once("SIGINT", closeOnSignal);
       process.once("SIGTERM", closeOnSignal);
       context = await browser.newContext({ viewport: { width: 1280, height: 720 }, storageState: state });
@@ -265,8 +258,8 @@ export class BrowserAuth {
       process.removeListener("SIGINT", closeOnSignal);
       process.removeListener("SIGTERM", closeOnSignal);
       if (page && listener) page.removeListener("request", listener);
-      await context?.close().catch(() => {});
-      await browser?.close().catch(() => {});
+      await context?.close().catch(() => { });
+      await browser?.close().catch(() => { });
     }
   }
 
@@ -546,7 +539,7 @@ export class BrowserAuth {
         // poll like any other credential prompt.
         if (!passwordSwitchAttempted && this.ssoFlow.hasCredentials()) {
           passwordSwitchAttempted = true;
-          await passwordSwitch.click().catch(() => {});
+          await passwordSwitch.click().catch(() => { });
           log("DEBUG", "Chose the password sign-in option over passwordless approval");
           await page.waitForTimeout(SILENT_SSO_POLL_MS);
           continue;
@@ -653,7 +646,7 @@ export class BrowserAuth {
         ? page.getByText(this.config.campus).first()
         : page.locator(SILENT_SSO.campusSaml).first();
       if (await campus.isVisible().catch(() => false)) {
-        await campus.click().catch(() => {});
+        await campus.click().catch(() => { });
         log("DEBUG", "Clicked the campus selector");
       }
       return;
@@ -676,7 +669,7 @@ export class BrowserAuth {
 
     const yes = page.locator(SILENT_SSO.kmsiSubmit).first();
     if (await yes.isVisible().catch(() => false)) {
-      await yes.click().catch(() => {});
+      await yes.click().catch(() => { });
       log("DEBUG", 'Clicked Yes on "Stay signed in?"');
     }
   }
