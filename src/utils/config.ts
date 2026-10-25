@@ -131,14 +131,12 @@ export async function loadConfig({ credentials = true }: LoadConfigOptions = {})
     ?? 3600;
 
   // Resolve includeCourseIds: env > store > undefined
-  const includeCourseIds = process.env.D2L_INCLUDE_COURSES
-    ? process.env.D2L_INCLUDE_COURSES.split(',').map(s => parseInt(s.trim(), 10)).filter(n => !isNaN(n))
-    : store?.includeCourses;
+  const includeCourseIds = courseIdList(process.env.D2L_INCLUDE_COURSES, "D2L_INCLUDE_COURSES")
+    ?? store?.includeCourses;
 
   // Resolve excludeCourseIds: env > store > undefined
-  const excludeCourseIds = process.env.D2L_EXCLUDE_COURSES
-    ? process.env.D2L_EXCLUDE_COURSES.split(',').map(s => parseInt(s.trim(), 10)).filter(n => !isNaN(n))
-    : store?.excludeCourses;
+  const excludeCourseIds = courseIdList(process.env.D2L_EXCLUDE_COURSES, "D2L_EXCLUDE_COURSES")
+    ?? store?.excludeCourses;
 
   // Resolve activeOnly: env > store > default (true)
   const activeOnly = envBoolean(process.env.D2L_ACTIVE_ONLY, "D2L_ACTIVE_ONLY")
@@ -227,6 +225,27 @@ function positiveSeconds(value: string | number | undefined, source: string): nu
   const text = String(value).trim();
   if (/^\d+$/.test(text) && Number(text) > 0) return Number(text);
   console.error(`[config] Ignoring ${source}=${JSON.stringify(value)}: expected a positive whole number of seconds`);
+  return undefined;
+}
+
+/**
+ * A comma-separated list of course (org unit) ids. parseInt read "123x" as
+ * 123 and dropped "CS180" without a word, so a whitelist of course codes
+ * became empty and an empty whitelist filters nothing: every course showed.
+ * Each entry must be a positive whole number or it is ignored with a warning,
+ * and a list with no valid id is ignored outright so config.json applies, as
+ * positiveSeconds does. Empty entries from a stray comma are skipped quietly.
+ */
+function courseIdList(value: string | undefined, source: string): number[] | undefined {
+  const entries = (value ?? "").split(",").map((entry) => entry.trim()).filter((entry) => entry.length > 0);
+  if (entries.length === 0) return undefined;
+  const ids: number[] = [];
+  for (const entry of entries) {
+    if (/^\d+$/.test(entry) && Number(entry) > 0) ids.push(Number(entry));
+    else console.error(`[config] Ignoring ${JSON.stringify(entry)} in ${source}: expected a numeric course id`);
+  }
+  if (ids.length > 0) return ids;
+  console.error(`[config] Ignoring ${source}=${JSON.stringify(value)}: no valid course id`);
   return undefined;
 }
 

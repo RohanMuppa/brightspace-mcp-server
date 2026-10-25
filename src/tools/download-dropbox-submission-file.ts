@@ -54,7 +54,8 @@ export function registerDownloadDropboxSubmissionFile(
     {
       title: "Download Dropbox Submission File",
       description:
-        "Download a specific file from a student's (or group's) dropbox submission to a local directory, " +
+        "Download a specific file from a student's (or group's) dropbox submission to an existing local directory " +
+        "(it is not created for you), " +
         "for an instructor or TA. Use get_dropbox_submissions or get_dropbox_user_submissions first to " +
         "find submissionId and fileId. Requires instructor or TA access to the course. " +
         "IMPORTANT: Ask the user where they want to save the file before calling this tool. " +
@@ -86,7 +87,7 @@ export function registerDownloadDropboxSubmissionFile(
           }
         } catch (error: any) {
           if (error?.code === "ENOENT") {
-            return errorResponse(`Download directory does not exist: ${downloadPath}`, "destination");
+            return errorResponse(`Download directory does not exist: ${downloadPath}. Create it, then retry, or choose an existing directory.`, "destination");
           }
           throw error;
         }

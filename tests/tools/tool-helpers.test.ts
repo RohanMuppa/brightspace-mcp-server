@@ -161,6 +161,14 @@ describe("sanitizeError", () => {
     });
   });
 
+  it("keeps installation failures distinct from credential or MFA failures", () => {
+    expect(textOf(sanitizeError(new AuthProcessError("browserInstall", "private diagnostic")))).toContain(" repair");
+    const dependency = textOf(sanitizeError(new AuthProcessError("dependencyMissing", "private diagnostic")));
+    expect(dependency).toContain("npm ci --prefix");
+    expect(dependency).not.toContain("private diagnostic");
+    expect(dependency).not.toContain("saved school or username");
+  });
+
   it("never repeats the raw failure text back to the caller", () => {
     const result = sanitizeError(
       new AuthProcessError("failed", "chromium crashed at /home/elliot/.cache/ms-playwright")

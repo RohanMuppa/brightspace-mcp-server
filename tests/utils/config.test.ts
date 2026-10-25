@@ -230,6 +230,40 @@ describe("resolved authentication configuration", () => {
     warn.mockRestore();
   });
 
+  describe("D2L_INCLUDE_COURSES / D2L_EXCLUDE_COURSES", () => {
+    it("reads comma-separated course ids, skipping blank entries", async () => {
+      vi.stubEnv("D2L_INCLUDE_COURSES", " 123, 456 ,,");
+      vi.stubEnv("D2L_EXCLUDE_COURSES", "789");
+      expect((await loadConfig()).courseFilter).toMatchObject({ includeCourseIds: [123, 456], excludeCourseIds: [789] });
+    });
+
+    it("drops a malformed entry with a warning instead of reading its leading digits", async () => {
+      vi.stubEnv("D2L_INCLUDE_COURSES", "123,456x,1e5,0,-7");
+      const warn = vi.spyOn(console, "error").mockImplementation(() => {});
+      expect((await loadConfig()).courseFilter.includeCourseIds).toEqual([123]);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('Ignoring "456x" in D2L_INCLUDE_COURSES'));
+      expect(warn.mock.calls.filter(([message]) => String(message).includes("in D2L_INCLUDE_COURSES"))).toHaveLength(4);
+      warn.mockRestore();
+    });
+
+    it("ignores a list with no valid id so config.json applies, rather than an empty whitelist that shows every course", async () => {
+      vi.stubEnv("D2L_INCLUDE_COURSES", "CS180,MA261");
+      vi.stubEnv("D2L_EXCLUDE_COURSES", "abc");
+      fake.store = { includeCourses: [111], excludeCourses: [222] };
+      const warn = vi.spyOn(console, "error").mockImplementation(() => {});
+      expect((await loadConfig()).courseFilter).toMatchObject({ includeCourseIds: [111], excludeCourseIds: [222] });
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("Ignoring D2L_INCLUDE_COURSES"));
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("Ignoring D2L_EXCLUDE_COURSES"));
+      warn.mockRestore();
+    });
+
+    it("treats an empty value as unset", async () => {
+      vi.stubEnv("D2L_INCLUDE_COURSES", " , ");
+      fake.store = { includeCourses: [111] };
+      expect((await loadConfig()).courseFilter.includeCourseIds).toEqual([111]);
+    });
+  });
+
   describe("courseFilter.currentOnly", () => {
     it("defaults to false", async () => {
       expect((await loadConfig()).courseFilter.currentOnly).toBe(false);

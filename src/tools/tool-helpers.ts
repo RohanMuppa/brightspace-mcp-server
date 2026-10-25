@@ -11,6 +11,7 @@ import { TokenRefreshError } from "../api/errors.js";
 import { AuthProcessError, type AuthFailureKind } from "../auth/auth-runner.js";
 import { log } from "../utils/logger.js";
 import { AUTH_COMMAND } from "../utils/commands.js";
+import { dependencyRepairHint, PLAYWRIGHT_INSTALL_HINT } from "../utils/browser-install.js";
 import { getUpdateNotice } from "../utils/update-checker.js";
 import { mfaShortcutTip } from "../utils/two-factor-shortcuts.js";
 import {
@@ -107,6 +108,8 @@ const MFA_SOLO_CALL =
   "answer can reach the user too late to approve. Make one call at a time.";
 
 const AUTH_FAILURE_GUIDANCE: Record<AuthFailureKind, string> = {
+  browserInstall: PLAYWRIGHT_INSTALL_HINT,
+  dependencyMissing: dependencyRepairHint(),
   busy: "A sign-in is already running in another process. Let it finish, then try again, " +
     `or run \`${AUTH_COMMAND}\` in a terminal to take over that background attempt.`,
   cooldown:

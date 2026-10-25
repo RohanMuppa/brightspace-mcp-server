@@ -12,6 +12,7 @@ import * as path from "node:path";
 import { log } from "../utils/logger.js";
 import { AuthError } from "../utils/errors.js";
 import { AUTH_COMMAND } from "../utils/commands.js";
+import { dependencyRepairHint, PLAYWRIGHT_INSTALL_HINT } from "../utils/browser-install.js";
 import { devActivity, newRecoveryId, RECOVERY_ID_ENV } from "../utils/dev-activity.js";
 import { parsePhaseMarker } from "./auth-phases.js";
 import { AUTOMATIC_PENDING_MARKER, RELAYED_CHALLENGE_MARKER, RELAYED_STARTING_MARKER, authLockPath, challengeRelayedAt, relayChallenge } from "./mfa-challenge.js";
@@ -157,7 +158,7 @@ const automaticPendingFailure = (relayed = false): AuthProcessError => new AuthP
   relayed,
 );
 
-export type AuthFailureKind = "busy" | "cooldown" | "unsupported" | "secureStorage" | "transport" | "timeout" | "failed" | "mfaPending" | "automaticPending" | "inProgress";
+export type AuthFailureKind = "busy" | "cooldown" | "unsupported" | "secureStorage" | "transport" | "timeout" | "failed" | "mfaPending" | "automaticPending" | "inProgress" | "browserInstall" | "dependencyMissing";
 
 export class AuthProcessError extends AuthError {
   constructor(
@@ -615,8 +616,8 @@ export class AuthRunner {
     type Seen = { phase: "starting" } | { phase: "automatic" } | { phase: "approval"; numberMatch?: string };
     let latest: Seen = error.kind === "inProgress" ? { phase: "starting" }
       : error.kind === "automaticPending" ? { phase: "automatic" }
-      : { phase: "approval", numberMatch: error.numberMatch };
-    for (;;) {
+        : { phase: "approval", numberMatch: error.numberMatch };
+    for (; ;) {
       const held = await fs.access(lockPath).then(() => true, () => false);
       if (!held) {
         this.relayTold.clear();
@@ -700,7 +701,7 @@ export class AuthRunner {
    */
   private async joinBackgroundChild(childDone: Promise<boolean>, startedAt: number): Promise<boolean> {
     if (!this.pendingChallenge && this.challengeSignal) {
-      await Promise.race([childDone.catch(() => {}), this.challengeSignal]);
+      await Promise.race([childDone.catch(() => { }), this.challengeSignal]);
     }
 
     if (!this.pendingChallenge) return childDone;
@@ -1021,6 +1022,8 @@ export class AuthRunner {
           finishChild();
         } else {
           const failures: Record<number, [AuthFailureKind, string]> = {
+            8: ["browserInstall", PLAYWRIGHT_INSTALL_HINT],
+            9: ["dependencyMissing", dependencyRepairHint()],
             2: ["busy", `Authentication already in progress in another process. Complete that attempt, then retry, or run \`${AUTH_COMMAND}\` in a terminal to take over that background attempt.`],
             3: ["cooldown", `Automatic MFA is paused after an unsuccessful attempt. Run ${AUTH_COMMAND} to retry immediately.`],
             4: ["unsupported", "This identity provider cannot complete headless authentication. See the authentication logs."],

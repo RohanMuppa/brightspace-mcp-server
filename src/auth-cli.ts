@@ -20,6 +20,7 @@ import { AUTH_COMMAND, SETUP_COMMAND } from "./utils/commands.js";
 import { initUpdateChecker, peekUpdateNotice } from "./utils/update-checker.js";
 import { reexecLatestIfStale } from "./utils/self-update.js";
 import { detectSkew } from "./utils/install-sites.js";
+import { BrowserInstallError } from "./utils/browser-install.js";
 
 dotenv.config({ quiet: true });
 const pkg = JSON.parse(readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "package.json"), "utf8"));
@@ -123,15 +124,18 @@ async function main(): Promise<void> {
     if (automatic && error instanceof AuthenticationInProgressError) {
       for (const line of relayedLockLines(error.challenge, error.ownerMode)) console.log(line);
     }
-    process.exitCode = error instanceof NativeCredentialStoreError ? 5
-      : code === "AUTH_IN_PROGRESS" ? 2
-      : code === "AUTH_COOLDOWN" ? 3
-      : code === "AUTH_UNSUPPORTED" ? 4
-      : code === "AUTH_TRANSPORT" ? 6
-      : error instanceof MfaApprovalError ? 7 : 1;
+    process.exitCode = error instanceof BrowserInstallError ? (error.dependencyMissing ? 9 : 8)
+      : error instanceof NativeCredentialStoreError ? 5
+        : code === "AUTH_IN_PROGRESS" ? 2
+          : code === "AUTH_COOLDOWN" ? 3
+            : code === "AUTH_UNSUPPORTED" ? 4
+              : code === "AUTH_TRANSPORT" ? 6
+                : error instanceof MfaApprovalError ? 7 : 1;
     console.error("\nAuthentication failed:", error instanceof Error ? error.message : "Unknown authentication error");
-    console.error(`Run \`${SETUP_COMMAND}\` to update saved credentials.`);
-    console.error(`Run \`${AUTH_COMMAND}\` to retry explicitly. This bypasses the automatic MFA cooldown.`);
+    if (!(error instanceof BrowserInstallError)) {
+      console.error(`Run \`${SETUP_COMMAND}\` to update saved credentials.`);
+      console.error(`Run \`${AUTH_COMMAND}\` to retry explicitly. This bypasses the automatic MFA cooldown.`);
+    }
   } finally {
     // The failure path is exactly where knowing you are out of date matters
     // most, so print these either way.
