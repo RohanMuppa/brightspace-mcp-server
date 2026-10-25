@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { hostname, tmpdir } from "node:os";
 import { spawn } from "node:child_process";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
@@ -310,6 +312,29 @@ describe("shared runtime behind the default stdio command", { timeout: 30_000 },
       expect(unrelated.signalCode).toBeNull();
     } finally {
       unrelated.kill();
+    }
+  });
+
+  it("replaces a dead runtime whose port another program now answers on", async () => {
+    // Its pid went to an unrelated process, and its port to a web server that
+    // answers everything with a 200 page: neither may pass for the runtime.
+    const unrelated = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+    const squatter = createServer((_req, res) => { res.writeHead(200, { "Content-Type": "text/html" }); res.end("<p>another app</p>"); });
+    await new Promise<void>((done) => squatter.listen(0, "127.0.0.1", done));
+    try {
+      const pid = unrelated.pid!;
+      const { port } = squatter.address() as AddressInfo;
+      mkdirSync(join(dir, "owner.lock"), { recursive: true });
+      writeFileSync(join(dir, "owner.lock", "owner.json"), JSON.stringify({ pid, host: hostname(), nonce: "left-behind", mode: "exclusive" }));
+      writeFileSync(join(dir, "state.json"), JSON.stringify({ pid, url: `http://127.0.0.1:${port}/mcp`, token: "x".repeat(64) }));
+      const client = await chat();
+      expect(await courseNames(client)).toContain("Course 1");
+      expect(served).toHaveLength(1);
+      expect(JSON.parse(readFileSync(join(dir, "state.json"), "utf-8")).pid).toBe(process.pid);
+      expect(unrelated.exitCode).toBeNull();
+    } finally {
+      unrelated.kill();
+      await new Promise<void>((done) => squatter.close(() => done()));
     }
   });
 

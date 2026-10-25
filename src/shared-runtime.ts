@@ -174,7 +174,9 @@ async function answers(address: RuntimeAddress): Promise<boolean> {
       signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
     });
     await response.body?.cancel();
-    return response.status !== 401;
+    // A runtime answers an authorized GET with 405 (it serves POST only). Any
+    // other answer is another program that took a dead runtime's port.
+    return response.status === 405;
   } catch {
     return false;
   }
