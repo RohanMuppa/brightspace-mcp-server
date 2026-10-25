@@ -6,12 +6,12 @@
     "url": "https://github.com/RohanMuppa/brightspace-mcp-server",
     "source": "github"
   },
-  "version": "5.1.13",
+  "version": "5.1.14",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "brightspace-mcp-server",
-      "version": "5.1.13",
+      "version": "5.1.14",
       "transport": {
         "type": "stdio"
       },
