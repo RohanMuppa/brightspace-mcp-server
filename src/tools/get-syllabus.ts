@@ -182,7 +182,7 @@ export function registerGetSyllabus(
     {
       title: "Get Course Syllabus",
       description:
-        "Fetch the syllabus/overview text and optional attachment for a course. Returns the course overview description as markdown. When the syllabus lives in an external LTI tool (e.g. Simple Syllabus), lists those sources in externalSyllabusSources; their contents cannot be read. If some of those lookups could not be completed (e.g. permission denied), externalSyllabusDiscovery says which, and an empty result is then not proof the course has no syllabus. If downloadPath is provided, also downloads the syllabus attachment (e.g. PDF). IMPORTANT: You MUST ask the user where they want to save the file before calling this tool with a downloadPath.",
+        "Fetch the syllabus/overview text and optional attachment for a course. Returns the course overview description as markdown. When the syllabus lives in an external LTI tool (e.g. Simple Syllabus), lists those sources in externalSyllabusSources; their contents cannot be read. If some of those lookups could not be completed (e.g. permission denied), externalSyllabusDiscovery says which, and an empty result is then not proof the course has no syllabus. If downloadPath is provided, also downloads the syllabus attachment (e.g. PDF); the directory must already exist, since it is not created for you. IMPORTANT: You MUST ask the user where they want to save the file before calling this tool with a downloadPath.",
       inputSchema: GetSyllabusSchema,
     },
     async (args: any) => {
@@ -195,20 +195,20 @@ export function registerGetSyllabus(
         if (downloadPath !== undefined) {
           if (!path.isAbsolute(downloadPath)) {
             return errorResponse(
-              "Download path must be an absolute path (e.g., /Users/username/Downloads on Mac or C:\\Users\\username\\Downloads on Windows)"
+              "Download path must be an absolute path (e.g., /Users/username/Downloads on Mac or C:\\Users\\username\\Downloads on Windows)", "invalidInput"
             );
           }
           try {
             const stats = await fs.stat(downloadPath);
             if (!stats.isDirectory()) {
               return errorResponse(
-                `Download path is not a directory: ${downloadPath}`
+                `Download path is not a directory: ${downloadPath}`, "destination"
               );
             }
           } catch (error: any) {
             if (error?.code === "ENOENT") {
               return errorResponse(
-                `Download directory does not exist: ${downloadPath}`
+                `Download directory does not exist: ${downloadPath}. Create it, then retry, or choose an existing directory.`, "destination"
               );
             }
             throw error;
@@ -263,7 +263,7 @@ export function registerGetSyllabus(
             );
             if (contentLength > MAX_FILE_SIZE) {
               return errorResponse(
-                `Attachment too large (${Math.round(contentLength / 1024 / 1024)}MB). Maximum allowed: ${MAX_FILE_SIZE / 1024 / 1024}MB`
+                `Attachment too large (${Math.round(contentLength / 1024 / 1024)}MB). Maximum allowed: ${MAX_FILE_SIZE / 1024 / 1024}MB`, "rejectedFile"
               );
             }
 
@@ -279,7 +279,7 @@ export function registerGetSyllabus(
             } catch (error) {
               if (error instanceof DownloadError && error.kind === "tooLarge") {
                 return errorResponse(
-                  `Attachment too large (over ${MAX_FILE_SIZE / 1024 / 1024}MB). Maximum allowed: ${MAX_FILE_SIZE / 1024 / 1024}MB`
+                  `Attachment too large (over ${MAX_FILE_SIZE / 1024 / 1024}MB). Maximum allowed: ${MAX_FILE_SIZE / 1024 / 1024}MB`, "rejectedFile"
                 );
               }
               throw error;

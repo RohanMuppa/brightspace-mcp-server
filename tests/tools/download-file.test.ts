@@ -1078,6 +1078,39 @@ describe("download_file: course file links (coursePath)", () => {
     expect(parse(result).mode).toBe("disk");
   });
 
+  it.each([
+    ["/content/enforced/101-CS25000-FA26/Question-HW5-Fall26.docx", "Question-HW5-Fall26.docx"],
+    ["/content/enforced/101-CS25000-FA26/Homework/HW%205%20(final).docx?d2lSessionVal=abc&ou=101", "Homework/HW 5 (final).docx"],
+    ["https://purdue.brightspace.com/content/enforced/101-CS25000-FA26/Notes/a.pdf", "Notes/a.pdf"],
+    // An old imported course links files with backslashes; Brightspace serves them as folders.
+    ["/content/enforced/101-T2M/csfiles\\home_dir\\externalFiles\\CoE logo(1).jpg", "csfiles/home_dir/externalFiles/CoE logo(1).jpg"],
+  ])("accepts the /content/enforced href get_assignments returns (%s)", async (href, filePath) => {
+    const { call, pageRequested } = setup({});
+
+    const result = await call({ courseId: COURSE, coursePath: href, downloadPath: targetDir });
+
+    expect(result.isError).toBeFalsy();
+    expect(pageRequested).toEqual([QUICKLINK(COURSE, filePath)]);
+  });
+
+  it.each([
+    ["another course's folder", "/content/enforced/202-OTHER/a.pdf"],
+    ["another Brightspace", "https://other.brightspace.com/content/enforced/101-X/a.pdf"],
+    ["the course folder alone", "/content/enforced/101-X/"],
+    ["a '..' escape", "/content/enforced/101-X/../202-Y/a.pdf"],
+    ["an encoded '..' escape", "/content/enforced/101-X/%2e%2e/202-Y/a.pdf"],
+    ["an encoded slash", "/content/enforced/101-X/a%2f..%2f..%2fb.pdf"],
+    ["malformed encoding", "/content/enforced/101-X/a%zz.pdf"],
+    ["a backslash '..' escape", "/content/enforced/101-X/..\\202-Y\\a.pdf"],
+  ])("refuses a /content/enforced href naming %s without sending a request", async (_why, href) => {
+    const { call, pageRequested } = setup({});
+
+    const result = await call({ courseId: COURSE, coursePath: href, downloadPath: targetDir });
+
+    expect(result.isError).toBe(true);
+    expect(pageRequested).toEqual([]);
+  });
+
   it("cannot be combined with topicId", async () => {
     const { call, pageRequested } = setup({});
 
@@ -1085,5 +1118,41 @@ describe("download_file: course file links (coursePath)", () => {
 
     expect(result.isError).toBe(true);
     expect(pageRequested).toEqual([]);
+  });
+});
+
+describe("download_file: disk destinations must already exist (#333)", () => {
+  function registration() {
+    let meta: any;
+    const server = {
+      registerTool: (_n: string, m: unknown) => {
+        meta = m;
+      },
+    };
+    registerDownloadFile(server as any, {} as any);
+    return meta;
+  }
+
+  it("says in the downloadPath description that the directory must already exist", () => {
+    const description = registration().inputSchema.shape.downloadPath.description as string;
+    expect(description).toMatch(/existing directory/i);
+    expect(description).toMatch(/not created/i);
+  });
+
+  it("says in the tool description that disk mode needs an existing directory", () => {
+    expect(registration().description).toMatch(/directory must already exist/i);
+  });
+
+  it("tells the caller to create a missing directory and retry, without creating it or fetching", async () => {
+    const { call, rawRequested } = setup({ disposition: 'attachment; filename="notes.pdf"' });
+    const missing = path.join(targetDir, "missing");
+
+    const result = await call({ courseId: COURSE, topicId: 7, downloadPath: missing });
+
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain(`Download directory does not exist: ${missing}`);
+    expect(textOf(result)).toMatch(/create (it|the directory).*retry/i);
+    await expect(fs.stat(missing)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(rawRequested).toEqual([]);
   });
 });

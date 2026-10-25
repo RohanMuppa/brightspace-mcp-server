@@ -574,17 +574,24 @@ describe("doctor: an install prepare got ready", () => {
 });
 
 describe("doctor: Chromium", () => {
-  it("fails with the prepare command when a browser sign-in needs is missing", async () => {
+  it("fails with the installation-scoped repair command when Chromium is missing", async () => {
     const result = await runDoctorChecks(deps({ chromiumStatus: async () => ({ headless: "missing", visible: true }) }));
     const check = idOf(result, "browser");
     expect(check.ok).toBe(false);
-    expect(check.line).toContain(`${SETUP_COMMAND} --prepare`);
+    expect(check.line).toContain(" repair");
+    expect(check.line).not.toContain("npx");
     expect(result.allOk).toBe(false);
   });
 
-  it("passes when a test launch was blocked for another reason but both browsers exist", async () => {
+  it("does not claim health when a test launch was blocked", async () => {
     const result = await runDoctorChecks(deps({ chromiumStatus: async () => ({ headless: "unknown", visible: true, detail: "sandbox" }) }));
-    expect(idOf(result, "browser").ok).toBe(true);
+    expect(idOf(result, "browser").ok).toBe(false);
+  });
+
+  it("distinguishes deleted Playwright code from deleted browser downloads", async () => {
+    const result = await runDoctorChecks(deps({ chromiumStatus: async () => ({ headless: "dependency_missing", visible: false }) }));
+    expect(idOf(result, "browser").line).toContain("npm ci --prefix");
+    expect(idOf(result, "browser").line).not.toContain("sign-in can't start");
   });
 
   it("doesn't require Chromium when an environment credential signs in", async () => {

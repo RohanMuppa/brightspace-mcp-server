@@ -86,7 +86,7 @@ function harness(options: Harness = {}) {
     detectClients: () => options.targets ?? [],
     getSessionToken: async () =>
       options.signedIn ? { accessToken: "t", capturedAt: 0, expiresAt: 0, source: "cache" as const } : null,
-    progress: () => {},
+    progress: () => { },
   };
   return { deps, saves, installs, stored: () => stored };
 }
@@ -158,6 +158,26 @@ describe("setup --prepare", () => {
     expect(again.apps[0].outcome).toBe("replaced");
   });
 
+  it("reports an app using the shared server by URL as set up, without suggesting a replacement", async () => {
+    const url = "http://127.0.0.1:18765/mcp";
+    const shared = app("Codex Desktop and CLI", { state: "shared_http", url });
+    const result = await runPrepare(args("--purdue"), harness({ targets: [shared.target] }).deps);
+
+    expect(shared.writes).toEqual([]);
+    expect(result.apps[0]).toMatchObject({ outcome: "shared_http", url });
+    const line = result.steps.find((step) => step.id === "app");
+    expect(line).toMatchObject({ ok: true });
+    expect(line?.line).toContain(url);
+    expect(line?.line).not.toMatch(/--replace|replace/i);
+    expect(result.restart).toEqual([]);
+    expect(result.state).toBe("ready_for_sign_in");
+
+    const replaced = app("Codex Desktop and CLI", { state: "shared_http", url });
+    const again = await runPrepare(args("--purdue", "--replace"), harness({ targets: [replaced.target] }).deps);
+    expect(replaced.writes).toEqual([true]);
+    expect(again.apps[0].outcome).toBe("replaced");
+  });
+
   it("registers only apps that look installed", async () => {
     const missing = app("Claude Desktop", { state: "missing" }, false);
     const result = await runPrepare(args("--purdue"), harness({ targets: [missing.target] }).deps);
@@ -216,7 +236,7 @@ describe("setup --prepare", () => {
     const h = harness({ browser: { headless: "missing", visible: false }, installOk: false });
     const result = await runPrepare(args("--purdue"), h.deps);
     expect(result.state).toBe("blocked");
-    expect(result.steps.find((s) => s.id === "browser")?.line).toContain("playwright install chromium");
+    expect(result.steps.find((s) => s.id === "browser")?.line).toContain(" repair");
     expect(result.next.command).toBe("npx -y brightspace-mcp-server@latest setup --purdue --prepare");
   });
 

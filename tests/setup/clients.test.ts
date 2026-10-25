@@ -75,11 +75,25 @@ describe("registerAll", () => {
     fs.mkdirSync(path.dirname(desktopConfig()), { recursive: true });
     fs.writeFileSync(desktopConfig(), JSON.stringify({ mcpServers: { brightspace: { command: "node", args: ["/old.js"] }, other: { command: "x" } } }));
 
-    expect(registerAll(desktop(), { replace: false })[0]).toMatchObject({ outcome: "different_left", current: "node /old.js" });
+    expect(registerAll(desktop(), { replace: false })[0]).toMatchObject({ outcome: "different_left", current: "node [1 argument hidden]" });
     expect(readServers(desktopConfig()).brightspace).toEqual({ command: "node", args: ["/old.js"] });
 
     expect(registerAll(desktop(), { replace: true })[0].outcome).toBe("replaced");
     expect(readServers(desktopConfig()).other).toEqual({ command: "x" });
+  });
+
+  it("keeps an entry that uses the shared server by URL, byte for byte, unless replace", () => {
+    fs.mkdirSync(path.dirname(desktopConfig()), { recursive: true });
+    const url = "http://127.0.0.1:18765/mcp";
+    const original = JSON.stringify({ mcpServers: { brightspace: { url, headers: { Authorization: "Bearer secret" } } } });
+    fs.writeFileSync(desktopConfig(), original);
+
+    expect(registerAll(desktop(), { replace: false })[0]).toMatchObject({ outcome: "shared_http", url });
+    expect(fs.readFileSync(desktopConfig(), "utf-8")).toBe(original);
+
+    expect(registerAll(desktop(), { replace: true })[0].outcome).toBe("replaced");
+    const [command, ...args] = serverCommand();
+    expect(readServers(desktopConfig()).brightspace).toEqual({ command, args });
   });
 
   it("passes replace to a CLI app and reports its failure", () => {
