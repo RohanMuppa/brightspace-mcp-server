@@ -28,7 +28,7 @@ const PKG_VERSION = (() => {
 
 // ── Subcommand routing (before any MCP initialization) ──────────────
 const subcommand = process.argv[2];
-const COMMANDS = ['setup', 'auth', 'doctor', 'http', 'runtime'];
+const COMMANDS = ['setup', 'auth', 'doctor', 'repair', 'http', 'runtime'];
 
 // A mistyped command (`htp`) must not quietly start a stdio server that sits
 // waiting on stdin. Flags alone still mean the default stdio server.
@@ -41,7 +41,8 @@ if (subcommand !== undefined && !subcommand.startsWith('-') && !COMMANDS.include
     '  http     run one shared MCP server on localhost\n' +
     '  setup    configure your school and sign-in\n' +
     '  auth     sign in to Brightspace now\n' +
-    '  doctor   check the install and configuration\n',
+    '  doctor   check the install and configuration\n' +
+    '  repair   restore and verify this installation\'s Chromium\n',
   );
   process.exit(2);
 }
@@ -52,6 +53,8 @@ if (subcommand === 'setup') {
   await import('./auth-cli.js');
 } else if (subcommand === 'doctor') {
   await import('./doctor.js');
+} else if (subcommand === 'repair') {
+  await (await import('./repair.js')).main();
 } else {
   // ── MCP Server ──────────────────────────────────────────────────────
   // default: stdio, relayed to the one shared runtime, started on demand;

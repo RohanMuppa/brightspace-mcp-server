@@ -48,7 +48,7 @@ import {
   prepareCommand,
   signInCommand,
 } from "./utils/commands.js";
-import { chromiumReady, chromiumStatus, type ChromiumStatus } from "./utils/browser-install.js";
+import { chromiumReady, chromiumStatus, dependencyRepairHint, BROWSER_REPAIR_COMMAND, type ChromiumStatus } from "./utils/browser-install.js";
 import { nodeVersionSupported, readOnlyTokenManager, readSavedSessionToken, sessionDirFor } from "./utils/saved-session.js";
 
 // Tests import this from doctor.ts.
@@ -317,7 +317,9 @@ async function checkBrowser(deps: DoctorDeps): Promise<CheckResult> {
     return problem("browser", `Could not check for Chromium — run: ${prepareCommand()}`);
   }
   if (chromiumReady(status)) return pass("browser", "Chromium is installed for sign-in");
-  return problem("browser", `Chromium is missing, so sign-in can't start — run: ${prepareCommand()}`);
+  if (status.headless === "dependency_missing") return problem("browser", dependencyRepairHint());
+  if (status.headless === "unknown") return problem("browser", `Chromium's test launch failed. Check operating system permissions and browser system dependencies — run: ${BROWSER_REPAIR_COMMAND}`);
+  return problem("browser", `Chromium is missing, so sign-in can't start — run: ${BROWSER_REPAIR_COMMAND}`);
 }
 
 async function checkNetwork(deps: DoctorDeps, baseUrl: string): Promise<CheckResult> {

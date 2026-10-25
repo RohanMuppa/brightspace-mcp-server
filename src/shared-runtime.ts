@@ -18,6 +18,8 @@ import { log } from "./utils/logger.js";
 export const DEFAULT_IDLE_MS = 10 * 60_000;
 /** How long a starting runtime waits for a runtime that is starting or stopping to settle. */
 const CLAIM_WAIT_MS = 10_000;
+/** How long a published runtime has to answer before it is taken for dead. */
+const PROBE_TIMEOUT_MS = 2_000;
 const STATE_FILE = "state.json";
 const OWNER_LOCK = "owner.lock";
 
@@ -134,16 +136,48 @@ export async function serveSharedRuntime(
 /**
  * Take the owner lock for `dir`, waiting out a runtime that is starting or
  * stopping. undefined when another live runtime has published its address.
+ *
+ * A published address that does not answer belongs to a runtime that died
+ * without cleaning up, typically in a reboot, which also leaves its owner
+ * lock behind. Its pid may since have gone to an unrelated process, so the
+ * lock is reclaimed when its owner is that pid, not only when the pid is gone.
+ * A runtime that is still starting holds the lock under its own pid and has
+ * not published yet, so it is waited for instead.
  */
 async function claimOwnership(dir: string): Promise<(() => Promise<void>) | undefined> {
   const deadline = Date.now() + CLAIM_WAIT_MS;
   for (;;) {
+    const published = await readRuntimeAddress(dir);
+    if (published && await answers(published)) return undefined;
     try {
-      return await acquireProcessLock(path.join(dir, OWNER_LOCK), { mode: "exclusive" });
+      return await acquireProcessLock(path.join(dir, OWNER_LOCK), {
+        mode: "exclusive",
+        abandoned: (pid) => pid === published?.pid,
+      });
     } catch (error) {
       if (!(error instanceof AuthenticationInProgressError)) throw error;
     }
-    if (await readRuntimeAddress(dir) || Date.now() > deadline) return undefined;
+    if (Date.now() > deadline) return undefined;
     await delay(50);
+  }
+}
+
+/**
+ * Whether the runtime at `address` is still serving it. Anything but a
+ * refused or timed-out connection, or a 401 from another server now on that
+ * port, counts: a runtime that is shutting down (503) is still alive.
+ */
+async function answers(address: RuntimeAddress): Promise<boolean> {
+  try {
+    const response = await fetch(address.url, {
+      headers: { Authorization: `Bearer ${address.token}` },
+      signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+    });
+    await response.body?.cancel();
+    // A runtime answers an authorized GET with 405 (it serves POST only). Any
+    // other answer is another program that took a dead runtime's port.
+    return response.status === 405;
+  } catch {
+    return false;
   }
 }

@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { hostname, tmpdir } from "node:os";
+import { spawn } from "node:child_process";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
@@ -112,8 +115,16 @@ describe("shared runtime behind the default stdio command", { timeout: 30_000 },
   /** What spawning `brightspace-mcp-server runtime` does, in this process. */
   function startRuntime(): void {
     starts += 1;
+    // A start that lost the race keeps waiting for the owner lock, so it can
+    // win only after its own test has ended and released it. It belongs to
+    // that test, not to whichever one is running by then: on a slow runner it
+    // landed in the next test's list with the default idle time, and that test
+    // waited 60 s for it to idle out.
+    const owner = served;
     void serveSharedRuntime(makeRuntime(), { dir, idleMs }).then((runtime) => {
-      if (runtime) served.push(runtime);
+      if (!runtime) return;
+      if (owner === served) served.push(runtime);
+      else void runtime.stop();
     });
   }
 
@@ -166,24 +177,46 @@ describe("shared runtime behind the default stdio command", { timeout: 30_000 },
     expect(served).toHaveLength(1);
   });
 
-  it("stops after it has been idle, and starts again on a later request", async () => {
-    // Long enough that a runtime cannot publish and idle out again between two
-    // of the relay's 50 ms polls on a slow runner, which left it waiting 30 s.
-    idleMs = 1_000;
-    const client = await chat();
-    expect(await courseNames(client)).toContain("Course 1");
-    // A slow machine can idle out between the client's initialize and its
-    // call, so count starts from the runtime that answered, not from one.
-    const first = served[served.length - 1];
-    await first.stopped;
-    expect(existsSync(join(dir, "state.json"))).toBe(false);
-    const before = served.length;
-    // Only the first runtime needs to idle out.
-    idleMs = 60_000;
+  // A failure prints a timeline of each awaited step and the runtime's own log
+  // lines. That is how a runtime left over from the previous test was found
+  // here (see startRuntime).
+  it("stops after it has been idle, and starts again on a later request", { timeout: 60_000 }, async ({ onTestFailed }) => {
+    const timeline: string[] = [];
+    const started = Date.now();
+    const note = (text: string) => timeline.push(`+${Date.now() - started}ms ${text}`);
+    const logged = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
+      note(`log: ${args.map(String).join(" ").slice(0, 200)}`);
+    });
+    onTestFailed(() => {
+      logged.mockRestore();
+      console.error(`Idle-restart timeline:\n${timeline.join("\n")}`);
+    });
+    const step = async <T,>(name: string, work: Promise<T>): Promise<T> => {
+      note(`waiting on ${name} (runtimes served: ${served.length}, address published: ${existsSync(join(dir, "state.json"))})`);
+      const result = await work;
+      note(`${name} done`);
+      return result;
+    };
 
-    expect(await courseNames(client)).toContain("Course 1");
-    expect(served.length).toBeGreaterThan(before);
-    expect(served[served.length - 1]).not.toBe(first);
+    try {
+      idleMs = 1_000;
+      const client = await step("connect", chat());
+      expect(await step("first call", courseNames(client))).toContain("Course 1");
+      // A slow machine can idle out between the client's initialize and its
+      // call, so count starts from the runtime that answered, not from one.
+      const first = served[served.length - 1];
+      await step("idle stop", first.stopped);
+      expect(existsSync(join(dir, "state.json"))).toBe(false);
+      const before = served.length;
+      // Only the first runtime needs to idle out.
+      idleMs = 60_000;
+
+      expect(await step("call after the idle stop", courseNames(client))).toContain("Course 1");
+      expect(served.length).toBeGreaterThan(before);
+      expect(served[served.length - 1]).not.toBe(first);
+    } finally {
+      logged.mockRestore();
+    }
   });
 
   it("is not stopped for idleness while a call is still in progress", async () => {
@@ -259,6 +292,50 @@ describe("shared runtime behind the default stdio command", { timeout: 30_000 },
     expect(served).toHaveLength(1);
     const state = JSON.parse(readFileSync(join(dir, "state.json"), "utf-8"));
     expect(state.pid).toBe(process.pid);
+  });
+
+  it("replaces a runtime that died without cleaning up when another process now has its pid", async () => {
+    // After a reboot the dead runtime's state file and owner lock are both
+    // left behind, and its pid can belong to some unrelated live process.
+    const unrelated = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+    try {
+      const pid = unrelated.pid!;
+      mkdirSync(join(dir, "owner.lock"), { recursive: true });
+      writeFileSync(join(dir, "owner.lock", "owner.json"), JSON.stringify({ pid, host: hostname(), nonce: "left-behind", mode: "exclusive" }));
+      writeFileSync(join(dir, "state.json"), JSON.stringify({ pid, url: "http://127.0.0.1:9/mcp", token: "x".repeat(64) }));
+      const client = await chat();
+      expect(await courseNames(client)).toContain("Course 1");
+      expect(served).toHaveLength(1);
+      expect(JSON.parse(readFileSync(join(dir, "state.json"), "utf-8")).pid).toBe(process.pid);
+      // The unrelated process is left alone.
+      expect(unrelated.exitCode).toBeNull();
+      expect(unrelated.signalCode).toBeNull();
+    } finally {
+      unrelated.kill();
+    }
+  });
+
+  it("replaces a dead runtime whose port another program now answers on", async () => {
+    // Its pid went to an unrelated process, and its port to a web server that
+    // answers everything with a 200 page: neither may pass for the runtime.
+    const unrelated = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+    const squatter = createServer((_req, res) => { res.writeHead(200, { "Content-Type": "text/html" }); res.end("<p>another app</p>"); });
+    await new Promise<void>((done) => squatter.listen(0, "127.0.0.1", done));
+    try {
+      const pid = unrelated.pid!;
+      const { port } = squatter.address() as AddressInfo;
+      mkdirSync(join(dir, "owner.lock"), { recursive: true });
+      writeFileSync(join(dir, "owner.lock", "owner.json"), JSON.stringify({ pid, host: hostname(), nonce: "left-behind", mode: "exclusive" }));
+      writeFileSync(join(dir, "state.json"), JSON.stringify({ pid, url: `http://127.0.0.1:${port}/mcp`, token: "x".repeat(64) }));
+      const client = await chat();
+      expect(await courseNames(client)).toContain("Course 1");
+      expect(served).toHaveLength(1);
+      expect(JSON.parse(readFileSync(join(dir, "state.json"), "utf-8")).pid).toBe(process.pid);
+      expect(unrelated.exitCode).toBeNull();
+    } finally {
+      unrelated.kill();
+      await new Promise<void>((done) => squatter.close(() => done()));
+    }
   });
 
   it("answers the call with an error when the runtime cannot be started", async () => {

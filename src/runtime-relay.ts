@@ -172,10 +172,17 @@ async function post(
     await response.body?.cancel();
     throw new Unreachable(`HTTP ${response.status}`);
   }
+  // A runtime answers every request with JSON or an event stream, or with a
+  // bodiless 202. Anything else is another program that took a dead
+  // runtime's port, so this is no runtime at all: start a fresh one.
+  const type = response.headers.get("content-type") ?? "";
+  if (response.status !== 202 && !/application\/json|text\/event-stream/i.test(type)) {
+    await response.body?.cancel();
+    throw new Unreachable(`HTTP ${response.status} from something other than a Brightspace runtime`);
+  }
   if (!response.ok) throw new Error(`HTTP ${response.status}: ${await response.text()}`);
   if (response.status === 202 || !response.body) return;
 
-  const type = response.headers.get("content-type") ?? "";
   if (!type.includes("text/event-stream")) {
     const body: unknown = JSON.parse(await response.text());
     for (const item of Array.isArray(body) ? body : [body]) reply(item as JSONRPCMessage);

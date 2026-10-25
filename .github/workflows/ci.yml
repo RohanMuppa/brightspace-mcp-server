@@ -34,3 +34,23 @@ jobs:
 
       - name: Test
         run: npm run test:run
+
+  install-recovery:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm run build
+      - name: Linux browser system dependencies
+        if: runner.os == 'Linux'
+        run: node node_modules/playwright/cli.js install-deps chromium
+      - name: Published-package install and cleanup recovery (no sign-in)
+        run: npm run test:install

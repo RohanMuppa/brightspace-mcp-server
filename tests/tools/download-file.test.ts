@@ -1120,3 +1120,39 @@ describe("download_file: course file links (coursePath)", () => {
     expect(pageRequested).toEqual([]);
   });
 });
+
+describe("download_file: disk destinations must already exist (#333)", () => {
+  function registration() {
+    let meta: any;
+    const server = {
+      registerTool: (_n: string, m: unknown) => {
+        meta = m;
+      },
+    };
+    registerDownloadFile(server as any, {} as any);
+    return meta;
+  }
+
+  it("says in the downloadPath description that the directory must already exist", () => {
+    const description = registration().inputSchema.shape.downloadPath.description as string;
+    expect(description).toMatch(/existing directory/i);
+    expect(description).toMatch(/not created/i);
+  });
+
+  it("says in the tool description that disk mode needs an existing directory", () => {
+    expect(registration().description).toMatch(/directory must already exist/i);
+  });
+
+  it("tells the caller to create a missing directory and retry, without creating it or fetching", async () => {
+    const { call, rawRequested } = setup({ disposition: 'attachment; filename="notes.pdf"' });
+    const missing = path.join(targetDir, "missing");
+
+    const result = await call({ courseId: COURSE, topicId: 7, downloadPath: missing });
+
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain(`Download directory does not exist: ${missing}`);
+    expect(textOf(result)).toMatch(/create (it|the directory).*retry/i);
+    await expect(fs.stat(missing)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(rawRequested).toEqual([]);
+  });
+});

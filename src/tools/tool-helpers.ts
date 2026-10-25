@@ -11,6 +11,7 @@ import { TokenRefreshError } from "../api/errors.js";
 import { AuthProcessError, type AuthFailureKind } from "../auth/auth-runner.js";
 import { log } from "../utils/logger.js";
 import { AUTH_COMMAND } from "../utils/commands.js";
+import { dependencyRepairHint, PLAYWRIGHT_INSTALL_HINT } from "../utils/browser-install.js";
 import { getUpdateNotice } from "../utils/update-checker.js";
 import { mfaShortcutTip } from "../utils/two-factor-shortcuts.js";
 import {
@@ -133,6 +134,8 @@ const MFA_FRESH_PROMPT =
   "that no call asks about for 45 seconds is stopped, and the next call after that starts a new one.";
 
 const AUTH_FAILURE_GUIDANCE: Record<AuthFailureKind, string> = {
+  browserInstall: PLAYWRIGHT_INSTALL_HINT,
+  dependencyMissing: dependencyRepairHint(),
   busy: "A sign-in is already running in another process. Let it finish, then try again, " +
     `or run \`${AUTH_COMMAND}\` in a terminal to take over that background attempt.`,
   cooldown:

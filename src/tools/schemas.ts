@@ -91,7 +91,7 @@ export const DownloadFileSchema = z.object({
   newsId: z.coerce.number().int().positive().optional()
     .describe("Announcement (news item) ID whose attachment to download. Requires fileId."),
   downloadPath: z.string().min(1).optional()
-    .describe("Absolute path to the directory where the file should be saved on disk. Omit this to receive the file inline in the tool response instead — the right choice in clients like Claude Desktop, whose analysis/sandbox tools cannot see files an MCP server writes to its own host filesystem. Inline mode returns extracted text for PDFs and Office documents, an image block for jpeg/png/gif/webp, and a short description (pointing back to disk mode) for anything else, capped at 10MB and 400,000 characters of extracted text."),
+    .describe("Absolute path to an existing directory where the file should be saved on disk. The directory must already exist; it is not created for you, so create it first if needed. Omit this to receive the file inline in the tool response instead — the right choice in clients like Claude Desktop, whose analysis/sandbox tools cannot see files an MCP server writes to its own host filesystem. Inline mode returns extracted text for PDFs and Office documents, an image block for jpeg/png/gif/webp, and a short description (pointing back to disk mode) for anything else, capped at 10MB and 400,000 characters of extracted text."),
   customFilename: z.string().max(255).optional()
     .describe("Custom filename for the downloaded file (include extension). If not provided, uses the original filename from Brightspace."),
 });
@@ -100,7 +100,7 @@ export const GetSyllabusSchema = z.object({
   courseId: z.coerce.number().int().positive()
     .describe("Course ID to get syllabus for."),
   downloadPath: z.string().min(1).optional()
-    .describe("Absolute path to the directory where the attachment should be saved."),
+    .describe("Absolute path to an existing directory where the attachment should be saved. The directory must already exist; it is not created for you, so create it first if needed."),
 });
 
 export const GetDiscussionsSchema = z.object({
@@ -250,7 +250,7 @@ export const DownloadDropboxSubmissionFileSchema = z.object({
   fileId: z.coerce.number().int().positive()
     .describe("File ID within that submission."),
   downloadPath: z.string().min(1)
-    .describe("Absolute path to the local directory where the file should be saved."),
+    .describe("Absolute path to an existing local directory where the file should be saved. The directory must already exist; it is not created for you, so create it first if needed."),
   customFilename: z.string().max(255).optional()
     .describe("Custom filename for the downloaded file (include extension). If omitted, uses the original submission filename."),
 });
