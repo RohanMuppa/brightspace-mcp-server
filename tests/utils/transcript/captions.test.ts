@@ -54,6 +54,12 @@ describe("parseCaptions", () => {
     const { cues } = parseCaptions(withCrlf);
     expect(cues).toEqual([{ startMs: 0, endMs: 1000, text: "Hi" }]);
   });
+
+  it("keeps a reference past U+10FFFF as written instead of throwing (#352)", () => {
+    const vtt = "WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nit&#39;s &#x110000; &#1114112; &#x1F600;\n";
+    const { cues } = parseCaptions(vtt);
+    expect(cues[0].text).toBe("it's &#x110000; &#1114112; \u{1F600}");
+  });
 });
 
 describe("formatTimestamp", () => {
