@@ -112,3 +112,104 @@ describe("get_discussions postCount", () => {
     expect(topic.postCount).toBe(2);
   });
 });
+
+/**
+ * Issue #364: a student can list a topic through its forum's topic list yet be
+ * refused the per-topic metadata route. The topic read must take its metadata
+ * from the list it was found in, and a refused posts read must come back as
+ * partial coverage that says which step failed, not as an empty topic.
+ */
+function forbidden(path: string) {
+  return Object.assign(new Error(`403 at ${path}`), { status: 403 });
+}
+
+function setupWith(
+  routes: Record<string, () => unknown>,
+  baseUrl?: string
+) {
+  const apiClient = {
+    le: (orgUnitId: number, p: string) => `${LE_PREFIX}/${orgUnitId}${p}`,
+    get: vi.fn(async (path: string) => {
+      const route = routes[path];
+      if (!route) throw new Error(`Unexpected path requested: ${path}`);
+      return route();
+    }),
+  };
+
+  let handler: (args: unknown) => Promise<any>;
+  const server = {
+    registerTool: (_n: string, _m: unknown, fn: (args: unknown) => Promise<any>) => {
+      handler = fn;
+    },
+  };
+
+  registerGetDiscussions(server as any, apiClient as any, baseUrl);
+  return { call: (args: unknown) => handler!(args) };
+}
+
+const TOPIC_ARGS = { courseId: COURSE_ID, forumId: FORUM_ID, topicId: TOPIC_ID };
+
+describe("get_discussions topic read (#364)", () => {
+  it("reads a topic whose per-topic metadata route is forbidden but which its forum lists", async () => {
+    const { call } = setupWith({
+      [TOPICS_PATH]: () => [TOPIC],
+      [TOPIC_PATH]: () => { throw forbidden(TOPIC_PATH); },
+      [POSTS_PATH]: () => POSTS,
+    });
+
+    const result = await call(TOPIC_ARGS);
+
+    expect(result.isError).toBeFalsy();
+    const payload = parse(result);
+    expect(payload.topic.name).toBe("Introductions");
+    expect(payload.posts.map((p: any) => p.postId)).toEqual([1, 3]);
+  });
+
+  it("falls back to the per-topic route when the forum's list does not include the topic", async () => {
+    const { call } = setupWith({
+      [TOPICS_PATH]: () => [],
+      [TOPIC_PATH]: () => TOPIC,
+      [POSTS_PATH]: () => POSTS,
+    });
+
+    const payload = parse(await call(TOPIC_ARGS));
+
+    expect(payload.topic.topicId).toBe(TOPIC_ID);
+    expect(payload.postCount).toBe(2);
+  });
+
+  it("returns the topic with posts marked unavailable, not empty, when the posts read is forbidden", async () => {
+    const { call } = setupWith(
+      {
+        [TOPICS_PATH]: () => [TOPIC],
+        [POSTS_PATH]: () => { throw forbidden(POSTS_PATH); },
+      },
+      "https://school.example.edu/"
+    );
+
+    const result = await call(TOPIC_ARGS);
+
+    expect(result.isError).toBeFalsy();
+    const payload = parse(result);
+    expect(payload.topic.name).toBe("Introductions");
+    expect(payload.posts).toBeNull();
+    expect(payload.postCount).toBeNull();
+    expect(payload.postsUnavailable).toMatchObject({
+      operation: "listPosts",
+      status: 403,
+      url: `https://school.example.edu/d2l/le/${COURSE_ID}/discussions/topics/${TOPIC_ID}/View`,
+    });
+  });
+
+  it("still fails the call when the topic's forum refuses its topic list and the topic route", async () => {
+    const { call } = setupWith({
+      [TOPICS_PATH]: () => { throw forbidden(TOPICS_PATH); },
+      [TOPIC_PATH]: () => { throw forbidden(TOPIC_PATH); },
+      [POSTS_PATH]: () => POSTS,
+    });
+
+    const result = await call(TOPIC_ARGS);
+
+    expect(result.isError).toBe(true);
+  });
+});

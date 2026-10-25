@@ -9,15 +9,19 @@ function codePoint(whole: string, code: number): string {
   return code <= 0x10ffff ? String.fromCodePoint(code) : whole;
 }
 
-/** Decode the character references Brightspace's HTML editor writes into attribute values. */
+const NAMED: Record<string, string> = { quot: '"', lt: "<", gt: ">", amp: "&" };
+
+/**
+ * Decode the character references Brightspace's HTML editor writes into
+ * attribute values, in one pass so a decoded `&` never starts another
+ * reference: `&#38;lt;` is the text `&lt;`, not `<` (issue #360).
+ */
 export function decodeEntities(value: string): string {
-  return value
-    .replace(/&#x([0-9a-f]+);/gi, (whole, hex: string) => codePoint(whole, parseInt(hex, 16)))
-    .replace(/&#(\d+);/g, (whole, dec: string) => codePoint(whole, parseInt(dec, 10)))
-    .replace(/&quot;/g, '"')
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&amp;/g, "&");
+  return value.replace(/&(?:#[xX]([0-9a-fA-F]+)|#(\d+)|(quot|lt|gt|amp));/g, (whole, hex?: string, dec?: string, name?: string) => {
+    if (hex !== undefined) return codePoint(whole, parseInt(hex, 16));
+    if (dec !== undefined) return codePoint(whole, parseInt(dec, 10));
+    return NAMED[name!];
+  });
 }
 
 /**
