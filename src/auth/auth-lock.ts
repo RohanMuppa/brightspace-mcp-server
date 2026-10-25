@@ -174,6 +174,12 @@ export interface AcquireLockOptions {
    * over a live sign-in nor be taken over ("exclusive").
    */
   mode?: LockMode;
+  /**
+   * True for an owner pid the caller knows is gone even though a process with
+   * that pid is alive: after a reboot an unrelated process can get it. Such an
+   * owner is recovered like a dead one.
+   */
+  abandoned?: (pid: number) => boolean;
 }
 
 /**
@@ -217,12 +223,18 @@ async function waitForTakeover(lockPath: string, stale: Owner): Promise<void> {
 export async function acquireProcessLock(lockPath: string, options: AcquireLockOptions = {}): Promise<() => Promise<void>> {
   await fs.mkdir(path.dirname(lockPath), { recursive: true, mode: 0o700 });
   const mode = options.mode ?? "explicit";
-  const lease = await acquireLease(lockPath, 0, mode);
+  const lease = await acquireLease(lockPath, 0, mode, options.abandoned);
   return () => lease.release();
 }
 
-async function acquireLease(lockPath: string, depth: number, mode: LockMode): Promise<Lease> {
+async function acquireLease(
+  lockPath: string,
+  depth: number,
+  mode: LockMode,
+  abandoned?: (pid: number) => boolean,
+): Promise<Lease> {
   if (depth > 16) throw new AuthenticationInProgressError();
+  const gone = (candidate: Owner) => lockOps.isDead(candidate) || abandoned?.(candidate.pid) === true;
   const owner: Owner = { pid: process.pid, host: hostname(), nonce: randomUUID(), mode };
   for (let attempt = 0; attempt < 3; attempt += 1) {
     try {
@@ -241,7 +253,7 @@ async function acquireLease(lockPath: string, depth: number, mode: LockMode): Pr
 
     const stale = await readOwner(lockPath);
     if (!stale) throw new AuthenticationInProgressError();
-    if (!lockOps.isDead(stale)) {
+    if (!gone(stale)) {
       // A live owner is not stale — the existing behavior for two contending
       // explicit runs, or an automatic run finding anything alive at all.
       // The one exception: an explicit run may take over a live *automatic*
@@ -260,7 +272,7 @@ async function acquireLease(lockPath: string, depth: number, mode: LockMode): Pr
     const claim = await acquireLease(path.join(lockPath, "reclaim.lock"), depth + 1, mode);
     try {
       const current = await readOwner(lockPath);
-      if (current?.nonce !== stale.nonce || !lockOps.isDead(current)) throw new AuthenticationInProgressError();
+      if (current?.nonce !== stale.nonce || !gone(current)) throw new AuthenticationInProgressError();
       const retired = `${lockPath}.stale.${owner.nonce}`;
       // A rename blocked by contention means another contender is inside this
       // directory recovering the same stale lock. That is someone else holding

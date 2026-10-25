@@ -15,6 +15,21 @@ function run(args, options = {}) {
   assert.equal(result.status, 0, `${result.error ?? ""}\n${result.stderr}\n${result.stdout}`);
   return result.stdout;
 }
+/**
+ * Windows keeps a folder locked for a moment after a browser that ran from it
+ * exits, and a rename then fails with EPERM or EBUSY. Retry briefly, as
+ * rmSync's maxRetries does, rather than fail the run on that lag.
+ */
+async function renameWhenFree(from, to) {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await rename(from, to);
+    } catch (error) {
+      if (!["EPERM", "EBUSY", "EACCES"].includes(error?.code) || attempt >= 40) throw error;
+      await new Promise((done) => setTimeout(done, 250));
+    }
+  }
+}
 function npm(args) {
   assert.ok(process.env.npm_execpath, "Run this smoke test with npm run test:install");
   return run([process.env.npm_execpath, ...args]);
@@ -34,7 +49,7 @@ try {
   const config = join(root, ".codex", "config.toml");
   await writeFile(config, "# client config must remain untouched\n");
 
-  await rename(env.PLAYWRIGHT_BROWSERS_PATH, join(root, "pruned-browser-cache"));
+  await renameWhenFree(env.PLAYWRIGHT_BROWSERS_PATH, join(root, "pruned-browser-cache"));
   console.log("Verifying automatic recovery after browser-cache removal...");
   const moduleUrl = pathToFileURL(join(pkg, "build", "utils", "browser-install.js")).href;
   const playwright = createRequire(join(pkg, "package.json")).resolve("playwright");
@@ -49,7 +64,7 @@ try {
   assert.equal(await readFile(config, "utf8"), "# client config must remain untouched\n");
 
   const dependency = dirname(createRequire(join(pkg, "package.json")).resolve("playwright/package.json"));
-  await rename(dependency, join(root, "pruned-playwright-code"));
+  await renameWhenFree(dependency, join(root, "pruned-playwright-code"));
   const damaged = spawnSync(process.execPath, [entry, "repair", "--json"], { env, encoding: "utf8", timeout: 30_000 });
   assert.equal(damaged.status, 1);
   assert.match(JSON.parse(damaged.stdout).message, /npm install --prefix/);
