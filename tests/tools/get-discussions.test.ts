@@ -197,7 +197,7 @@ describe("get_discussions topic read (#364)", () => {
     expect(payload.postsUnavailable).toMatchObject({
       operation: "listPosts",
       status: 403,
-      url: `https://school.example.edu/d2l/lms/discussions/threadlist.d2l?ou=${COURSE_ID}&tId=${TOPIC_ID}`,
+      url: `https://school.example.edu/d2l/le/${COURSE_ID}/discussions/topics/${TOPIC_ID}/View`,
     });
   });
 
