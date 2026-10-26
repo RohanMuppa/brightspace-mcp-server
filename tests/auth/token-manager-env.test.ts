@@ -4,7 +4,7 @@ import * as os from "node:os";
 import { spawn } from "node:child_process";
 import { TokenManager } from "../../src/auth/token-manager.js";
 import { D2LApiClient } from "../../src/api/client.js";
-import { ApiError } from "../../src/api/errors.js";
+import { ApiError, CredentialRejectedError } from "../../src/api/errors.js";
 import { AuthRunner } from "../../src/auth/auth-runner.js";
 
 // D2L_ACCESS_TOKEN / D2L_SESSION_COOKIE never touch disk, so no SessionStore
@@ -270,6 +270,7 @@ describe("TokenManager — D2L_ACCESS_TOKEN / D2L_SESSION_COOKIE", () => {
         status: 401,
         message: expect.stringContaining("paste a fresh one"),
       } as Partial<ApiError>);
+      await expect(client.get("/d2l/api/lp/1.56/users/whoami")).rejects.toBeInstanceOf(CredentialRejectedError);
 
       expect(spawn).not.toHaveBeenCalled();
     });
@@ -303,6 +304,7 @@ describe("TokenManager — D2L_ACCESS_TOKEN / D2L_SESSION_COOKIE", () => {
         status: 401,
         message: expect.stringContaining("expired or invalid"),
       } as Partial<ApiError>);
+      await expect(client.get("/d2l/api/lp/1.56/users/whoami")).rejects.toBeInstanceOf(CredentialRejectedError);
 
       expect(spawn).not.toHaveBeenCalled();
     });

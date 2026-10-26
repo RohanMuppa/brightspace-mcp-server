@@ -8,7 +8,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { D2LApiClient, DEFAULT_CACHE_TTLS } from "../api/index.js";
 import { fetchAllItems, fetchAllObjects } from "../api/paginate.js";
 import { GetAssignmentsSchema } from "./schemas.js";
-import { toolResponse, sanitizeError, isAuthUnavailable, authPendingNotice } from "./tool-helpers.js";
+import { toolResponse, sanitizeError, isAuthUnavailable, authPendingNotice, throwIfCredentialRejected } from "./tool-helpers.js";
 import { convertHtmlToMarkdown } from "../utils/html-converter.js";
 import { log } from "../utils/logger.js";
 import { applyCourseFilter } from "../utils/course-filter.js";
@@ -1208,6 +1208,7 @@ export function registerGetAssignments(
             // keep working — with authPending/notice added for callers that
             // want to tell "no assignments" apart from "couldn't check".
             if (isAuthUnavailable(error)) {
+              throwIfCredentialRejected(error);
               log("DEBUG", `get_assignments: sign-in pending for course ${courseId}`, error);
               return toolResponse({
                 courseId,
@@ -1330,6 +1331,7 @@ export function registerGetAssignments(
           ],
         };
         if (pending.length > 0) {
+          throwIfCredentialRejected(pending[0].authError);
           response.authPending = true;
           response.unavailableCourseIds = pending.map((c) => c.courseId);
           response.notice =

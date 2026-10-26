@@ -10,7 +10,7 @@ import { fetchAllObjects } from "../api/paginate.js";
 import {
   GetRosterSchema,
 } from "./schemas.js";
-import { toolResponse, sanitizeError, isAuthUnavailable, authPendingNotice } from "./tool-helpers.js";
+import { toolResponse, sanitizeError, isAuthUnavailable, authPendingNotice, throwIfCredentialRejected } from "./tool-helpers.js";
 import { log } from "../utils/logger.js";
 
 export interface ClasslistUser {
@@ -130,6 +130,7 @@ export function registerGetRoster(
               (r): r is PromiseRejectedResult =>
                 r.status === "rejected" && isAuthUnavailable(r.reason)
             );
+            if (authFailure) throwIfCredentialRejected(authFailure.reason);
 
             // Merge results
             if (instructorResult.status === "fulfilled") {
@@ -229,6 +230,7 @@ export function registerGetRoster(
           // authPending/notice added for callers that want to tell "empty
           // roster" apart from "couldn't check".
           if (isAuthUnavailable(error)) {
+            throwIfCredentialRejected(error);
             log("DEBUG", `get_roster: sign-in pending for course ${courseId}`, error);
             return toolResponse({
               courseId,

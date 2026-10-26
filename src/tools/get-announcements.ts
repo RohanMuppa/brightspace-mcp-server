@@ -10,7 +10,7 @@ import { fetchAllItems } from "../api/paginate.js";
 import {
   GetAnnouncementsSchema,
 } from "./schemas.js";
-import { toolResponse, toolResponseWithNotice, sanitizeError, isAuthUnavailable, authPendingNotice } from "./tool-helpers.js";
+import { toolResponse, toolResponseWithNotice, sanitizeError, isAuthUnavailable, authPendingNotice, throwIfCredentialRejected } from "./tool-helpers.js";
 import { log } from "../utils/logger.js";
 import { applyCourseFilter } from "../utils/course-filter.js";
 import { matchesModifiedSince } from "../utils/modified-since.js";
@@ -212,6 +212,7 @@ export function registerGetAnnouncements(
             // answered, so the result says so instead of reporting zero
             // announcements as if that were a real measurement.
             if (isAuthUnavailable(error)) {
+              throwIfCredentialRejected(error);
               log("DEBUG", `get_announcements: sign-in pending for course ${courseId}`, error);
               const notice =
                 "Sign-in to Brightspace is still in progress, so announcements for this course " +
@@ -351,6 +352,7 @@ export function registerGetAnnouncements(
         // always a bare array — a shape change would break every existing
         // caller — so a pending course adds a second content block carrying
         // the notice instead of changing content[0].
+        if (pending.length > 0) throwIfCredentialRejected(pending[0].authError);
         if (!modifiedSince) {
           if (pending.length === 0) return arrayPage(announcements, pagination);
           return arrayPage(

@@ -10,7 +10,7 @@ import { fetchAllObjects } from "../api/paginate.js";
 import {
   GetUpcomingDueDatesSchema,
 } from "./schemas.js";
-import { toolResponse, toolResponseWithNotice, sanitizeError, isAuthUnavailable, authPendingNotice } from "./tool-helpers.js";
+import { toolResponse, toolResponseWithNotice, sanitizeError, isAuthUnavailable, authPendingNotice, throwIfCredentialRejected } from "./tool-helpers.js";
 import { log } from "../utils/logger.js";
 import { quizUrl, discussionUrl } from "../utils/deep-links.js";
 import { assignmentLinkResolver } from "./assignment-links.js";
@@ -344,6 +344,7 @@ export function registerGetUpcomingDueDates(
         if (pendingCourseIds.length === 0) {
           return toolResponse(upcoming);
         }
+        throwIfCredentialRejected(firstAuthError);
         return toolResponseWithNotice(
           upcoming,
           "Sign-in to Brightspace is still in progress, so upcoming due dates for " +
