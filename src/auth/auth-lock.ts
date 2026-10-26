@@ -139,7 +139,7 @@ export async function inspectLockOwner(lockPath: string): Promise<{ mode: "autom
 /**
  * The PID of a live "automatic" owner (a background AuthRunner child), or
  * undefined when the lock is free, its owner is gone, or it is held some other
- * way. Used by sign_out to cancel another app's waiting sign-in.
+ * way. Used by sign_out and `auth --logout` to cancel another app's waiting sign-in.
  */
 export async function liveAutomaticOwner(lockPath: string): Promise<number | undefined> {
   const owner = await readOwner(lockPath);

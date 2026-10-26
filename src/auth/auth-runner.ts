@@ -278,16 +278,26 @@ const CANCEL_WAIT_MS = 5000;
 
 /**
  * Stop a background sign-in that ANOTHER server process on this computer
- * started and that holds the cross-process lock, so sign_out can cancel a
- * sign-in whichever app began it. Only an "automatic" owner is stopped (a
+ * started and that holds the cross-process lock, so sign_out and
+ * `auth --logout` can cancel a sign-in whichever app began it. Only an "automatic" owner is stopped (a
  * person's `auth` run in a terminal never is), and only after its command
  * line confirms it is this package's sign-in child: the PID comes from a file,
  * and a PID the system has since reused must never be killed. That check
- * needs ps, so on Windows nothing is stopped and sign_out reports the sign-in
- * as one it cannot cancel. Its own server's waiting calls are answered
+ * needs ps, so on Windows nothing is stopped and sign_out or `auth --logout`
+ * reports the sign-in as one it cannot cancel. Its own server's waiting calls are answered
  * "cancelled" (see the close handler in spawnAuth). The dead owner leaves a
  * stale lock the next lock holder reclaims. Resolves true once it has exited.
  */
+/**
+ * True when a `ps` command line is this package's background sign-in child:
+ * `auth-cli.js` as a whole path segment, followed later by a standalone
+ * `--automatic`. The runtime binary is not checked, since an app may run the
+ * server on an embedded runtime that isn't named node.
+ */
+export function isAutomaticSignInCommand(command: string): boolean {
+  return /(?:^|[\s/\\])auth-cli\.js\s(?:.*\s)?--automatic(?:\s|$)/.test(command.trim());
+}
+
 export async function stopAutomaticSignIn(lockPath: string): Promise<boolean> {
   if (process.platform === "win32") return false;
   const pid = await liveAutomaticOwner(lockPath);
@@ -298,12 +308,14 @@ export async function stopAutomaticSignIn(lockPath: string): Promise<boolean> {
   } catch {
     return false;
   }
-  if (!/auth-cli\.js\b/.test(command) || !command.includes("--automatic")) return false;
-  log("WARN", `Cancelling another app's background sign-in (pid ${pid}) for sign_out`);
+  if (!isAutomaticSignInCommand(command)) return false;
+  log("WARN", `Cancelling another app's background sign-in (pid ${pid}) to sign out`);
   forceStop(pid);
   const deadline = Date.now() + CANCEL_WAIT_MS;
   while (Date.now() < deadline) {
-    try { process.kill(pid, 0); } catch { return true; }
+    // Only "no such process" means it exited: EPERM is a live process this
+    // user cannot signal, which the SIGKILL did not stop either.
+    try { process.kill(pid, 0); } catch (error) { if ((error as NodeJS.ErrnoException).code === "ESRCH") return true; }
     await new Promise<void>((resolve) => setTimeout(resolve, 50));
   }
   return false;

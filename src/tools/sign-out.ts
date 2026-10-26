@@ -43,10 +43,10 @@ function text(message: string, isError = false): CallToolResult {
 /**
  * Register sign_out tool.
  *
- * The in-chat version of `auth --logout`, plus one thing the command does not
- * do: it first cancels a background sign-in still waiting on MFA, this
- * server's (AuthRunner.cancel, which answers every call waiting on it) or
- * another app's on this computer (stopAutomaticSignIn). A user who missed the
+ * The in-chat version of `auth --logout`. Both first cancel a background
+ * sign-in another app on this computer started (stopAutomaticSignIn); this
+ * one also cancels this server's own (AuthRunner.cancel, which answers every
+ * call waiting on it), which the command has no server to do. A user who missed the
  * prompt otherwise waited out its 5-minute window for a new one. Then it
  * deletes this computer's saved
  * session for the account the server is configured with (clearSavedSession,

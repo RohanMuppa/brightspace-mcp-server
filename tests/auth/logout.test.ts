@@ -260,6 +260,55 @@ describe("runLogout", () => {
     expect(output()).not.toMatch(/removed/i);
   });
 
+  // A terminal user has no other way to stop a sign-in an AI app started in
+  // the background, so logout stops it the way sign_out does, then clears.
+  it("cancels a background sign-in an AI app started, clears the session, and says a new prompt can take 5 minutes", async () => {
+    await fs.writeFile(path.join(dir, "session.json"), "x");
+    const release = await acquireProcessLock(authLockPath(dir), { mode: "automatic" });
+    const stopBackground = vi.fn(async () => { await release(); return true; });
+
+    expect(await runLogout({ sessionDir: dir, print, stopBackground })).toBe(0);
+
+    expect(stopBackground).toHaveBeenCalledWith(dir);
+    expect(output()).toMatch(/cancelled the brightspace sign-in that was waiting for approval/i);
+    expect(output()).toMatch(/up to 5 minutes/i);
+    expect(output()).toContain("session.json");
+    expect(await exists(path.join(dir, "session.json"))).toBe(false);
+  });
+
+  it("leaves a sign-in it cannot cancel running, and says how to finish it instead of 'cancel it'", async () => {
+    await fs.writeFile(path.join(dir, "session.json"), "x");
+    const release = await acquireProcessLock(authLockPath(dir));
+    try {
+      expect(await runLogout({ sessionDir: dir, print, stopBackground: async () => false })).toBe(2);
+    } finally {
+      await release();
+    }
+    expect(output()).toMatch(/nothing was deleted/i);
+    expect(output()).toMatch(/another terminal/i);
+    expect(output()).not.toMatch(/or cancel it/i);
+    expect(await exists(path.join(dir, "session.json"))).toBe(true);
+  });
+
+  it("says to run it again when a new sign-in takes the lock between stopping one and clearing", async () => {
+    await fs.writeFile(path.join(dir, "session.json"), "x");
+    const release = await acquireProcessLock(authLockPath(dir));
+    try {
+      expect(await runLogout({ sessionDir: dir, print, stopBackground: async () => true })).toBe(2);
+    } finally {
+      await release();
+    }
+    expect(output()).toMatch(/a new sign-in started before the session could be cleared/i);
+    expect(output()).toMatch(/run this command again/i);
+    expect(await exists(path.join(dir, "session.json"))).toBe(true);
+  });
+
+  it("exits 1 when stopping the background sign-in fails unexpectedly, deleting nothing", async () => {
+    await fs.writeFile(path.join(dir, "session.json"), "x");
+    expect(await runLogout({ sessionDir: dir, print, stopBackground: async () => { throw new Error("ps exploded"); } })).toBe(1);
+    expect(await exists(path.join(dir, "session.json"))).toBe(true);
+  });
+
   it("refuses with a clear message and exit code 2 while a sign-in is in progress", async () => {
     await fs.writeFile(path.join(dir, "session.json"), "x");
     const release = await acquireProcessLock(authLockPath(dir));
@@ -268,7 +317,7 @@ describe("runLogout", () => {
     } finally {
       await release();
     }
-    expect(output()).toMatch(/sign-in is in progress/i);
+    expect(output()).toMatch(/in progress/i);
     expect(output()).toMatch(/nothing was deleted/i);
     expect(await exists(path.join(dir, "session.json"))).toBe(true);
   });
@@ -293,7 +342,7 @@ describe("runLogout", () => {
       remove.mockRestore();
     }
 
-    expect(output()).toMatch(/sign-in is in progress/);
+    expect(output()).toMatch(/in progress/);
     expect(output()).not.toMatch(/incomplete/i);
   });
 
