@@ -104,4 +104,25 @@ describe("a rejected pasted credential", () => {
       expect(answer.text).not.toContain("still in progress");
     },
   );
+
+  it("search_course fails with the guidance instead of an empty search", async () => {
+    const answer = await ask(COOKIE, "search_course", { courseId: 101, query: "exam" });
+    expect(answer.isError).toBe(true);
+    expect(answer.text).toContain("The pasted D2L_SESSION_COOKIE has expired");
+  });
+
+  it("download_file of a course file says to paste a fresh cookie, not to run the auth command", async () => {
+    const answer = await ask(COOKIE, "download_file", { courseId: 101, coursePath: "Notes/week1.pdf" });
+    expect(answer.isError).toBe(true);
+    expect(answer.text).toContain("The pasted D2L_SESSION_COOKIE has expired");
+    expect(answer.text).not.toContain("in your terminal");
+    expect(answer.text).not.toContain("Sign in again");
+  });
+
+  it("download_file of a course file with only D2L_ACCESS_TOKEN says to add D2L_SESSION_COOKIE, not to sign in", async () => {
+    const answer = await ask({ envAccessToken: "a-token" }, "download_file", { courseId: 101, coursePath: "Notes/week1.pdf" });
+    expect(answer.isError).toBe(true);
+    expect(answer.text).toContain("Set D2L_SESSION_COOKIE as well");
+    expect(answer.text).not.toContain("Sign in again");
+  });
 });

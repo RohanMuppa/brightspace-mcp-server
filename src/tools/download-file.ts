@@ -312,11 +312,24 @@ function extensionNote(
 }
 
 /**
+ * Course files need a Brightspace web session, which D2L_ACCESS_TOKEN alone
+ * does not carry, and signing in again would not give it one.
+ */
+export const COURSE_FILE_NEEDS_COOKIE =
+  "Course files are served only to a signed-in Brightspace web session, and D2L_ACCESS_TOKEN alone carries none. Set D2L_SESSION_COOKIE as well (a d2lSessionVal/d2lSecureSessionVal pair from a logged-in browser) and restart the server.";
+
+/**
  * Register download_file tool
  */
 export function registerDownloadFile(
   server: McpServer,
-  apiClient: D2LApiClient
+  apiClient: D2LApiClient,
+  /**
+   * The fix to show when the session cookie a course file needs is missing
+   * or refused, set when the server runs on a pasted credential: there is no
+   * browser sign-in behind it, so signing in again would not help.
+   */
+  cookieRejectedMessage?: string
 ): void {
   server.registerTool(
     "download_file",
@@ -378,7 +391,7 @@ export function registerDownloadFile(
         if (coursePath !== undefined) {
           const filePath = parseCoursePath(coursePath, courseId, apiClient.origin);
           if (typeof filePath !== "string") return errorResponse(filePath.error, "invalidInput");
-          return await downloadCourseFile(apiClient, courseId, filePath, downloadPath, customFilename);
+          return await downloadCourseFile(apiClient, courseId, filePath, downloadPath, customFilename, cookieRejectedMessage);
         } else if (topicId !== undefined) {
           // Content file download
           validateContentId(topicId);
@@ -436,7 +449,8 @@ async function downloadCourseFile(
   courseId: number,
   filePath: string,
   downloadPath: string | undefined,
-  customFilename?: string
+  customFilename?: string,
+  cookieRejectedMessage?: string
 ): Promise<CallToolResult> {
   log("INFO", `Downloading course file: courseId=${courseId}, path=${filePath}`);
 
@@ -444,6 +458,7 @@ async function downloadCourseFile(
     `${QUICKLINK_PATH}?ou=${courseId}&type=coursefile&fileId=${encodeURIComponent(filePath)}`
   );
   if (!response) {
+    if (cookieRejectedMessage) return errorResponse(cookieRejectedMessage, "auth");
     return errorResponse(
       `Course files are served only to a signed-in Brightspace web session, and there is no valid one: the session cookie is missing or has expired. Sign in again with \`${AUTH_COMMAND}\` and retry. A server that runs on D2L_ACCESS_TOKEN alone has no cookie: set D2L_SESSION_COOKIE as well, or sign in through the browser.`, "auth"
     );

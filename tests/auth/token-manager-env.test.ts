@@ -62,6 +62,13 @@ describe("TokenManager — D2L_ACCESS_TOKEN / D2L_SESSION_COOKIE", () => {
 
       expect(token?.accessToken).toBe("my-admin-token");
       expect(token?.source).toBe("env");
+      // Course files are web pages, which take only the cookie.
+      expect(token?.cookieHeader).toBe("d2lSessionVal=aaa; d2lSecureSessionVal=bbb");
+    });
+
+    it("carries no cookie when D2L_ACCESS_TOKEN is set alone", async () => {
+      const manager = new TokenManager({ sessionDir: testDir, baseUrl: BASE_URL, envAccessToken: "my-admin-token" });
+      expect((await manager.getToken())?.cookieHeader).toBeUndefined();
     });
   });
 

@@ -313,6 +313,9 @@ export class TokenManager {
         capturedAt: now,
         expiresAt: now + FAR_FUTURE_MS,
         source: "env",
+        // The token answers API calls; web pages such as course files only
+        // accept the session cookie, so keep it when both were pasted.
+        ...(this.envSessionCookie ? { cookieHeader: this.envSessionCookie } : {}),
       };
     }
     return {

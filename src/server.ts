@@ -10,6 +10,7 @@ import { D2LApiClient } from "./api/index.js";
 import { trackToolActivity } from "./utils/dev-activity.js";
 import { log } from "./utils/logger.js";
 import type { AppConfig } from "./types/index.js";
+import { envCredentialRejectedMessage, ENV_COOKIE_REJECTED } from "./utils/commands.js";
 import {
   registerGetMyCourses,
   registerGetUpcomingDueDates,
@@ -22,6 +23,7 @@ import {
   registerGetAnnouncementFiles,
   registerGetCourseContent,
   registerDownloadFile,
+  COURSE_FILE_NEEDS_COOKIE,
   registerGetClasslistEmails,
   registerGetRoster,
   registerGetMyGroups,
@@ -103,11 +105,7 @@ export function createRuntime(config: AppConfig, version: string): ServerRuntime
     baseUrl: config.baseUrl,
     tokenManager,
     onAuthExpired: authRunner ? () => authRunner.run(currentMfaAnnouncer()) : undefined,
-    authExpiredMessage: config.envAccessToken
-      ? "D2L_ACCESS_TOKEN was rejected by Brightspace (expired or invalid). Issue a fresh token and update the environment variable; this server does not fall back to a browser login while D2L_ACCESS_TOKEN is set."
-      : config.envSessionCookie
-        ? "The pasted D2L_SESSION_COOKIE has expired. Copy a fresh d2lSessionVal/d2lSecureSessionVal pair from a logged-in browser and update the environment variable; this server does not fall back to a browser login while D2L_SESSION_COOKIE is set."
-        : undefined,
+    authExpiredMessage: envCredentialRejectedMessage(config.envAccessToken, config.envSessionCookie),
   });
 
   return { config, version, tokenManager, apiClient, authRunner };
@@ -146,7 +144,11 @@ export function createMcpServer(runtime: ServerRuntime): McpServer {
   registerGetAssignmentFiles(server, apiClient, config.baseUrl);
   registerGetAnnouncementFiles(server, apiClient);
   registerGetCourseContent(server, apiClient);
-  registerDownloadFile(server, apiClient);
+  registerDownloadFile(
+    server,
+    apiClient,
+    config.envSessionCookie ? ENV_COOKIE_REJECTED : config.envAccessToken ? COURSE_FILE_NEEDS_COOKIE : undefined,
+  );
   registerGetClasslistEmails(server, apiClient);
   registerGetRoster(server, apiClient);
   registerGetMyGroups(server, apiClient);

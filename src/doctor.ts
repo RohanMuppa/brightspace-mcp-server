@@ -47,7 +47,9 @@ import {
   CLEAR_NPX_CACHE_COMMAND,
   prepareCommand,
   signInCommand,
+  envCredentialRejectedMessage,
 } from "./utils/commands.js";
+import { ApiError } from "./api/errors.js";
 import { chromiumReady, chromiumStatus, dependencyRepairHint, BROWSER_REPAIR_COMMAND, type ChromiumStatus } from "./utils/browser-install.js";
 import { nodeVersionSupported, readOnlyTokenManager, readSavedSessionToken, sessionDirFor } from "./utils/saved-session.js";
 
@@ -358,6 +360,10 @@ async function checkSession(
     : `Not signed in yet — run this in a terminal: ${signInCommand(baseUrl)}`;
   try {
     const token = await deps.getSessionToken(baseUrl, sessionDir, envAccessToken, envSessionCookie);
+    // A pasted credential is used as given, so nothing was issued here: the
+    // course check below is what shows whether Brightspace accepts it.
+    const pasted = envAccessToken ? "D2L_ACCESS_TOKEN" : envSessionCookie ? "D2L_SESSION_COOKIE" : undefined;
+    if (token && pasted) return { ok: true, result: pass("session", `Using the credential in ${pasted}; the course check below shows whether Brightspace accepts it`) };
     if (token) return { ok: true, result: pass("session", "Saved sign-in works — a token was issued without opening a browser") };
     return { ok: false, result: problem("session", failMessage) };
   } catch {
@@ -389,6 +395,13 @@ async function checkCourses(
     const label = hasMore ? `at least ${count}` : `${count}`;
     return pass("courses", `Found ${label} course${count === 1 ? "" : "s"} on Brightspace`);
   } catch (error) {
+    const rejected = error instanceof ApiError && error.status === 401
+      ? envCredentialRejectedMessage(envAccessToken, envSessionCookie)
+      : undefined;
+    if (rejected) return problem("courses", `Brightspace refused the course list. ${rejected}`);
+    if (error instanceof ApiError && error.status === 401) {
+      return problem("courses", `Brightspace refused the saved sign-in when loading your courses — sign in again: ${AUTH_COMMAND}`);
+    }
     const detail = error instanceof Error ? sanitizeErrorDetail(error.message) : "an unknown error";
     return problem("courses", `Could not load your courses (${detail}) — run doctor again after checking your connection.`);
   }

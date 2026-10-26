@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { registerGetSyllabus } from "../../src/tools/get-syllabus.js";
-import { ApiError } from "../../src/api/index.js";
+import { ApiError, CredentialRejectedError } from "../../src/api/index.js";
 
 /**
  * A course whose syllabus lives behind an LTI tool (e.g. Simple Syllabus) has
@@ -49,10 +49,13 @@ function setup(routes: Routes) {
     },
   };
   registerGetSyllabus(server as any, apiClient as any);
-  return async (extraArgs: Record<string, unknown> = {}) => {
+  const call = async (extraArgs: Record<string, unknown> = {}) => {
     const res = await handler!({ courseId: COURSE_ID, ...extraArgs });
     return JSON.parse(res.content[0].text);
   };
+  /** The tool result itself, for answers that are errors rather than JSON. */
+  const raw = (extraArgs: Record<string, unknown> = {}) => handler!({ courseId: COURSE_ID, ...extraArgs });
+  return Object.assign(call, { raw });
 }
 
 const EMPTY_OVERVIEW = { Description: null };
@@ -404,5 +407,21 @@ describe("get_syllabus attachment filename (#247)", () => {
 
   it("keeps a plain quoted filename as given", async () => {
     expect(await savedName('attachment; filename="Fall Syllabus.txt"')).toBe("Fall Syllabus.txt");
+  });
+});
+
+// A 401 left over after signing in failed is not a permission the student
+// lacks: the lookup never ran, so the whole call fails with the sign-in answer.
+describe("get_syllabus when signing in fails part-way", () => {
+  it("fails with the paste-a-fresh-one guidance instead of reporting permission-denied", async () => {
+    const guidance = "The pasted D2L_SESSION_COOKIE has expired. Copy a fresh pair.";
+    const call = setup({
+      overview: EMPTY_OVERVIEW,
+      toc: new CredentialRejectedError("/content/toc", guidance),
+      ltiLinks: [],
+    });
+    const result = await call.raw();
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toBe(guidance);
   });
 });
