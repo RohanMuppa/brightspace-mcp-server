@@ -1018,8 +1018,13 @@ describe("AuthRunner", () => {
       const cancelling = runner.cancel();
       await vi.advanceTimersByTimeAsync(0);
       // SIGKILL, never SIGTERM: a graceful stop would record the MFA cooldown.
-      expect(kill).toHaveBeenCalledWith(-12345, "SIGKILL");
-      expect(kill).toHaveBeenCalledWith(12346, "SIGKILL");
+      // Windows has no process groups; taskkill /t /f stops the tree instead.
+      if (process.platform === "win32") {
+        expect(execFileSync).toHaveBeenCalledWith("taskkill", ["/pid", "12345", "/t", "/f"], expect.any(Object));
+      } else {
+        expect(kill).toHaveBeenCalledWith(-12345, "SIGKILL");
+        expect(kill).toHaveBeenCalledWith(12346, "SIGKILL");
+      }
       expect(kill).not.toHaveBeenCalledWith(expect.anything(), "SIGTERM");
       expect(retry.error).toMatchObject({ kind: "cancelled" });
       child.emit("exit", null, "SIGKILL");
