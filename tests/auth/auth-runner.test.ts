@@ -118,6 +118,52 @@ describe("AuthRunner", () => {
     expect(spawn).toHaveBeenCalledTimes(1);
   });
 
+  /**
+   * Microsoft refuses a new prompt for an account while an earlier one is
+   * still open (UserAuthFailedDuplicateRequest, seen live 2026-10-25), and
+   * shows a "Verify your identity" list instead. The child reports that as
+   * AUTH_MFA_HELD, so callers hear the real wait, not "still starting".
+   */
+  it("answers mfaHeld at once when Microsoft holds the prompt, then upgrades a retry to the number", async () => {
+    const runner = new AuthRunner();
+    const failure = expect(runner.run()).rejects.toMatchObject({ kind: "mfaHeld", numberMatch: undefined });
+    child.stdout.write("AUTH_MFA_HELD\n");
+    await vi.advanceTimersByTimeAsync(1);
+    await failure;
+    const retry = track(runner.run());
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(retry.settled).toBe(false);
+    child.stdout.write("MFA_NUMBER:52\n");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(retry.error).toMatchObject({ kind: "mfaPending", numberMatch: "52" });
+    expect(spawn).toHaveBeenCalledTimes(1);
+  });
+
+  it("replaces a hold with a challenge that has no number", async () => {
+    const runner = new AuthRunner();
+    const failure = expect(runner.run()).rejects.toMatchObject({ kind: "mfaHeld" });
+    child.stdout.write("AUTH_MFA_HELD\n");
+    await vi.advanceTimersByTimeAsync(1);
+    await failure;
+    const retry = track(runner.run());
+    await vi.advanceTimersByTimeAsync(1000);
+    child.stdout.write("MFA_PENDING\n");
+    await vi.advanceTimersByTimeAsync(45000);
+    expect(retry.error).toMatchObject({ kind: "mfaPending" });
+  });
+
+  it("reports a sign-in that ran out of time while held as mfaHeld, not unsupported", async () => {
+    const runner = new AuthRunner();
+    const failure = expect(runner.run()).rejects.toMatchObject({ kind: "mfaHeld" });
+    child.stdout.write("AUTH_MFA_HELD\n");
+    await vi.advanceTimersByTimeAsync(1);
+    await failure;
+    const retry = expect(runner.run()).rejects.toMatchObject({ kind: "mfaHeld" });
+    await vi.advanceTimersByTimeAsync(1000);
+    child.emit("close", 4);
+    await retry;
+  });
+
   it("answers automaticPending, not busy, when another process is signing in automatically", async () => {
     const runner = new AuthRunner();
     const failure = expect(runner.run()).rejects.toMatchObject({ kind: "automaticPending" });

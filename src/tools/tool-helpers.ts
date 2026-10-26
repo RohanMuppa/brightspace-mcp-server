@@ -124,14 +124,14 @@ const MFA_NEW_NUMBER =
   "and the next answer shows it; always give the user the latest number.";
 
 /**
- * How to get a new prompt now. A user who got none was left calling into the
- * same sign-in until its 5-minute window ran out; sign_out cancels it at once.
+ * Why a missed prompt cannot be skipped. Microsoft keeps a prompt open for up
+ * to 5 minutes and refuses another for the same account until then
+ * (UserAuthFailedDuplicateRequest, seen live on Purdue's tenant 2026-10-25),
+ * so cancelling the sign-in only throws away the one that could finish.
  */
-const MFA_FRESH_PROMPT =
-  "If the user got no prompt or wants a new one now, offer to cancel this sign-in; if they agree, " +
-  "call sign_out: it cancels the waiting sign-in (and signs out of Brightspace on this computer), " +
-  "and the next call starts a new sign-in and sends a new prompt right away. Otherwise a sign-in " +
-  "that no call asks about for 45 seconds is stopped, and the next call after that starts a new one.";
+const MFA_NO_FASTER =
+  "Cancelling the sign-in (sign_out) doesn't get one sooner: Microsoft sends no other prompt to " +
+  "this account until the one already sent expires, up to 5 minutes after it was sent.";
 
 const AUTH_FAILURE_GUIDANCE: Record<AuthFailureKind, string> = {
   browserInstall: PLAYWRIGHT_INSTALL_HINT,
@@ -173,11 +173,20 @@ const AUTH_FAILURE_GUIDANCE: Record<AuthFailureKind, string> = {
     "again right away without waiting for them to " +
     "confirm: each call waits up to 45 seconds for the approval and returns the result as soon " +
     "as the sign-in completes. Keep calling until it succeeds or reports a different error. " +
-    `${MFA_SAME_PROMPT} ${MFA_FRESH_PROMPT} ${MFA_SOLO_CALL}`,
+    `${MFA_SAME_PROMPT} ${MFA_NO_FASTER} ${MFA_SOLO_CALL}`,
   cancelled:
     "The sign-in was cancelled before it finished (by sign_out, or its process was stopped), so " +
-    "the prompt or number from it no longer works. Calling this tool again starts a new sign-in " +
-    "and sends a new prompt; give the user the new number it returns.",
+    "the prompt or number from it no longer works. Calling this tool again starts a new sign-in. " +
+    "Microsoft keeps the cancelled prompt open for up to 5 minutes after sending it and sends this " +
+    "account no other until then, so a new number can take that long; give the user the new number " +
+    "when an answer carries one.",
+  mfaHeld:
+    "Microsoft is still holding an earlier sign-in prompt for this account (one that was missed, or " +
+    "whose sign-in was cancelled) and won't send a new prompt until that one expires, up to 5 minutes " +
+    "after it was sent. There is nothing to approve right now, and the earlier number no longer works. " +
+    "The sign-in asks Microsoft again every minute. Tell the user that, then call this tool again " +
+    "right away: each call waits up to 45 seconds and returns the new number as soon as Microsoft " +
+    "sends it. If a prompt the user didn't start shows on their phone, they should deny it.",
   inProgress:
     "Brightspace sign-in is still starting in the background (opening the browser and the " +
     "school's login pages). Call this tool again right away: the next call picks up that " +
@@ -228,7 +237,7 @@ function mfaPendingMessage(error: AuthProcessError): string {
       "tool again right away without waiting for them " +
       "to confirm: each call waits up to 45 seconds for the approval and returns the result as " +
       "soon as the sign-in completes. Keep calling until it succeeds or reports a different error. " +
-      `${MFA_SAME_PROMPT} ${MFA_NEW_NUMBER} ${MFA_FRESH_PROMPT} ${MFA_SOLO_CALL}`;
+      `${MFA_SAME_PROMPT} ${MFA_NEW_NUMBER} ${MFA_NO_FASTER} ${MFA_SOLO_CALL}`;
   }
   return AUTH_FAILURE_GUIDANCE[error.kind];
 }

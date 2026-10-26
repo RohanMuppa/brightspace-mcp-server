@@ -41,11 +41,22 @@ interface PollState {
   approval?: string;
   /** A stable password field with no username field, i.e. Microsoft's password page. */
   password?: boolean;
+  /**
+   * Entra's "Verify your identity" list headed "Sorry, we're having trouble
+   * verifying your account": its refusal to send a new prompt while an earlier
+   * one for the account is still open.
+   */
+  held?: boolean;
+  /** The held list's Authenticator option, by Entra's data-value. */
+  pushTile?: boolean;
+  /** The account Microsoft names on its page (#displayName). */
+  account?: string;
 }
 
 const RESEND_ID_SELECTOR = "#idA_SAASTO_Resend";
 const APPROVAL_SIGN_SELECTOR = "#idRemoteNGC_DisplaySign";
 const PASSWORD_SWITCH = "#idA_PWD_SwitchToPassword";
+const PUSH_TILE = '[data-value="PhoneAppNotification"]';
 
 function captureWarnings() {
   const lines: string[] = [];
@@ -65,6 +76,7 @@ function makeMfaPage(states: PollState[]) {
   const continueClick = vi.fn(async () => {});
   const resendClick = vi.fn(async () => {});
   const otherMethodClick = vi.fn(async () => {});
+  const pushClick = vi.fn(async () => {});
   const current = () => states[Math.min(poll, states.length - 1)] ?? {};
   const locatorTarget = (selector: string) => ({
     isVisible: async () => {
@@ -81,13 +93,16 @@ function makeMfaPage(states: PollState[]) {
       if (selector === RESEND_ID_SELECTOR) return Boolean(current().resend);
       if (selector === APPROVAL_SIGN_SELECTOR || selector === PASSWORD_SWITCH) return current().approval !== undefined;
       if (selector === "input[type=password]" || selector === "input[name=passwd]") return Boolean(current().password);
+      if (selector === PUSH_TILE) return Boolean(current().pushTile);
       return false;
     },
+    count: async () => (selector === "#displayName" && current().account ? 1 : 0),
     textContent: async () =>
       selector === SIGN_SELECTOR ? current().number ?? null
         : selector === APPROVAL_SIGN_SELECTOR ? current().approval ?? null
-          : null,
-    click: selector === RESEND_ID_SELECTOR ? resendClick : yes,
+          : selector === "#displayName" ? current().account ?? null
+            : null,
+    click: selector === RESEND_ID_SELECTOR ? resendClick : selector === PUSH_TILE ? pushClick : yes,
     fill,
     press,
   });
@@ -104,7 +119,9 @@ function makeMfaPage(states: PollState[]) {
             ? Boolean(current().trust)
             : /sign in another way/i.test(String(pattern))
               ? Boolean(current().otherMethod)
-              : false,
+              : /having trouble verifying your account/i.test(String(pattern))
+                ? Boolean(current().held)
+                : false,
       textContent: async () => {
         const trust = current().trust;
         if (!trust) return null;
@@ -129,7 +146,7 @@ function makeMfaPage(states: PollState[]) {
       vi.advanceTimersByTime(milliseconds);
     }),
   };
-  return { page, yes, fill, press, continueClick, resendClick, otherMethodClick, poll: () => poll };
+  return { page, yes, fill, press, continueClick, resendClick, otherMethodClick, pushClick, poll: () => poll };
 }
 
 describe("Purdue MFA loop ported from Brightspace Bar", () => {
@@ -208,6 +225,69 @@ describe("Purdue MFA loop ported from Brightspace Bar", () => {
     expect(onMfaChallenge).toHaveBeenCalledTimes(2);
     expect(onMfaChallenge).toHaveBeenNthCalledWith(1, "42");
     expect(onMfaChallenge).toHaveBeenNthCalledWith(2, "73");
+  });
+
+  describe("Microsoft holding back a new prompt", () => {
+    // Seen live 2026-10-25: Entra refuses a new prompt (BeginAuth
+    // UserAuthFailedDuplicateRequest) while an earlier one for the account is
+    // open, and shows this list. A request made during the hold sends nothing;
+    // the first after it ends sends one prompt.
+    const flow = (options: Record<string, unknown> = {}) =>
+      new PurdueSSOFlow({ baseUrl: BASE_URL, username: "pete", ...options }) as any;
+    const heldList = { held: true, pushTile: true, account: "pete@purdue.edu" };
+    /** Polls of the held list covering `seconds`, at the loop's 2-second poll. */
+    const heldFor = (seconds: number, state: PollState = heldList) => Array.from({ length: seconds / 2 }, () => state);
+
+    it("reports the hold once and does not ask again within the first minute", async () => {
+      const onMfaHeld = vi.fn();
+      const onMfaChallenge = vi.fn();
+      const { page, pushClick, resendClick, otherMethodClick } = makeMfaPage([
+        ...heldFor(40),
+        { number: "52", challenge: true },
+        { url: `${BASE_URL}/d2l/home`, cookie: true, d2l: true },
+      ]);
+      await flow({ onMfaHeld, onMfaChallenge }).handleMFA(page);
+      expect(onMfaHeld).toHaveBeenCalledOnce();
+      expect(onMfaChallenge).toHaveBeenCalledWith("52");
+      expect(pushClick).not.toHaveBeenCalled();
+      expect(resendClick).not.toHaveBeenCalled();
+      expect(otherMethodClick).not.toHaveBeenCalled();
+    });
+
+    it("asks Microsoft again once a minute while held, then stops when the number appears", async () => {
+      const onMfaChallenge = vi.fn();
+      const { page, pushClick } = makeMfaPage([
+        ...heldFor(130),
+        { number: "52", challenge: true },
+        { url: `${BASE_URL}/d2l/home`, cookie: true, d2l: true },
+      ]);
+      await flow({ onMfaChallenge }).handleMFA(page);
+      expect(pushClick).toHaveBeenCalledTimes(2);
+      expect(onMfaChallenge).toHaveBeenCalledWith("52");
+    });
+
+    it("never asks more than once a minute over a whole held login", async () => {
+      const { page, pushClick } = makeMfaPage([heldList]);
+      await expect(flow().handleMFA(page)).rejects.toBeInstanceOf(UnsupportedAuthenticationError);
+      expect(pushClick.mock.calls.length).toBeGreaterThan(0);
+      expect(pushClick.mock.calls.length).toBeLessThanOrEqual(5);
+    });
+
+    it("never asks when the page names another account, or none", async () => {
+      for (const account of ["someone@else.edu", undefined]) {
+        const { page, pushClick } = makeMfaPage([{ ...heldList, account }]);
+        await expect(flow().handleMFA(page)).rejects.toBeInstanceOf(UnsupportedAuthenticationError);
+        expect(pushClick).not.toHaveBeenCalled();
+      }
+    });
+
+    it("does not report a hold off Microsoft's own sign-in host", async () => {
+      const onMfaHeld = vi.fn();
+      const { page, pushClick } = makeMfaPage([{ ...heldList, url: "https://login.microsoftonline.com.example.test/login" }]);
+      await expect(flow({ onMfaHeld }).handleMFA(page)).rejects.toBeInstanceOf(UnsupportedAuthenticationError);
+      expect(onMfaHeld).not.toHaveBeenCalled();
+      expect(pushClick).not.toHaveBeenCalled();
+    });
   });
 
   it("resends at most twice, then falls through to the existing timeout", async () => {

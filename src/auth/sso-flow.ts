@@ -85,6 +85,7 @@ export function createSSOFlow(
   requestMfaCode?: RequestMfaCode,
   onMfaChallenge?: OnMfaChallenge,
   onAutomaticPending?: () => void,
+  onMfaHeld?: () => void,
 ): SSOFlow {
   const credentials = {
     username: config.username,
@@ -103,6 +104,7 @@ export function createSSOFlow(
     requestMfaCode,
     onMfaChallenge,
     onAutomaticPending,
+    onMfaHeld,
   };
 
   if (isTUDelftBrightspace(config.baseUrl)) {

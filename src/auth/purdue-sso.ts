@@ -139,6 +139,33 @@ const CODE_METHOD_STEPS = [
   ["other", /^(?:I can.t use my .+ right now|sign in another way|use a different verification option)$/i],
 ] as const;
 
+/**
+ * Entra's "Verify your identity" heading when it refuses a new prompt: an
+ * earlier prompt for the account is still open (BeginAuth answers
+ * UserAuthFailedDuplicateRequest, error 500121), whether it was missed or its
+ * sign-in was cancelled. It lasts until that prompt expires, up to 5 minutes
+ * after it was sent. Seen live on Purdue's tenant on 2026-10-25, where asking
+ * the list for another Authenticator request during the hold was refused the
+ * same way (see HELD_RETRY_MS for asking again once it may have ended).
+ */
+const MFA_HELD_TEXT = /having trouble verifying your account/i;
+
+/**
+ * While Microsoft holds the account, ask it again through the list's
+ * Authenticator option this often. A request made during the hold is refused
+ * and sends nothing to the phone; the first one after the earlier prompt
+ * expires sends exactly one new prompt, whose number ends the hold here.
+ * Without this the page never changes and the login waits out its own 5
+ * minutes after Microsoft would already have sent a new prompt.
+ */
+const HELD_RETRY_MS = 60_000;
+/** Enough tries to outlast a 5-minute hold, and no more. */
+const MAX_HELD_RETRIES = 6;
+const PUSH_METHOD_SELECTOR = '[data-value="PhoneAppNotification"]';
+const PUSH_METHOD_LABEL = /^approve a request on my microsoft authenticator app$/i;
+/** Short, so a list that changes under the click cannot hold the loop for Playwright's 30 s default. */
+const PUSH_CLICK_TIMEOUT_MS = 5000;
+
 /** Let Entra re-render the method page before the loop looks at it again. */
 const METHOD_SWITCH_SETTLE_MS = 500;
 
@@ -203,6 +230,11 @@ interface PurdueSSOConfig {
    * "check your phone".
    */
   onAutomaticPending?: () => void;
+  /**
+   * Fired once per login when Microsoft refuses to send a new prompt because
+   * an earlier one for the account is still open (see MFA_HELD_TEXT).
+   */
+  onMfaHeld?: () => void;
 }
 
 /** Microsoft expects Purdue's full sign-in name, while setup also accepts a career account. */
@@ -466,6 +498,11 @@ export class PurdueSSOFlow {
     const startedAt = Date.now();
     const deadline = startedAt + MFA_TIMEOUT_MS;
     let challenged = false;
+    /** True once onMfaHeld has reported this login. */
+    let heldReported = false;
+    /** Requests made through the held list, and when the last one was made. */
+    let heldRetries = 0;
+    let heldRetryAt = 0;
     /**
      * True once this login has told the user to go approve something. Only
      * then is a timeout really a missed approval; an automatic code sign-in
@@ -557,6 +594,23 @@ export class PurdueSSOFlow {
           await page.locator("#idDiv_SAOTCAS_Title").first().isVisible().catch(() => false) ||
           await page.locator("#idDiv_SAOTCC_Title").first().isVisible().catch(() => false) ||
           await this.anyVisible(page, PASSWORDLESS_APPROVAL_SELECTORS);
+        // Microsoft refusing a new prompt while an earlier one is still open:
+        // tell the caller how long that lasts instead of "still starting".
+        if (manualRequired && !challengeVisible && await this.isHeldByMicrosoft(page)) {
+          if (!heldReported) {
+            heldReported = true;
+            heldRetryAt = Date.now();
+            log("WARN", "Microsoft is holding back a new prompt until an earlier one for this account expires (up to 5 minutes after it was sent).");
+            this.config.onMfaHeld?.();
+          } else if (!sawNumber && heldRetries < MAX_HELD_RETRIES && Date.now() - heldRetryAt >= HELD_RETRY_MS) {
+            heldRetryAt = Date.now();
+            if (await this.requestPromptFromHeldList(page)) {
+              heldRetries += 1;
+              await page.waitForTimeout(METHOD_SWITCH_SETTLE_MS);
+              continue;
+            }
+          }
+        }
         // Entra showed a challenge but never a way to type a code. Stop
         // waiting for one and fall back to the announce-and-approve path this
         // flow has always used, rather than polling a dead page for 5 minutes.
@@ -804,6 +858,46 @@ export class PurdueSSOFlow {
       return "clicked";
     }
     return "noSwitch";
+  }
+
+  /**
+   * Ask the held list for an Authenticator prompt (see HELD_RETRY_MS). Only
+   * when Microsoft's page names the configured account, so a held list for
+   * someone else never sends that person a prompt.
+   */
+  private async requestPromptFromHeldList(page: Page): Promise<boolean> {
+    const tile = page.locator(PUSH_METHOD_SELECTOR).first();
+    const control = await tile.isVisible().catch(() => false) ? tile : page.getByText(PUSH_METHOD_LABEL).first();
+    if (!await control.isVisible().catch(() => false)) return false;
+    if (!await this.showsConfiguredAccount(page)) return false;
+    log("INFO", "Asking Microsoft again for an Authenticator prompt.");
+    await control.click({ timeout: PUSH_CLICK_TIMEOUT_MS }).catch(() => {});
+    devActivity("mfa_method_selected");
+    return true;
+  }
+
+  /**
+   * True only when this is Microsoft's own sign-in page and one of its account
+   * labels names the configured account. Stricter than
+   * assertExpectedMicrosoftAccount, which lets a page with no label through.
+   */
+  private async showsConfiguredAccount(page: Page): Promise<boolean> {
+    if (new URL(page.url()).hostname !== "login.microsoftonline.com" || !this.config.username) return false;
+    const expected = signInName(this.config.username, this.config.baseUrl).toLowerCase();
+    for (const selector of ACCOUNT_LABEL_SELECTORS) {
+      const account = page.locator(selector).first();
+      if (await account.count().catch(() => 0) === 0) continue;
+      const value = await account.textContent({ timeout: 1000 }).catch(() => null);
+      const shown = value?.match(/[\w.+-]+@[\w.-]+\.[a-z]{2,}/i)?.[0]?.toLowerCase();
+      if (shown) return shown === expected;
+    }
+    return false;
+  }
+
+  /** Microsoft's own sign-in page refusing a new prompt; see MFA_HELD_TEXT. */
+  private async isHeldByMicrosoft(page: Page): Promise<boolean> {
+    if (new URL(page.url()).hostname !== "login.microsoftonline.com") return false;
+    return await page.getByText(MFA_HELD_TEXT).first().isVisible().catch(() => false);
   }
 
   /**

@@ -108,9 +108,10 @@ describe("sign_out registration", () => {
       const description = tools.find((entry) => entry.name === "sign_out")!.description!;
       expect(description).toMatch(/only when the user explicitly asks/i);
       expect(description).toMatch(/never call it on your own to fix an error/i);
-      // A user who missed the prompt has to be able to get a new one now.
-      expect(description).toMatch(/cancel a sign-in that is waiting for approval and get a new prompt now/);
-      expect(description).toMatch(/the next Brightspace call starts a new sign-in right away/);
+      // Cancelling cannot get a new prompt sooner: Microsoft holds the account's
+      // MFA until the earlier prompt expires (seen live, 2026-10-25).
+      expect(description).toMatch(/doesn't get a new prompt sooner/);
+      expect(description).not.toMatch(/get a new prompt now|starts a new sign-in right away/);
       expect(description).toMatch(/sign in again from scratch/);
       expect(description).not.toMatch(/with MFA/);
     } finally {
@@ -202,7 +203,7 @@ describe("sign_out", () => {
     expect(forgetSession).not.toHaveBeenCalled();
   });
 
-  it("cancels this server's waiting sign-in before deleting, and says the next question starts a new one", async () => {
+  it("cancels this server's waiting sign-in before deleting, and says how long a new prompt can take", async () => {
     await seed();
     const order: string[] = [];
     const cancel = vi.fn(async () => { order.push("cancel"); return true; });
@@ -212,7 +213,8 @@ describe("sign_out", () => {
     expect(isError).toBe(false);
     expect(order).toEqual(["cancel", "clear"]);
     expect(text).toMatch(/^Cancelled the Brightspace sign-in that was waiting for approval, so the prompt or number from it no longer works\.\nSigned out of Brightspace on this computer\./);
-    expect(text).toContain("The next Brightspace question starts a new sign-in right away and sends a new prompt");
+    expect(text).toContain("Microsoft keeps that prompt open for up to 5 minutes after sending it");
+    expect(text).not.toContain("starts a new sign-in right away");
     for (const name of SESSION_FILES) expect(await exists(name)).toBe(false);
   });
 
@@ -222,7 +224,7 @@ describe("sign_out", () => {
     expect(text).toBe(
       "Cancelled the Brightspace sign-in that was waiting for approval, so the prompt or number from it no longer works.\n" +
       "There was no saved session to remove.\n" +
-      "The next Brightspace question starts a new sign-in right away and sends a new prompt; give the user the new number it returns."
+      "Microsoft keeps that prompt open for up to 5 minutes after sending it and sends this account no other until then, so the next Brightspace question can take that long to show a new number to approve."
     );
   });
 

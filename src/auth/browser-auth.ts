@@ -81,6 +81,8 @@ export interface BrowserAuthOptions {
    * must say "still signing in", never "check your phone".
    */
   onAutomaticPending?: () => void;
+  /** Told once when Microsoft refuses a new prompt while an earlier one is still open. */
+  onMfaHeld?: () => void;
   /** Told how long each sign-in stage took, as it ends, whether it succeeded or not. */
   onPhase?: (phase: AuthPhase, elapsedMs: number) => void;
 }
@@ -117,7 +119,9 @@ export class BrowserAuth {
       this.challengeSeenAt ??= Date.now();
       this.publishing = this.publishing.then(() => publishAutomaticProgress(this.lockPath)).catch(() => { });
       try { onAutomaticPending?.(); } catch { /* Reporting must not interrupt authentication. */ }
-    });
+    }, options.onMfaHeld && (() => {
+      try { options.onMfaHeld?.(); } catch { /* Reporting must not interrupt authentication. */ }
+    }));
     this.stateStore = new BrowserStateStore(config.sessionDir);
     this.cooldown = new AuthCooldown(config.sessionDir);
   }

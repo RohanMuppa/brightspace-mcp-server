@@ -110,15 +110,29 @@ describe("sanitizeError", () => {
   });
 
   // A model once told a user that a call timing out would make the server send
-  // a new push. A retry joins the waiting sign-in; only one left alone for 45 s
-  // is replaced, so the text has to say what a retry does to the prompt.
-  it.each([undefined, "47"])("says a retry sends no new prompt and how to get one (number: %s)", (numberMatch) => {
+  // a new push. A retry joins the waiting sign-in, so the text has to say what a
+  // retry does to the prompt. Live on Purdue's tenant (2026-10-25), cancelling
+  // the sign-in did not get a new prompt sooner either: Microsoft refused
+  // another push to the account (UserAuthFailedDuplicateRequest) until the
+  // first expired, so the text must not offer that.
+  it.each([undefined, "47"])("says a retry sends no new prompt and a cancel gets none sooner (number: %s)", (numberMatch) => {
     const text = textOf(sanitizeError(new AuthProcessError("mfaPending", "internal detail", numberMatch)));
 
     expect(text).toContain("Calling again doesn't send a new prompt, and neither does a call timing out");
-    expect(text).toContain("offer to cancel this sign-in; if they agree, call sign_out");
-    expect(text).toContain("the next call starts a new sign-in and sends a new prompt right away");
-    expect(text).toContain("for 45 seconds is stopped");
+    expect(text).toContain("Cancelling the sign-in (sign_out) doesn't get one sooner");
+    expect(text).not.toContain("offer to cancel");
+    expect(text).not.toContain("new prompt right away");
+  });
+
+  it("explains Microsoft holding back a new prompt instead of 'still starting' or 'cannot supply'", () => {
+    const text = textOf(sanitizeError(new AuthProcessError("mfaHeld", "internal detail")));
+
+    expect(text).toContain("Microsoft is still holding an earlier sign-in prompt for this account");
+    expect(text).toContain("up to 5 minutes");
+    expect(text).toContain("nothing to approve right now");
+    expect(text).toContain("call this tool again right away");
+    expect(text).toContain("If a prompt the user didn't start shows on their phone, they should deny it");
+    expect(text).not.toMatch(/still starting|cannot supply|in a terminal/);
   });
 
   // Only Entra number match is re-requested (purdue-sso.ts); a Duo push is not.

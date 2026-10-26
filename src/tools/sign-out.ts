@@ -28,7 +28,7 @@ const IN_PROGRESS =
 const CANCELLED =
   "Cancelled the Brightspace sign-in that was waiting for approval, so the prompt or number from it no longer works.";
 const NEXT_QUESTION =
-  "The next Brightspace question starts a new sign-in right away and sends a new prompt; give the user the new number it returns.";
+  "Microsoft keeps that prompt open for up to 5 minutes after sending it and sends this account no other until then, so the next Brightspace question can take that long to show a new number to approve.";
 const ALREADY_SIGNED_OUT =
   "You're already signed out of Brightspace on this computer; there was no saved session to remove.";
 const NOTHING_SAVED = "There was no saved session to remove.";
@@ -79,7 +79,7 @@ export function registerSignOut(
       title: "Sign Out of Brightspace",
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
       description:
-        "Sign out of Brightspace on this computer: cancel any sign-in still waiting for MFA approval here, then delete the saved Brightspace session, so every Brightspace app here must sign in again from scratch on its next question. After a cancel, the next Brightspace call starts a new sign-in right away and sends a new prompt with a new number. Keeps the saved password, settings, and authenticator key. Does not sign out of Microsoft or Brightspace on other devices. Call this ONLY when the user explicitly asks: to sign out or log out of Brightspace (a shared computer, handing the machine on), or to cancel a sign-in that is waiting for approval and get a new prompt now (they missed it, or the number won't work). Never call it on your own to fix an error or as part of answering another question.",
+        "Sign out of Brightspace on this computer: cancel any sign-in still waiting for MFA approval here, then delete the saved Brightspace session, so every Brightspace app here must sign in again from scratch on its next question. Keeps the saved password, settings, and authenticator key. Does not sign out of Microsoft or Brightspace on other devices. Cancelling a waiting sign-in doesn't get a new prompt sooner: Microsoft sends no other prompt to the account until the one already sent expires, up to 5 minutes after it was sent. Call this ONLY when the user explicitly asks to sign out or log out of Brightspace (a shared computer, handing the machine on). Never call it on your own to fix an error, to get a new prompt, or as part of answering another question.",
       inputSchema: SignOutSchema,
     },
     async () => {

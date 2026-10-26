@@ -13,7 +13,7 @@ import { NativeCredentialStoreError } from "./auth/credential-store.js";
 import { retireLegacyProfile } from "./auth/legacy-profile.js";
 import { formatPhaseMarker, type AuthPhase } from "./auth/auth-phases.js";
 import { AuthenticationInProgressError } from "./auth/auth-lock.js";
-import { AUTOMATIC_PENDING_MARKER, challengeMarker, relayedLockLines } from "./auth/mfa-challenge.js";
+import { AUTOMATIC_PENDING_MARKER, MFA_HELD_MARKER, challengeMarker, relayedLockLines } from "./auth/mfa-challenge.js";
 import { runLogout } from "./auth/logout.js";
 import { configureDevActivity } from "./utils/dev-activity.js";
 import { AUTH_COMMAND, SETUP_COMMAND } from "./utils/commands.js";
@@ -95,7 +95,10 @@ async function main(): Promise<void> {
     const onAutomaticPending = automatic
       ? () => console.log(AUTOMATIC_PENDING_MARKER)
       : undefined;
-    await new BrowserAuth(config, { requestMfaCode: codePrompt, onMfaChallenge, onPhase, onAutomaticPending }).authenticate({
+    // Microsoft refused a new prompt until an earlier one expires: the parent
+    // says so instead of "still starting". A terminal run reads the log line.
+    const onMfaHeld = automatic ? () => console.log(MFA_HELD_MARKER) : undefined;
+    await new BrowserAuth(config, { requestMfaCode: codePrompt, onMfaChallenge, onPhase, onAutomaticPending, onMfaHeld }).authenticate({
       automatic,
       onAuthenticated: async (token) => {
         await tokenManager.setToken(token);

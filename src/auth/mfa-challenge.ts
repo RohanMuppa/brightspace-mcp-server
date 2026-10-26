@@ -94,6 +94,12 @@ export function challengeRelayedAt(lockPath: string): number | undefined {
 export const AUTOMATIC_PENDING_MARKER = "AUTH_AUTOMATIC_PENDING";
 
 /**
+ * The child reports that Microsoft is refusing to send a new prompt because an
+ * earlier one for the account is still open (see PurdueSSOFlow's onMfaHeld).
+ */
+export const MFA_HELD_MARKER = "AUTH_MFA_HELD";
+
+/**
  * Printed on the line before a challenge marker when the challenge is another
  * process's, relayed from the lock directory, rather than this child's own.
  * The parent then knows its caller is waiting on a sign-in it does not own,

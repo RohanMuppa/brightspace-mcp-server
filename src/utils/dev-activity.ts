@@ -113,7 +113,7 @@ function write(event: Event, fields: Fields, context = calls.getStore(), idleMs?
   }
   if (["success", "error", "sessionExpired", "transport"].includes(fields.outcome ?? "")) record.outcome = fields.outcome;
   if (["busy", "cooldown", "unsupported", "secureStorage", "transport", "timeout", "failed", "mfaPending",
-    "automaticPending", "inProgress"].includes(fields.reason ?? "")) record.reason = fields.reason;
+    "automaticPending", "inProgress", "mfaHeld"].includes(fields.reason ?? "")) record.reason = fields.reason;
   if ((AUTH_PHASES as readonly string[]).includes(fields.phase ?? "")) record.phase = fields.phase;
   if ((ERROR_KINDS as readonly string[]).includes(fields.errorKind ?? "")) record.errorKind = fields.errorKind;
   if (OPERATION_NAMES.includes(fields.operation ?? "")) record.operation = fields.operation;
