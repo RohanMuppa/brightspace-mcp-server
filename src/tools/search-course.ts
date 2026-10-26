@@ -7,7 +7,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { D2LApiClient, ApiError } from "../api/index.js";
 import { SearchCourseSchema } from "./schemas.js";
-import { toolResponse, sanitizeError } from "./tool-helpers.js";
+import { toolResponse, sanitizeError, isAuthUnavailable } from "./tool-helpers.js";
 import { log } from "../utils/logger.js";
 import { fetchRootContent, buildContentTree } from "./get-course-content.js";
 import { fetchCourseNews, isPublishedNewsItem, mapNewsItem } from "./get-announcements.js";
@@ -234,6 +234,9 @@ export function registerSearchCourse(
           const tree = await buildContentTree(apiClient, courseId, rootModules, new Map(), "all");
           entries.push(...flattenContentTree(tree));
         } catch (error) {
+          // A pending or refused sign-in is not a source that failed: the
+          // search never ran, and its answer carries what the user must do.
+          if (isAuthUnavailable(error)) throw error;
           log("DEBUG", `search_course: content fetch failed for course ${courseId}`, error);
           notes.push(`content: ${describeFailure(error)}`);
         }
@@ -251,6 +254,9 @@ export function registerSearchCourse(
             });
           }
         } catch (error) {
+          // A pending or refused sign-in is not a source that failed: the
+          // search never ran, and its answer carries what the user must do.
+          if (isAuthUnavailable(error)) throw error;
           log("DEBUG", `search_course: announcements fetch failed for course ${courseId}`, error);
           notes.push(`announcements: ${describeFailure(error)}`);
         }
@@ -281,11 +287,13 @@ export function registerSearchCourse(
               // One forum's topics failing (e.g. no access) shouldn't drop
               // every other forum, but it still has to be named in `note` so
               // a search missing those topics never reads as complete.
+              if (isAuthUnavailable(error)) throw error;
               log("DEBUG", `search_course: topics fetch failed for forum ${forum.ForumId}`, error);
               notes.push(`discussions: topics in "${forum.Name}" ${describeFailure(error)}`);
             }
           }
         } catch (error) {
+          if (isAuthUnavailable(error)) throw error;
           log("DEBUG", `search_course: discussions fetch failed for course ${courseId}`, error);
           notes.push(`discussions: ${describeFailure(error)}`);
         }

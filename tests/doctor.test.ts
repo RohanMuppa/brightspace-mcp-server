@@ -5,6 +5,7 @@ import { TokenManager } from "../src/auth/token-manager.js";
 import { SessionStore } from "../src/auth/session-store.js";
 import { AuthenticationInProgressError } from "../src/auth/auth-lock.js";
 import type { TokenData } from "../src/types/index.js";
+import { ApiError } from "../src/api/errors.js";
 
 /**
  * doctor is a beginner-facing diagnostic: one line per check, a plain-English
@@ -605,5 +606,49 @@ describe("doctor: Chromium", () => {
   it("reports a check that throws as a problem, not a crash", async () => {
     const result = await runDoctorChecks(deps({ chromiumStatus: async () => { throw new Error("boom"); } }));
     expect(idOf(result, "browser").ok).toBe(false);
+  });
+});
+
+// A pasted credential is not "issued" by a sign-in, and when Brightspace
+// refuses it the fix is to paste a fresh one, not to check the connection.
+describe("doctor: a pasted credential Brightspace rejects", () => {
+  const refused = async (): Promise<never> => {
+    throw new ApiError(401, "/d2l/api/lp/1.50/enrollments/myenrollments/", "Session expired. Please re-authenticate via npx -y brightspace-mcp-server@latest auth.");
+  };
+
+  it.each([
+    ["D2L_SESSION_COOKIE", "d2lSessionVal=a;d2lSecureSessionVal=b", "Copy a fresh d2lSessionVal/d2lSecureSessionVal pair"],
+    ["D2L_ACCESS_TOKEN", "a-token", "Issue a fresh token"],
+  ])("%s: names the variable and says to replace it", async (name, value, fix) => {
+    const result = await runDoctorChecks(
+      deps({ env: { D2L_BASE_URL: "https://school.example", [name]: value }, countCourses: refused }),
+    );
+    expect(idOf(result, "session").line).not.toContain("a token was issued");
+    expect(idOf(result, "session").line).toContain(name);
+    const courses = idOf(result, "courses");
+    expect(courses.ok).toBe(false);
+    expect(courses.line).toContain(name);
+    expect(courses.line).toContain(fix);
+    expect(courses.line).not.toContain("checking your connection");
+    expect(courses.line).not.toContain(AUTH_COMMAND);
+  });
+
+  it("with both variables set, names D2L_ACCESS_TOKEN, which is the one signing in", async () => {
+    const result = await runDoctorChecks(
+      deps({
+        env: { D2L_BASE_URL: "https://school.example", D2L_ACCESS_TOKEN: "a-token", D2L_SESSION_COOKIE: "d2lSessionVal=a;d2lSecureSessionVal=b" },
+        countCourses: refused,
+      }),
+    );
+    expect(idOf(result, "courses").line).toContain("Issue a fresh token");
+    expect(idOf(result, "session").line).toContain("D2L_ACCESS_TOKEN");
+  });
+
+  it("without a pasted credential, a refused saved sign-in says to sign in again, not to check the connection", async () => {
+    const result = await runDoctorChecks(deps({ countCourses: refused }));
+    const courses = idOf(result, "courses");
+    expect(courses.ok).toBe(false);
+    expect(courses.line).toContain(AUTH_COMMAND);
+    expect(courses.line).not.toContain("checking your connection");
   });
 });

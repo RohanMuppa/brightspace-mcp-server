@@ -1,7 +1,9 @@
 import { describe, it, expect, vi } from "vitest";
 import { registerSearchCourse, buildSnippet, rankEntries, tokenize, type SearchEntry } from "../../src/tools/search-course.js";
 import { SearchCourseSchema } from "../../src/tools/schemas.js";
-import { ApiError } from "../../src/api/index.js";
+import { ApiError, CredentialRejectedError } from "../../src/api/index.js";
+import { TokenRefreshError } from "../../src/api/errors.js";
+import { AuthProcessError } from "../../src/auth/auth-runner.js";
 
 /**
  * search_course lets a caller find a specific module, topic, announcement, or
@@ -141,6 +143,7 @@ function setup(options: {
   news?: unknown[];
   forums?: unknown[] | (() => unknown[]);
   forumTopics?: Record<number, unknown[] | (() => unknown[])>;
+  newsFails?: () => never;
 } = {}): Harness {
   const {
     rootModules = [ROOT_MODULE],
@@ -148,6 +151,7 @@ function setup(options: {
     news = NEWS_ITEMS,
     forums = FORUMS,
     forumTopics = { [FORUM_ID]: FORUM_TOPICS },
+    newsFails,
   } = options;
 
   const apiClient = {
@@ -161,7 +165,7 @@ function setup(options: {
         const id = Number(moduleMatch[1]);
         return moduleStructures[id] ?? [];
       }
-      if (path.endsWith("/news/")) return news;
+      if (path.endsWith("/news/")) return newsFails ? newsFails() : news;
       if (path.endsWith("/discussions/forums/")) {
         return typeof forums === "function" ? forums() : forums;
       }
@@ -411,5 +415,71 @@ describe("tokenize", () => {
     // "l'école" splits on the apostrophe; the leftover "l" is too short to
     // carry any search signal and should be dropped.
     expect(tokenize("l'école")).toEqual(["école"]);
+  });
+});
+
+// A sign-in that is pending or was refused is not "no results": the search
+// never ran. Reporting it as a note on an empty success would also lose the
+// MFA number the user has to enter.
+describe("search_course when signing in is unavailable", () => {
+  it("fails with the MFA number instead of returning an empty search", async () => {
+    const { call } = setup({
+      rootModules: () => {
+        throw new AuthProcessError("mfaPending", "Open Microsoft Authenticator and enter 42 within 5 minutes, then try again.", "42");
+      },
+    });
+    const result = await call({ courseId: COURSE_ID, query: "midterm review", limit: 50 });
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("42");
+  });
+
+  it("fails with the paste-a-fresh-one guidance when a pasted credential is refused part-way", async () => {
+    const guidance = "The pasted D2L_SESSION_COOKIE has expired. Copy a fresh pair.";
+    const { call } = setup({
+      forums: () => {
+        throw new CredentialRejectedError("/discussions/forums/", guidance);
+      },
+    });
+    const result = await call({ courseId: COURSE_ID, query: "midterm review", limit: 50 });
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toBe(guidance);
+  });
+
+  const guidance = "The pasted D2L_SESSION_COOKIE has expired. Copy a fresh pair.";
+  const rejected = (): never => { throw new CredentialRejectedError("/x", guidance); };
+
+  it.each([
+    ["content", { rootModules: rejected }],
+    ["announcements", { newsFails: rejected }],
+    ["forums", { forums: rejected }],
+    ["one forum's topics", { forumTopics: { [FORUM_ID]: rejected } }],
+  ])("fails the call when %s is refused", async (_source, options) => {
+    const { call } = setup(options as Parameters<typeof setup>[0]);
+    const result = await call({ courseId: COURSE_ID, query: "midterm review", limit: 50 });
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toBe(guidance);
+  });
+
+  it("fails the call when the token service is briefly down, instead of an empty search", async () => {
+    const { call } = setup({ rootModules: () => { throw new TokenRefreshError("HTTP 503"); } });
+    const result = await call({ courseId: COURSE_ID, query: "midterm review", limit: 50 });
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toMatch(/could not renew your session/i);
+  });
+
+  it("fails the call on a 401 left over after signing in failed", async () => {
+    const { call } = setup({ rootModules: () => { throw new ApiError(401, "/content/root/", "Session expired"); } });
+    const result = await call({ courseId: COURSE_ID, query: "midterm review", limit: 50 });
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toMatch(/Authentication expired/);
+  });
+
+  it("still reports a server error on one source as a note, searching the rest", async () => {
+    const { call } = setup({ forums: () => { throw new ApiError(500, "/discussions/forums/", "boom"); } });
+    const result = await call({ courseId: COURSE_ID, query: "midterm review", limit: 50 });
+    expect(result.isError).toBeUndefined();
+    const body = JSON.parse(result.content[0].text);
+    expect(body.note).toBe("Could not search: discussions: request failed (500)");
+    expect(body.results.some((r: any) => r.kind === "topic")).toBe(true);
   });
 });

@@ -15,7 +15,7 @@ export { registerGetAssignmentRubric } from "./get-assignment-rubric.js";
 export { registerGetAssignmentFiles } from "./get-assignment-files.js";
 export { registerGetAnnouncementFiles } from "./get-announcement-files.js";
 export { registerGetCourseContent } from "./get-course-content.js";
-export { registerDownloadFile } from "./download-file.js";
+export { registerDownloadFile, COURSE_FILE_NEEDS_COOKIE } from "./download-file.js";
 export { registerGetClasslistEmails } from "./get-classlist-emails.js";
 export { registerGetRoster } from "./get-roster.js";
 export { registerGetMyGroups } from "./get-my-groups.js";

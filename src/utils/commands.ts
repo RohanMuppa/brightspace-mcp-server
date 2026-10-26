@@ -37,6 +37,24 @@ export const GLOBAL_INSTALL_COMMAND = `npm install -g ${PACKAGE_NAME}@latest`;
 /** Drop cached npx copies so the next `@latest` genuinely refetches. */
 export const CLEAR_NPX_CACHE_COMMAND = "npx clear-npx-cache";
 
+/** What to do when Brightspace rejects a pasted D2L_ACCESS_TOKEN. */
+export const ENV_TOKEN_REJECTED =
+  "D2L_ACCESS_TOKEN was rejected by Brightspace (expired or invalid). Issue a fresh token and update the environment variable; this server does not fall back to a browser login while D2L_ACCESS_TOKEN is set.";
+
+/** What to do when Brightspace rejects a pasted D2L_SESSION_COOKIE. */
+export const ENV_COOKIE_REJECTED =
+  "The pasted D2L_SESSION_COOKIE has expired. Copy a fresh d2lSessionVal/d2lSecureSessionVal pair from a logged-in browser and update the environment variable; this server does not fall back to a browser login while D2L_SESSION_COOKIE is set.";
+
+/**
+ * The fix for a rejected credential pasted into the environment, or undefined
+ * when neither is set. D2L_ACCESS_TOKEN wins, as it does for signing in.
+ */
+export function envCredentialRejectedMessage(envAccessToken?: string, envSessionCookie?: string): string | undefined {
+  if (envAccessToken) return ENV_TOKEN_REJECTED;
+  if (envSessionCookie) return ENV_COOKIE_REJECTED;
+  return undefined;
+}
+
 /**
  * The school's flag for a setup command, or `--url <origin>` for a school
  * with no preset. An unreadable URL gives no school at all, which `setup`

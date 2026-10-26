@@ -7,7 +7,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { D2LApiClient, ApiError, DEFAULT_CACHE_TTLS } from "../api/index.js";
 import { GetSyllabusSchema } from "./schemas.js";
-import { toolResponse, sanitizeError, errorResponse } from "./tool-helpers.js";
+import { toolResponse, sanitizeError, errorResponse, isAuthUnavailable } from "./tool-helpers.js";
 import { convertHtmlToMarkdown } from "../utils/html-converter.js";
 import { stripD2lSessionParams } from "../utils/session-params.js";
 import { secureDownload, readBodyCapped } from "../utils/download-helpers.js";
@@ -108,9 +108,12 @@ async function tryLookup<T>(lookup: DiscoveryLookup, fetch: () => Promise<T>): P
   try {
     return { ok: true, value: await fetch() };
   } catch (error) {
+    // A pending or refused sign-in is not a permission the student lacks:
+    // the lookup never ran, so the call fails with the sign-in's answer.
+    if (isAuthUnavailable(error)) throw error;
     log("DEBUG", `get_syllabus: could not read ${LOOKUP_LABELS[lookup]}`, error);
     if (error instanceof ApiError) {
-      const forbidden = error.status === 401 || error.status === 403;
+      const forbidden = error.status === 403;
       return {
         ok: false,
         unavailable: { lookup, reason: forbidden ? "permission-denied" : "request-failed", status: error.status },
