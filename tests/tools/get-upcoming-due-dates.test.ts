@@ -357,7 +357,7 @@ describe("get_upcoming_due_dates", () => {
       dueIn: "in 3 days",
     });
     expect(items[0].url).toBe(
-      `${BASE}/d2l/lms/discussions/threadlist.d2l?ou=101&tId=501`
+      `${BASE}/d2l/le/101/discussions/topics/501/View`
     );
   });
 

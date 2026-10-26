@@ -10,6 +10,7 @@ import { GetDiscussionsSchema } from "./schemas.js";
 import { toolResponse, sanitizeError, errorResponse } from "./tool-helpers.js";
 import { convertHtmlToMarkdown } from "../utils/html-converter.js";
 import { log } from "../utils/logger.js";
+import { discussionUrl } from "../utils/deep-links.js";
 
 // D2L Discussion API response types
 export interface D2LForum {
@@ -97,7 +98,8 @@ export async function fetchForumTopics(
  */
 export function registerGetDiscussions(
   server: McpServer,
-  apiClient: D2LApiClient
+  apiClient: D2LApiClient,
+  baseUrl?: string
 ): void {
   server.registerTool(
     "get_discussions",
@@ -123,7 +125,7 @@ export function registerGetDiscussions(
 
         // Specific topic — get posts
         if (forumId !== undefined && topicId !== undefined) {
-          return await getTopicPosts(apiClient, courseId, forumId, topicId);
+          return await getTopicPosts(apiClient, courseId, forumId, topicId, baseUrl);
         }
 
         // Specific forum — get its topics + posts
@@ -278,31 +280,77 @@ async function getForumDetail(
 }
 
 /**
- * Get all posts for a specific topic.
+ * Fetch one topic's metadata. The forum's topic list comes first: it is the
+ * route get_discussions already lists topics from (and caches), and some
+ * tenants refuse a student the per-topic route for a topic that list shows
+ * (#364). The per-topic route is the fallback for a topic the list omits or
+ * a list the tenant refuses.
+ */
+async function fetchTopic(
+  apiClient: D2LApiClient,
+  courseId: number,
+  forumId: number,
+  topicId: number
+): Promise<D2LTopic> {
+  try {
+    const listed = (await fetchForumTopics(apiClient, courseId, forumId)).find(
+      (t) => t.TopicId === topicId
+    );
+    if (listed) return listed;
+  } catch (error) {
+    log("DEBUG", `Topic list for forum ${forumId} unavailable, trying topic ${topicId} directly`, error);
+  }
+
+  const topicPath = apiClient.le(
+    courseId,
+    `/discussions/forums/${forumId}/topics/${topicId}`
+  );
+  return apiClient.get<D2LTopic>(topicPath, {
+    ttl: DEFAULT_CACHE_TTLS.courseContent,
+  });
+}
+
+/**
+ * Get all posts for a specific topic. A posts read the tenant refuses (403)
+ * still returns the topic, with posts null and postsUnavailable naming the
+ * failed step, so a permission restriction never reads as "no posts".
  */
 async function getTopicPosts(
   apiClient: D2LApiClient,
   courseId: number,
   forumId: number,
-  topicId: number
+  topicId: number,
+  baseUrl: string | undefined
 ): Promise<any> {
-  // Fetch topic info
-  const topicPath = apiClient.le(
-    courseId,
-    `/discussions/forums/${forumId}/topics/${topicId}`
-  );
-  const topic = await apiClient.get<D2LTopic>(topicPath, {
-    ttl: DEFAULT_CACHE_TTLS.courseContent,
-  });
+  const topic = await fetchTopic(apiClient, courseId, forumId, topicId);
 
-  // Fetch posts
   const postsPath = apiClient.le(
     courseId,
     `/discussions/forums/${forumId}/topics/${topicId}/posts/`
   );
-  const posts = await apiClient.get<D2LPost[]>(postsPath, {
-    ttl: DEFAULT_CACHE_TTLS.announcements,
-  });
+  let posts: D2LPost[];
+  try {
+    posts = await apiClient.get<D2LPost[]>(postsPath, {
+      ttl: DEFAULT_CACHE_TTLS.announcements,
+    });
+  } catch (error: any) {
+    if (error?.status !== 403) throw error;
+    log("INFO", `get_discussions: Posts for topic ${topicId} in forum ${forumId} refused (403)`);
+    return toolResponse({
+      courseId,
+      forumId,
+      topic: formatTopic(topic),
+      postCount: null,
+      posts: null,
+      postsUnavailable: {
+        operation: "listPosts",
+        status: 403,
+        reason:
+          "Brightspace refused this account's request for the topic's posts. The posts may exist; open the topic in a browser to see what this account can read.",
+        url: baseUrl ? discussionUrl(baseUrl, courseId, topicId) : null,
+      },
+    });
+  }
 
   // Count what is returned: formatPosts drops deleted posts.
   const formatted = formatPosts(posts);
@@ -315,20 +363,24 @@ async function getTopicPosts(
   return toolResponse({
     courseId,
     forumId,
-    topic: {
-      topicId: topic.TopicId,
-      name: topic.Name,
-      description: topic.Description?.Html
-        ? convertHtmlToMarkdown(topic.Description.Html).markdown
-        : topic.Description?.Text ?? null,
-      dueDate: topic.DueDate,
-      isLocked: topic.IsLocked,
-      mustPostToParticipate: topic.MustPostToParticipate,
-      scoreOutOf: topic.ScoreOutOf,
-    },
+    topic: formatTopic(topic),
     postCount: formatted.length,
     posts: formatted,
   });
+}
+
+function formatTopic(topic: D2LTopic) {
+  return {
+    topicId: topic.TopicId,
+    name: topic.Name,
+    description: topic.Description?.Html
+      ? convertHtmlToMarkdown(topic.Description.Html).markdown
+      : topic.Description?.Text ?? null,
+    dueDate: topic.DueDate,
+    isLocked: topic.IsLocked,
+    mustPostToParticipate: topic.MustPostToParticipate,
+    scoreOutOf: topic.ScoreOutOf,
+  };
 }
 
 /**
