@@ -9,6 +9,10 @@ describe("decodeEntities", () => {
   it("keeps a reference past U+10FFFF as written instead of throwing (#352)", () => {
     expect(decodeEntities("x&#x110000;y&#99999999;z")).toBe("x&#x110000;y&#99999999;z");
   });
+
+  it("decodes each reference once, so an encoded ampersand stays literal (#360)", () => {
+    expect(decodeEntities("&#38;lt;b&#38;gt; &#x26;amp; &#38;quot; &amp;lt;")).toBe("&lt;b&gt; &amp; &quot; &lt;");
+  });
 });
 
 describe("tagAttributes", () => {
@@ -16,5 +20,10 @@ describe("tagAttributes", () => {
     const [anchor] = tagAttributes('<a title="&#99999999;" href="/d2l/a?b=1&amp;c=2">x</a>', "a");
     expect(anchor.get("href")).toBe("/d2l/a?b=1&c=2");
     expect(anchor.get("title")).toBe("&#99999999;");
+  });
+
+  it("keeps an encoded ampersand in an href literal (#360)", () => {
+    const [anchor] = tagAttributes('<a href="/d2l/a?q=&#38;quot;x&amp;y=1">x</a>', "a");
+    expect(anchor.get("href")).toBe("/d2l/a?q=&quot;x&y=1");
   });
 });

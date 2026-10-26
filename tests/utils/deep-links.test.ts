@@ -16,9 +16,9 @@ describe("deep-links", () => {
     );
   });
 
-  it("builds the discussion thread list url", () => {
+  it("builds the discussion topic url", () => {
     expect(discussionUrl(BASE, 12345, 42)).toBe(
-      "https://brightspace.example.edu/d2l/lms/discussions/threadlist.d2l?ou=12345&tId=42"
+      "https://brightspace.example.edu/d2l/le/12345/discussions/topics/42/View"
     );
   });
 
@@ -30,7 +30,7 @@ describe("deep-links", () => {
       "https://brightspace.example.edu/d2l/lms/quizzing/user/quiz_summary.d2l?qi=2&ou=1"
     );
     expect(discussionUrl(`${BASE}/`, 1, 2)).toBe(
-      "https://brightspace.example.edu/d2l/lms/discussions/threadlist.d2l?ou=1&tId=2"
+      "https://brightspace.example.edu/d2l/le/1/discussions/topics/2/View"
     );
   });
 });

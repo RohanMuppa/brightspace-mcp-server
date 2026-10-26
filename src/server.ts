@@ -83,6 +83,7 @@ export function createRuntime(config: AppConfig, version: string): ServerRuntime
     tokenTtl: config.tokenTtl,
     envAccessToken: config.envAccessToken,
     envSessionCookie: config.envSessionCookie,
+    mintEnvCookie: true,
   });
 
   // D2L_ACCESS_TOKEN / D2L_SESSION_COOKIE are opt-in browser-free sign-in
@@ -150,7 +151,7 @@ export function createMcpServer(runtime: ServerRuntime): McpServer {
   registerGetRoster(server, apiClient);
   registerGetMyGroups(server, apiClient);
   registerGetSyllabus(server, apiClient);
-  registerGetDiscussions(server, apiClient);
+  registerGetDiscussions(server, apiClient, config.baseUrl);
   registerGetVideoTranscript(server, apiClient);
   registerGetServerInfo(server, config, version, apiClient);
   registerSearchCourse(server, apiClient);
