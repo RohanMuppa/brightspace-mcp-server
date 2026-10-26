@@ -139,6 +139,14 @@ interface QuizAttemptData {
   CompletedDate: string | null;
 }
 
+/** The highest Score among attempts D2L has scored, or null when none has one. */
+function bestAttemptScore(attempts: QuizAttemptData[] | null): number | null {
+  const scores = (attempts ?? [])
+    .map((a) => a.Score)
+    .filter((score): score is number => typeof score === "number");
+  return scores.length > 0 ? Math.max(...scores) : null;
+}
+
 interface EnrollmentItem {
   OrgUnit: {
     Id: number;
@@ -1059,9 +1067,9 @@ async function fetchCourseInventory(
         attemptsUsed: completedAttempts?.length ?? null,
         attemptsRemaining,
         attemptWarning,
-        bestScore: completedAttempts && completedAttempts.length > 0
-          ? Math.max(...completedAttempts.map((a) => a.Score ?? 0))
-          : null,
+        // An attempt awaiting manual grading carries Score null: it is not a
+        // zero, so only scored attempts count toward the best (issue #370).
+        bestScore: bestAttemptScore(completedAttempts),
         gracePeriodMinutes: quiz.SubmissionGracePeriod ?? null,
         hasPassword: Boolean(quiz.Password),
         // Additive fields, each emitted only when it has something to say.
