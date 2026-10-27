@@ -27,10 +27,16 @@ export function decodeEntities(value: string): string {
 /**
  * The attributes of every `<tag>` element in `html`, names lowercased and
  * values entity-decoded. A value ends only at its own closing quote, so an
- * apostrophe inside a double-quoted href stays part of it.
+ * apostrophe inside a double-quoted href stays part of it, and the element
+ * ends at the first `>` outside a quoted value: `title="Week 1 > Notes"` keeps
+ * the attributes after it (issue #376). A tag with an unbalanced or stray
+ * quote ends at its first `>`, as it always has.
  */
 export function tagAttributes(html: string, tag: string): Map<string, string>[] {
-  return [...html.matchAll(new RegExp(`<${tag}\\b[^>]*>`, "gi"))].map(
+  // A quote opens a value only right after `=`; any other quote, or one never
+  // closed, fails the first form and leaves the second.
+  const pattern = `<${tag}\\b(?:=\\s*(?:"[^"]*"|'[^']*')|[^>"'])*>|<${tag}\\b[^>]*>`;
+  return [...html.matchAll(new RegExp(pattern, "gi"))].map(
     element =>
       new Map(
         [...element[0].matchAll(/([\w-]+)\s*=\s*(["'])([\s\S]*?)\2/g)].map(match => [
