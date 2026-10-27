@@ -26,4 +26,20 @@ describe("tagAttributes", () => {
     const [anchor] = tagAttributes('<a href="/d2l/a?q=&#38;quot;x&amp;y=1">x</a>', "a");
     expect(anchor.get("href")).toBe("/d2l/a?q=&quot;x&y=1");
   });
+
+  it("reads past a '>' inside a quoted value instead of ending the tag there (#376)", () => {
+    const [anchor] = tagAttributes(
+      `<a title="Week 1 > Notes" data-x='a>b' href="/d2l/a?b=1">x</a>`,
+      "a"
+    );
+    expect(anchor.get("title")).toBe("Week 1 > Notes");
+    expect(anchor.get("data-x")).toBe("a>b");
+    expect(anchor.get("href")).toBe("/d2l/a?b=1");
+  });
+
+  it("still ends a tag with an unbalanced quote at its first '>' (#376)", () => {
+    const anchors = tagAttributes('<a href="/d2l/a title=x>one</a> <a href="/d2l/b">two</a>', "a");
+    expect(anchors).toHaveLength(2);
+    expect(anchors[1].get("href")).toBe("/d2l/b");
+  });
 });
