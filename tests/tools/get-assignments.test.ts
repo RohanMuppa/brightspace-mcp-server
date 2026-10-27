@@ -327,6 +327,39 @@ describe("fetchCourseAssignments quiz mapping", () => {
     expect(quiz.bestScore).toBe(17);
     expect(quiz.attemptWarning).toBe("WARNING: Only 1 attempt remaining");
   });
+
+  it("leaves bestScore null when no completed attempt has been scored yet (issue #370)", async () => {
+    const { apiClient } = makeQuizClient(
+      [{ QuizId: 1, Name: "Quiz 1", IsActive: true, AttemptsAllowed: { IsUnlimited: true, NumberOfAttemptsAllowed: null } }],
+      () => ({
+        Objects: [
+          { AttemptId: 9, AttemptNumber: 1, Score: null, IsCompleted: true, CompletedDate: null },
+        ],
+      })
+    );
+
+    const [quiz] = quizzesOf(await fetchCourseAssignments(apiClient as any, COURSE_ID));
+
+    expect(quiz.attemptsUsed).toBe(1);
+    expect(quiz.bestScore).toBeNull();
+  });
+
+  it("takes bestScore from scored attempts only, ignoring one awaiting grading, even when negative", async () => {
+    const { apiClient } = makeQuizClient(
+      [{ QuizId: 1, Name: "Quiz 1", IsActive: true, AttemptsAllowed: { IsUnlimited: true, NumberOfAttemptsAllowed: null } }],
+      () => ({
+        Objects: [
+          { AttemptId: 8, AttemptNumber: 1, Score: -5, IsCompleted: true, CompletedDate: null },
+          { AttemptId: 9, AttemptNumber: 2, Score: -2, IsCompleted: true, CompletedDate: null },
+          { AttemptId: 10, AttemptNumber: 3, Score: null, IsCompleted: true, CompletedDate: null },
+        ],
+      })
+    );
+
+    const [quiz] = quizzesOf(await fetchCourseAssignments(apiClient as any, COURSE_ID));
+
+    expect(quiz.bestScore).toBe(-2);
+  });
 });
 
 /**
