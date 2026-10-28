@@ -18,8 +18,9 @@ import { inflateRawSync } from "node:zlib";
  * parsing a header that does not exist.
  *
  * Nothing here throws. A truncated download, an unsupported compression
- * method, or a ZIP64 archive all return null, because the caller's fallback
- * is simply to report the file without its text.
+ * method, a ZIP64 archive, or an entry that inflates past the size budget all
+ * return null, because the caller's fallback is simply to report the file
+ * without its text.
  */
 
 const EOCD_SIGNATURE = 0x06054b50;
@@ -30,6 +31,14 @@ const ZIP64_MARKER = 0xffffffff;
 
 const METHOD_STORED = 0;
 const METHOD_DEFLATE = 8;
+
+/**
+ * Most bytes one document may inflate to, across every entry read from it.
+ * DEFLATE reaches ~1000:1, so a 50 MB download could otherwise inflate to
+ * tens of gigabytes and take the server down (issue #380). Real Office XML
+ * sits far below this.
+ */
+export const MAX_INFLATED_BYTES = 64 * 1024 * 1024;
 
 interface CentralEntry {
   name: string;
@@ -85,7 +94,12 @@ function readCentralDirectory(buffer: Buffer): CentralEntry[] | null {
   return entries;
 }
 
-function readEntryData(buffer: Buffer, entry: CentralEntry): Buffer | null {
+/**
+ * An entry's bytes, or null when it would exceed `limit`. The declared size
+ * is checked first, but a header can lie, so inflation is capped as well.
+ */
+function readEntryData(buffer: Buffer, entry: CentralEntry, limit: number): Buffer | null {
+  if (entry.uncompressedSize > limit) return null;
   const header = entry.localHeaderOffset;
   if (header + 30 > buffer.length) return null;
 
@@ -98,24 +112,29 @@ function readEntryData(buffer: Buffer, entry: CentralEntry): Buffer | null {
   if (end > buffer.length) return null;
 
   const raw = buffer.subarray(start, end);
-  if (entry.method === METHOD_STORED) return Buffer.from(raw);
+  if (entry.method === METHOD_STORED) return raw.length > limit ? null : Buffer.from(raw);
   if (entry.method !== METHOD_DEFLATE) return null;
 
   try {
-    return inflateRawSync(raw);
+    // Throws a RangeError past maxOutputLength.
+    return inflateRawSync(raw, { maxOutputLength: Math.max(1, limit) });
   } catch {
     return null;
   }
 }
 
 /** One entry from a ZIP archive by exact name, or null. Never throws. */
-export function extractZipEntry(buffer: Buffer, entryName: string): Buffer | null {
+export function extractZipEntry(
+  buffer: Buffer,
+  entryName: string,
+  limit: number = MAX_INFLATED_BYTES
+): Buffer | null {
   try {
     const entries = readCentralDirectory(buffer);
     if (!entries) return null;
     const entry = entries.find((e) => e.name === entryName);
     if (!entry) return null;
-    return readEntryData(buffer, entry);
+    return readEntryData(buffer, entry, limit);
   } catch {
     return null;
   }
@@ -159,8 +178,21 @@ export function officeDocumentText(buffer: Buffer): string | null {
   const names = listZipEntries(buffer);
   if (!names) return null;
 
-  const read = (name: string): string =>
-    xmlToText(extractZipEntry(buffer, name)?.toString("utf-8") ?? "");
+  // One budget for the whole document, so a PPTX can't spread a zip bomb
+  // across many slides that each fit on their own. An entry that fails to
+  // read (oversize included) ends the walk: retrying the rest would re-inflate
+  // up to the budget once per entry.
+  let budget = MAX_INFLATED_BYTES;
+  const read = (name: string): string => {
+    if (budget <= 0) return "";
+    const data = extractZipEntry(buffer, name, budget);
+    if (!data) {
+      budget = 0;
+      return "";
+    }
+    budget -= data.length;
+    return xmlToText(data.toString("utf-8"));
+  };
 
   let text = "";
 
