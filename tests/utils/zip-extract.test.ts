@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { deflateRawSync } from "node:zlib";
-import { extractZipEntry, officeDocumentText } from "../../src/utils/zip-extract.js";
+import { extractZipEntry, officeDocumentText, MAX_INFLATED_BYTES } from "../../src/utils/zip-extract.js";
 
 /**
  * DOCX, XLSX, and PPTX are ZIP archives, and the attachments actually found on
@@ -13,6 +13,8 @@ interface Entry {
   name: string;
   content: Buffer;
   deflate?: boolean;
+  /** Uncompressed size to write into the headers, when it should lie. */
+  declaredSize?: number;
 }
 
 /** Build a real ZIP so the tests exercise parsing, not a fixture's shape. */
@@ -32,7 +34,7 @@ function buildZip(entries: Entry[]): Buffer {
     local.writeUInt16LE(method, 8);
     local.writeUInt32LE(0, 14); // crc, unchecked by the reader
     local.writeUInt32LE(stored.length, 18);
-    local.writeUInt32LE(entry.content.length, 22);
+    local.writeUInt32LE(entry.declaredSize ?? entry.content.length, 22);
     local.writeUInt16LE(name.length, 26);
     local.writeUInt16LE(0, 28);
     const localBlock = Buffer.concat([local, name, stored]);
@@ -43,7 +45,7 @@ function buildZip(entries: Entry[]): Buffer {
     central.writeUInt16LE(method, 10);
     central.writeUInt32LE(0, 16);
     central.writeUInt32LE(stored.length, 20);
-    central.writeUInt32LE(entry.content.length, 24);
+    central.writeUInt32LE(entry.declaredSize ?? entry.content.length, 24);
     central.writeUInt16LE(name.length, 28);
     central.writeUInt32LE(offset, 42);
     centrals.push(Buffer.concat([central, name]));
@@ -159,5 +161,50 @@ describe("officeDocumentText", () => {
   it("returns null when the document has no readable text", () => {
     const zip = buildZip([{ name: "word/document.xml", content: Buffer.from("<w:body/>") }]);
     expect(officeDocumentText(zip)).toBeNull();
+  });
+});
+
+/**
+ * Issue #380: DEFLATE reaches ~1000:1, so an uncapped inflate let a ~1 MB
+ * attachment allocate a gigabyte, and a 50 MB one take the server down.
+ */
+describe("zip bomb limits", () => {
+  // One byte past the budget; deflates to well under a megabyte.
+  const bomb = Buffer.alloc(MAX_INFLATED_BYTES + 1, 0x41);
+
+  it("refuses an entry that inflates past the limit even when its header claims it is small", () => {
+    const zip = buildZip([{ name: "word/document.xml", content: bomb, deflate: true, declaredSize: 10 }]);
+    expect(zip.length).toBeLessThan(1024 * 1024);
+    expect(extractZipEntry(zip, "word/document.xml")).toBeNull();
+    expect(officeDocumentText(zip)).toBeNull();
+  });
+
+  it("refuses an entry whose declared size is over the limit without inflating it", () => {
+    const zip = buildZip([{ name: "a.txt", content: Buffer.from("hello"), declaredSize: 100 }]);
+    expect(extractZipEntry(zip, "a.txt", 99)).toBeNull();
+    expect(extractZipEntry(zip, "a.txt", 100)?.toString()).toBe("hello");
+  });
+
+  it("applies the limit to stored entries too", () => {
+    const zip = buildZip([{ name: "a.txt", content: Buffer.from("hello") }]);
+    expect(extractZipEntry(zip, "a.txt", 4)).toBeNull();
+    expect(extractZipEntry(zip, "a.txt", 5)?.toString()).toBe("hello");
+  });
+
+  it("caps a PPTX's slides together, keeping the text read before the budget ran out", () => {
+    const third = Math.ceil(MAX_INFLATED_BYTES / 3) + 1;
+    const filler = (n: number) =>
+      Buffer.concat([Buffer.from(`<a:t>Slide ${n}</a:t>`), Buffer.alloc(third, 0x20)]);
+    const zip = buildZip([
+      { name: "ppt/slides/slide1.xml", content: filler(1), deflate: true },
+      { name: "ppt/slides/slide2.xml", content: filler(2), deflate: true },
+      { name: "ppt/slides/slide3.xml", content: filler(3), deflate: true },
+      { name: "ppt/slides/slide4.xml", content: Buffer.from("<a:t>Slide 4</a:t>") },
+    ]);
+    const text = officeDocumentText(zip) ?? "";
+    expect(text).toContain("Slide 1");
+    expect(text).toContain("Slide 2");
+    expect(text).not.toContain("Slide 3");
+    expect(text).not.toContain("Slide 4");
   });
 });
