@@ -1,6 +1,10 @@
 import { describe, it, expect } from "vitest";
 import { deflateRawSync } from "node:zlib";
-import { extractZipEntry, officeDocumentText } from "../../src/utils/zip-extract.js";
+import {
+  extractZipEntry,
+  officeDocumentText,
+  MAX_INFLATED_BYTES,
+} from "../../src/utils/zip-extract.js";
 
 /**
  * DOCX, XLSX, and PPTX are ZIP archives, and the attachments actually found on
@@ -13,6 +17,8 @@ interface Entry {
   name: string;
   content: Buffer;
   deflate?: boolean;
+  /** Uncompressed size to write in the headers, when a test wants them to lie. */
+  declaredSize?: number;
 }
 
 /** Build a real ZIP so the tests exercise parsing, not a fixture's shape. */
@@ -32,7 +38,7 @@ function buildZip(entries: Entry[]): Buffer {
     local.writeUInt16LE(method, 8);
     local.writeUInt32LE(0, 14); // crc, unchecked by the reader
     local.writeUInt32LE(stored.length, 18);
-    local.writeUInt32LE(entry.content.length, 22);
+    local.writeUInt32LE(entry.declaredSize ?? entry.content.length, 22);
     local.writeUInt16LE(name.length, 26);
     local.writeUInt16LE(0, 28);
     const localBlock = Buffer.concat([local, name, stored]);
@@ -43,7 +49,7 @@ function buildZip(entries: Entry[]): Buffer {
     central.writeUInt16LE(method, 10);
     central.writeUInt32LE(0, 16);
     central.writeUInt32LE(stored.length, 20);
-    central.writeUInt32LE(entry.content.length, 24);
+    central.writeUInt32LE(entry.declaredSize ?? entry.content.length, 24);
     central.writeUInt16LE(name.length, 28);
     central.writeUInt32LE(offset, 42);
     centrals.push(Buffer.concat([central, name]));
@@ -159,5 +165,56 @@ describe("officeDocumentText", () => {
   it("returns null when the document has no readable text", () => {
     const zip = buildZip([{ name: "word/document.xml", content: Buffer.from("<w:body/>") }]);
     expect(officeDocumentText(zip)).toBeNull();
+  });
+});
+
+/**
+ * A ZIP bomb: a small deflated entry that inflates far past what any real
+ * attachment holds. Repeated bytes deflate about 1000:1, so a 50 MB download
+ * could inflate to tens of gigabytes. Each test here builds its bomb modestly
+ * over a limit, injected small where it can be, so the suite stays fast.
+ */
+describe("inflation limits", () => {
+  const MB = 1024 * 1024;
+  // Failures report a length, not megabytes of "aaaa" in the diff.
+  const words = (bytes: number) => Buffer.from(`<w:t>${"a".repeat(bytes)}</w:t>`);
+
+  it("refuses an entry whose declared size is over the limit", () => {
+    const zip = buildZip([{ name: "big.txt", content: Buffer.alloc(2 * MB, 0x61) }]);
+    expect(extractZipEntry(zip, "big.txt", MB)?.length).toBeUndefined();
+    expect(extractZipEntry(zip, "big.txt", 4 * MB)?.length).toBe(2 * MB);
+  });
+
+  it("stops inflating an entry whose header understates its size", () => {
+    const zip = buildZip([
+      { name: "bomb.txt", content: Buffer.alloc(2 * MB, 0x61), deflate: true, declaredSize: 10 },
+    ]);
+    expect(extractZipEntry(zip, "bomb.txt", MB)?.length).toBeUndefined();
+  });
+
+  it("returns null for a DOCX bomb past the default limit", () => {
+    const zip = buildZip([
+      { name: "word/document.xml", content: words(MAX_INFLATED_BYTES + MB), deflate: true },
+    ]);
+    expect(zip.length).toBeLessThan(MB);
+    expect(officeDocumentText(zip)?.length).toBeUndefined();
+  });
+
+  it("returns null for a DOCX bomb that lies about its size", () => {
+    const zip = buildZip([
+      { name: "word/document.xml", content: words(2 * MB), deflate: true, declaredSize: 100 },
+    ]);
+    expect(officeDocumentText(zip, MB)?.length).toBeUndefined();
+  });
+
+  it("shares one budget across every PPTX slide", () => {
+    // Each slide is under the limit on its own; together they are well over.
+    const slides = [1, 2, 3, 4].map((n) => ({
+      name: `ppt/slides/slide${n}.xml`,
+      content: words(300 * 1024),
+      deflate: true,
+    }));
+    expect(officeDocumentText(buildZip(slides), MB)?.length).toBeUndefined();
+    expect(officeDocumentText(buildZip(slides), 2 * MB)).toContain("aaaa");
   });
 });
