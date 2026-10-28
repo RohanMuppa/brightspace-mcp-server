@@ -16,11 +16,19 @@ import { registerGetAnnouncements } from "../../src/tools/get-announcements.js";
  */
 const WRITES_TO_DISK = new Set(["download_file", "download_dropbox_submission_file", "get_syllabus"]);
 /**
- * The one tool that changes state: it deletes the saved session. It is
+ * The one tool that destroys state: it deletes the saved session. It is
  * neither read-only nor a file writer, and it says so with destructiveHint so
  * clients ask the user before running it.
  */
 const DESTRUCTIVE = new Set(["sign_out"]);
+/**
+ * Changes sign-in state rather than reading Brightspace, so not read-only.
+ * sign_in starts a sign-in: openWorldHint, because it reaches the school's
+ * identity provider and may put a browser window on the user's screen. It is
+ * not destructive — it creates a session rather than deleting one — so a
+ * client has no reason to warn the user before it runs.
+ */
+const SIGNS_IN = new Set(["sign_in"]);
 const toolsDir = path.join(process.cwd(), "src", "tools");
 
 function registrations(): Array<{ name: string; config: string }> {
@@ -37,10 +45,10 @@ function registrations(): Array<{ name: string; config: string }> {
 
 describe("read-only tool annotations", () => {
   it("finds every tool the server registers", () => {
-    expect(registrations().length).toBe(26);
+    expect(registrations().length).toBe(27);
   });
 
-  it.each(registrations().filter(({ name }) => !WRITES_TO_DISK.has(name) && !DESTRUCTIVE.has(name)))("marks $name read-only", ({ config }) => {
+  it.each(registrations().filter(({ name }) => !WRITES_TO_DISK.has(name) && !DESTRUCTIVE.has(name) && !SIGNS_IN.has(name)))("marks $name read-only", ({ config }) => {
     expect(config).toContain("readOnlyHint: true");
   });
 
@@ -58,6 +66,15 @@ describe("read-only tool annotations", () => {
   it.each([...WRITES_TO_DISK])("does not mark %s read-only, since it can write a file", (name) => {
     const registration = registrations().find((entry) => entry.name === name);
     expect(registration).toBeDefined();
+    expect(registration!.config).not.toContain("readOnlyHint: true");
+  });
+
+  it.each([...SIGNS_IN])("marks %s open-world, not read-only, and not destructive", (name) => {
+    const registration = registrations().find((entry) => entry.name === name);
+    expect(registration).toBeDefined();
+    expect(registration!.config).toContain("readOnlyHint: false");
+    expect(registration!.config).toContain("openWorldHint: true");
+    expect(registration!.config).toContain("destructiveHint: false");
     expect(registration!.config).not.toContain("readOnlyHint: true");
   });
 

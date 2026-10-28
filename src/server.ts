@@ -33,6 +33,7 @@ import {
   registerGetServerInfo,
   registerSearchCourse,
   registerSignOut,
+  registerSignIn,
   registerGetDropboxFolders,
   registerGetDropboxSubmissions,
   registerGetDropboxUserSubmissions,
@@ -158,6 +159,7 @@ export function createMcpServer(runtime: ServerRuntime): McpServer {
   registerGetServerInfo(server, config, version, apiClient);
   registerSearchCourse(server, apiClient);
   registerSignOut(server, config, apiClient, tokenManager, authRunner);
+  registerSignIn(server, config, tokenManager, authRunner);
   // Instructor / TA dropbox tools (read-only) — 403 for a student account.
   registerGetDropboxFolders(server, apiClient);
   registerGetDropboxSubmissions(server, apiClient);

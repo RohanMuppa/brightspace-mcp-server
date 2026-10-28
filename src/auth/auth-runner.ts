@@ -490,6 +490,15 @@ export class AuthRunner {
   private readonly timeoutMs: number;
   private readonly onProgress?: (line: string) => void;
   private readonly sessionDir?: string;
+  /**
+   * Whether the next child this runner spawns should open a window, set by
+   * sign_in and cleared as that child starts. A first sign-in with no saved
+   * password cannot finish headlessly: there is nothing to type into the
+   * school's form, so it waits and times out. Opt-in and one-shot, because
+   * background recovery must never put a browser over the user's work on its
+   * own; that is the standing rule the D2L_HEADLESS default encodes.
+   */
+  private visibleNextChild = false;
 
   constructor(options: AuthRunnerOptions = {}) {
     // Resolve paths relative to this file's compiled location (build/auth/auth-runner.js)
@@ -509,6 +518,16 @@ export class AuthRunner {
    */
   busy(): boolean {
     return this.inFlight !== null || this.childDone !== null;
+  }
+
+  /**
+   * Ask that the next child this runner spawns sign in with a visible window
+   * (see visibleNextChild). Takes effect only for a child this runner starts:
+   * a call that joins a sign-in already running inherits that sign-in's mode,
+   * so sign_in checks busy() before asking.
+   */
+  requestVisibleBrowser(): void {
+    this.visibleNextChild = true;
   }
 
   /**
@@ -876,6 +895,10 @@ export class AuthRunner {
    */
   private async spawnAuth(): Promise<boolean> {
     const started = Date.now();
+    // Read and cleared here, so a visible request never outlives the one
+    // child it was made for.
+    const visible = this.visibleNextChild;
+    this.visibleNextChild = false;
     const recoveryId = newRecoveryId();
     devActivity("recovery_started", { recoveryId });
     log("INFO", "Auto-launching brightspace-auth...");
@@ -890,7 +913,15 @@ export class AuthRunner {
           // unless D2L_HEADLESS explicitly asks for one; the saved
           // visible-browser preference applies to manual sign-in only.
           // The recovery id lets the child's dev activity join this recovery.
-          env: { D2L_HEADLESS: "true", ...process.env, [RECOVERY_ID_ENV]: recoveryId },
+          // An explicit sign_in request for a window comes last, so it wins
+          // over an inherited D2L_HEADLESS that would hide the one page the
+          // user has to finish by hand.
+          env: {
+            D2L_HEADLESS: "true",
+            ...process.env,
+            [RECOVERY_ID_ENV]: recoveryId,
+            ...(visible ? { D2L_HEADLESS: "false" } : {}),
+          },
           stdio: ["ignore", "pipe", "pipe"],
           detached: process.platform !== "win32",
           windowsHide: true,

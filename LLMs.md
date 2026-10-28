@@ -147,6 +147,16 @@ npx -y brightspace-mcp-server@latest auth
 - A pending MFA approval message (`mfaPending` in `src/tools/tool-helpers.ts`) ends with one "Tip for the user: to be asked less often, rerun `setup`" line carrying the docs link, only when both options are off. It is never added when either is on, to a duplicate in the same batch, or to any other failure kind. `src/index.ts` records the state at startup with `setActiveShortcuts`; until then no tip is shown.
 - `doctor` prints one `2FA shortcuts: remember this device on/off, authenticator key saved/not saved` line after its checks (informational: it never changes the exit code), plus the docs link when both are off. It only checks that a key exists and never reads the key into any output; if the credential store cannot be read it says "not checked".
 
+## Sign in from a chat (`sign_in`)
+
+`sign_in` (`src/tools/sign-in.ts`) is the only way an AI app can *start* a sign-in. Before it, recovery happened only as a side effect of some other tool hitting a 401, and the documented fix for a first sign-in — open a window — was reachable only through a CLI flag or `D2L_HEADLESS`, neither of which anything in a chat can set. An assistant could therefore only tell the user to go and run a terminal command.
+
+It reads the saved session first (`TokenManager.getToken`/`isValid`) and returns without starting anything while that session is valid, so calling it speculatively costs the user no MFA approval. Otherwise it calls `AuthRunner.run()`.
+
+`visible`, left out, opens a window exactly when the school's sign-in flow reports no credentials (`createSSOFlow(config).hasCredentials()`: a username plus a saved password, or Purdue's passwordless mode): a headless sign-in with nothing to sign in with can only wait and time out. `visible: false` in that case is refused outright rather than spending that timeout. A window is requested through `AuthRunner.requestVisibleBrowser()`, which puts `D2L_HEADLESS=false` on the next child the runner spawns — one-shot, and placed after `...process.env` so an explicit request wins over an inherited value. It is opt-in because background recovery must never open a browser over the user's work on its own. A call that joins a sign-in already in flight inherits that sign-in's mode, so `busy()` is checked before a window is promised.
+
+Each `AuthFailureKind` maps to its own answer naming the next step, and the ones where waiting is the fix (`cooldown`, `mfaHeld`, `mfaPending`) say so outright. `mfaPending` and `automaticPending` are not marked as errors: a prompt awaiting approval is progress, not a failure.
+
 ## Sign out early (`sign_out` / `auth --logout`)
 
 When the user wants to end the saved session before it lapses (a shared computer, handing the machine on, forcing a fresh sign-in), either call the `sign_out` tool (only when they explicitly ask; it runs the same deletion in-process) or have them run:
@@ -207,9 +217,10 @@ Registered in `src/tools/index.ts`, schemas in `src/tools/schemas.ts`:
 | `get_dropbox_feedback` | Feedback saved for a dropbox folder — score, graded state, feedback text, rubric assessment. Omit `entityType`/`entityId` to read the signed-in student's own released feedback; pass them (instructor/TA) for any user or group |
 | `get_rubrics_for_object` | The full rubric table (criteria, levels, points) attached to a dropbox folder |
 | `download_dropbox_submission_file` | Instructor/TA: download one file from a student's (or group's) dropbox submission |
+| `sign_in` | Start a sign-in from a chat: a no-op when the saved session is still valid, a visible browser window when no password is saved (headless has nothing to type, so it would only time out), otherwise a background sign-in whose MFA number it reports. Every answer says whether to call again, since a cooldown, a held prompt and an unapproved number all need waiting rather than a retry |
 | `sign_out` | Cancel a sign-in still waiting for MFA approval on this computer (this does not get a new prompt sooner: Microsoft sends the account no other until the one already sent expires, up to 5 minutes after it was sent), then delete this computer's saved Brightspace session for the configured account (the in-chat `auth --logout`) and clear this server's response cache and in-memory token. Call it ONLY when the user explicitly asks to sign out or log out of Brightspace — never on its own to fix an error, to get a new prompt, or as part of another answer. Annotated `destructiveHint: true` (not read-only), so clients ask first. Plain-text result; no arguments |
 
-These twenty-six are the whole surface. An available-update notice, when there is one, rides along as a second text block on the first successful result.
+These twenty-seven are the whole surface. An available-update notice, when there is one, rides along as a second text block on the first successful result.
 
 Of the `get_dropbox_*`/`download_dropbox_submission_file` tools above, `get_dropbox_submissions`, `get_dropbox_user_submissions`, `get_dropbox_feedback` (when given another user's or a group's id), and `download_dropbox_submission_file` are instructor/TA-side: they read every student's submissions and feedback for a course, which Brightspace only grants to course staff. A student account calling one of those gets a clear "Instructor or TA access required for this course" note (403) rather than a generic or broken-looking error. `get_dropbox_folders` and `get_rubrics_for_object` read the same folder-listing endpoint a student's own client uses, so they are not gated the same way. `get_dropbox_feedback` called with no `entityType`/`entityId` reads the student's own feedback (`feedback/user/{whoami id}`), which D2L documents as visible to the learner once released: a 403 or 404 there is reported as "not released / not graded", not as a missing staff role. A 404 (no folders, no submissions, folder not found) comes back as an empty list/null with an explanatory `note`, not a failure. They are read-only — there is no tool in this server that posts a grade or feedback back to Brightspace.
 
@@ -311,6 +322,7 @@ src/
     types.ts                D2L response types
   auth/
     auth-runner.ts          Orchestrates reauth on 401/expiry; `cancel()` and `stopAutomaticSignIn()` stop a waiting sign-in (used by `sign_out`)
+                            `requestVisibleBrowser()` makes the next child it spawns open a window (used by `sign_in`)
     browser-auth.ts         Playwright-driven login flow
     sso-flow.ts             Picks the login flow for the configured host
     purdue-sso.ts           Default SSO handler (Shibboleth, CAS, Entra forms)

@@ -117,7 +117,7 @@ describe("shared localhost HTTP server", { timeout: 30_000 }, () => {
     clients.push(stdio);
     const expectedTools = (await stdio.listTools()).tools;
     const expectedPrompts = (await stdio.listPrompts()).prompts;
-    expect(expectedTools).toHaveLength(26);
+    expect(expectedTools).toHaveLength(27);
     expect(expectedPrompts).toHaveLength(4);
 
     const chats = await Promise.all([connect(url), connect(url), connect(url)]);

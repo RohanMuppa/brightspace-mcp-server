@@ -82,7 +82,7 @@ describe.skipIf(!existsSync(entry))("brightspace-mcp-server http (real process)"
       requestInit: { headers: { Authorization: `Bearer ${TOKEN}` } },
     }))));
     for (const chat of chats) {
-      expect((await chat.listTools()).tools).toHaveLength(26);
+      expect((await chat.listTools()).tools).toHaveLength(27);
       expect((await chat.listPrompts()).prompts).toHaveLength(4);
     }
     await Promise.all(chats.map((chat) => chat.close()));

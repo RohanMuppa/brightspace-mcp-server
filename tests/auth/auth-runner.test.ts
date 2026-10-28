@@ -1060,4 +1060,59 @@ describe("AuthRunner", () => {
       await retry;
     });
   });
+  /**
+   * sign_in asks for a window when a headless sign-in could not finish: with
+   * no saved password there is nothing to type into the school's form. The
+   * request must reach the child as D2L_HEADLESS=false, must win over an
+   * inherited value, and must not leak into the next sign-in — background
+   * recovery opening a browser over the user's work is the thing the default
+   * exists to prevent.
+   */
+  describe("visible browser request", () => {
+    const envOf = (call: number) =>
+      (vi.mocked(spawn).mock.calls[call][2] as { env: Record<string, string> }).env;
+
+    it("spawns headless by default", async () => {
+      const result = new AuthRunner().run();
+      child.emit("close", 0);
+      expect(await result).toBe(true);
+      expect(envOf(0).D2L_HEADLESS).toBe("true");
+    });
+
+    it("spawns with a window once asked", async () => {
+      const runner = new AuthRunner();
+      runner.requestVisibleBrowser();
+      const result = runner.run();
+      child.emit("close", 0);
+      expect(await result).toBe(true);
+      expect(envOf(0).D2L_HEADLESS).toBe("false");
+    });
+
+    it("wins over an inherited D2L_HEADLESS that would hide the page", async () => {
+      vi.stubEnv("D2L_HEADLESS", "true");
+      const runner = new AuthRunner();
+      runner.requestVisibleBrowser();
+      const result = runner.run();
+      child.emit("close", 0);
+      expect(await result).toBe(true);
+      expect(envOf(0).D2L_HEADLESS).toBe("false");
+    });
+
+    it("applies to that one child and no later sign-in", async () => {
+      const runner = new AuthRunner();
+      runner.requestVisibleBrowser();
+      const first = runner.run();
+      child.emit("close", 0);
+      expect(await first).toBe(true);
+
+      child = mockChild();
+      vi.mocked(spawn).mockReturnValue(child as never);
+      const second = runner.run();
+      child.emit("close", 0);
+      expect(await second).toBe(true);
+
+      expect(envOf(0).D2L_HEADLESS).toBe("false");
+      expect(envOf(1).D2L_HEADLESS).toBe("true");
+    });
+  });
 });

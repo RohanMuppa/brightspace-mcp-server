@@ -5,7 +5,6 @@
  */
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import type { AppConfig } from "../types/index.js";
 import type { D2LApiClient } from "../api/client.js";
 import { stopAutomaticSignIn, type AuthRunner } from "../auth/auth-runner.js";
@@ -15,7 +14,7 @@ import { clearSavedSession, RemoveError } from "../auth/logout.js";
 import { authLockPath } from "../auth/mfa-challenge.js";
 import { log } from "../utils/logger.js";
 import { SignOutSchema } from "./schemas.js";
-import { withUpdateNotice } from "./tool-helpers.js";
+import { textResponse as text } from "./tool-helpers.js";
 
 const KEPT = "Kept (if you set them up): your saved password, your settings, and your authenticator key.";
 const OTHER_APPS =
@@ -34,11 +33,6 @@ const ALREADY_SIGNED_OUT =
 const NOTHING_SAVED = "There was no saved session to remove.";
 const UNEXPECTED_FAILURE =
   "Could not clear the saved session because of an unexpected error. Nothing more was changed; try again, or run `npx -y brightspace-mcp-server@latest auth --logout` in a terminal to see the details.";
-
-function text(message: string, isError = false): CallToolResult {
-  const result = withUpdateNotice([{ type: "text", text: message }]);
-  return isError ? { ...result, isError: true } : result;
-}
 
 /**
  * Register sign_out tool.

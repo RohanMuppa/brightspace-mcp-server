@@ -167,7 +167,7 @@ describe("shared runtime behind the default stdio command", { timeout: 30_000 },
   it("serves every tool through the relay, and concurrent cold starts converge on one runtime", async () => {
     const chats = await Promise.all([chat(), chat(), chat()]);
     const lists = await Promise.all(chats.map((client) => client.listTools()));
-    for (const list of lists) expect(list.tools).toHaveLength(26);
+    for (const list of lists) expect(list.tools).toHaveLength(27);
     expect(served).toHaveLength(1);
 
     const answers = await Promise.all(chats.map(courseNames));
@@ -379,7 +379,7 @@ describe("shared runtime behind the default stdio command", { timeout: 30_000 },
     });
     clients.push(client);
     await client.connect(clientSide);
-    expect((await client.listTools()).tools).toHaveLength(26);
+    expect((await client.listTools()).tools).toHaveLength(27);
   });
 });
 
