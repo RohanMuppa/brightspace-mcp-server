@@ -20,7 +20,21 @@ import { inflateRawSync } from "node:zlib";
  * Nothing here throws. A truncated download, an unsupported compression
  * method, or a ZIP64 archive all return null, because the caller's fallback
  * is simply to report the file without its text.
+ *
+ * Inflation is capped. Deflate shrinks repeated bytes about 1000:1, so a
+ * crafted attachment well under the download cap can inflate to gigabytes,
+ * block the event loop while it does, and then overflow V8's string limit or
+ * the heap. An entry over the limit returns null, and so does a document whose
+ * entries add up to more than it, since a PPTX can spread one payload across
+ * many slides that are each small enough alone.
  */
+
+/**
+ * The most a single document may inflate to, across every entry read. 32 MB
+ * of XML is far beyond any real assignment or syllabus, and still small
+ * enough that holding it, and the string made from it, is no strain.
+ */
+export const MAX_INFLATED_BYTES = 32 * 1024 * 1024;
 
 const EOCD_SIGNATURE = 0x06054b50;
 const CENTRAL_FILE_SIGNATURE = 0x02014b50;
@@ -85,7 +99,18 @@ function readCentralDirectory(buffer: Buffer): CentralEntry[] | null {
   return entries;
 }
 
-function readEntryData(buffer: Buffer, entry: CentralEntry): Buffer | null {
+/** readEntryData's answer when an entry would inflate past its limit. */
+const TOO_LARGE = Symbol("too large");
+
+function readEntryData(
+  buffer: Buffer,
+  entry: CentralEntry,
+  maxBytes: number,
+): Buffer | typeof TOO_LARGE | null {
+  // The declared size is a cheap first check; a header can lie, so the
+  // inflate below is capped as well.
+  if (entry.uncompressedSize > maxBytes) return TOO_LARGE;
+
   const header = entry.localHeaderOffset;
   if (header + 30 > buffer.length) return null;
 
@@ -98,24 +123,37 @@ function readEntryData(buffer: Buffer, entry: CentralEntry): Buffer | null {
   if (end > buffer.length) return null;
 
   const raw = buffer.subarray(start, end);
-  if (entry.method === METHOD_STORED) return Buffer.from(raw);
+  if (entry.method === METHOD_STORED) {
+    return raw.length > maxBytes ? TOO_LARGE : Buffer.from(raw);
+  }
   if (entry.method !== METHOD_DEFLATE) return null;
 
   try {
-    return inflateRawSync(raw);
-  } catch {
-    return null;
+    // Past maxOutputLength zlib throws a RangeError rather than keep going.
+    // It must be at least 1, so a zero budget is enforced by the length check.
+    const data = inflateRawSync(raw, { maxOutputLength: Math.max(1, maxBytes) });
+    return data.length > maxBytes ? TOO_LARGE : data;
+  } catch (error) {
+    return error instanceof RangeError ? TOO_LARGE : null;
   }
 }
 
-/** One entry from a ZIP archive by exact name, or null. Never throws. */
-export function extractZipEntry(buffer: Buffer, entryName: string): Buffer | null {
+/**
+ * One entry from a ZIP archive by exact name, or null, including when it
+ * would inflate past maxBytes. Never throws.
+ */
+export function extractZipEntry(
+  buffer: Buffer,
+  entryName: string,
+  maxBytes: number = MAX_INFLATED_BYTES,
+): Buffer | null {
   try {
     const entries = readCentralDirectory(buffer);
     if (!entries) return null;
     const entry = entries.find((e) => e.name === entryName);
     if (!entry) return null;
-    return readEntryData(buffer, entry);
+    const data = readEntryData(buffer, entry, maxBytes);
+    return data === TOO_LARGE ? null : data;
   } catch {
     return null;
   }
@@ -153,14 +191,43 @@ function xmlToText(xml: string): string {
 
 /**
  * Readable text from a DOCX, XLSX, or PPTX buffer, or null when the archive
- * is not an Office document or carries nothing readable.
+ * is not an Office document or carries nothing readable. Every entry read
+ * draws on one budget of maxBytes; once it runs out the whole document is
+ * null, not a truncated part of it.
  */
-export function officeDocumentText(buffer: Buffer): string | null {
-  const names = listZipEntries(buffer);
-  if (!names) return null;
+export function officeDocumentText(
+  buffer: Buffer,
+  maxBytes: number = MAX_INFLATED_BYTES,
+): string | null {
+  try {
+    return readOfficeText(buffer, maxBytes);
+  } catch {
+    // BudgetExceeded, or a string too long for V8 that the budget should
+    // already have prevented. Either way the caller reports no text.
+    return null;
+  }
+}
 
-  const read = (name: string): string =>
-    xmlToText(extractZipEntry(buffer, name)?.toString("utf-8") ?? "");
+/** Thrown inside readOfficeText when the shared budget runs out. */
+class BudgetExceeded extends Error {}
+
+function readOfficeText(buffer: Buffer, maxBytes: number): string | null {
+  const entries = readCentralDirectory(buffer);
+  if (!entries) return null;
+  const names = entries.map((e) => e.name);
+
+  let remaining = maxBytes;
+  const read = (name: string): string => {
+    const entry = entries.find((e) => e.name === name);
+    if (!entry) return "";
+    // Only the budget stops the document. An entry unreadable for any other
+    // reason, a bad header or an unsupported method, just adds no text.
+    const data = readEntryData(buffer, entry, remaining);
+    if (data === TOO_LARGE) throw new BudgetExceeded();
+    if (!data) return "";
+    remaining -= data.length;
+    return xmlToText(data.toString("utf-8"));
+  };
 
   let text = "";
 
