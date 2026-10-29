@@ -799,3 +799,106 @@ describe("get_upcoming_due_dates while sign-in is pending", () => {
     expect(parsed).toEqual([]);
   });
 });
+
+/**
+ * Issue #383: a source that fails for any reason but a pending sign-in or a
+ * 403 left a hole the caller read as "nothing due". The list keeps its bare
+ * array shape and a notice names each course and source that went missing.
+ */
+describe("get_upcoming_due_dates when a source fails to load", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const serverError = (path: string) => new ApiError(500, path, "Internal Server Error");
+  const texts = (result: any): string => result.content.map((c: any) => c.text).join("\n");
+
+  it("names the course and source when the dropbox route fails with a 5xx", async () => {
+    const { call } = setup((path) => {
+      if (path.includes("/enrollments/")) return enrollments(COURSE_A, COURSE_B);
+      if (path.includes(`/${COURSE_B.Id}/dropbox/folders/`)) throw serverError(path);
+      if (path.includes("/dropbox/folders/")) {
+        return [{ Id: 1, Name: "HW 1", DueDate: daysFromNow(1), IsHidden: false }];
+      }
+      return [];
+    });
+
+    const result = await call({ daysAhead: 7 });
+
+    expect(result.isError).toBeUndefined();
+    expect(body(result).map((i: any) => i.title)).toEqual(["HW 1"]);
+    expect(notice(result)).toContain(`${COURSE_B.Id} (assignments)`);
+    expect(notice(result)).not.toContain(String(COURSE_A.Id));
+    expect(notice(result)).toContain("Do not report these as having nothing due");
+  });
+
+  it("names every source that failed over the network in one course", async () => {
+    const { call } = setup((path) => {
+      if (path.includes("/enrollments/")) return enrollments(COURSE_A);
+      if (path.includes("/quizzes/") || path.includes("/calendar/")) throw new Error("network error");
+      return [];
+    });
+
+    const result = await call({ daysAhead: 7 });
+
+    expect(body(result)).toEqual([]);
+    expect(notice(result)).toContain(`${COURSE_A.Id} (quizzes, calendar)`);
+  });
+
+  it("reports discussions when one forum's topics fail with a 5xx", async () => {
+    const { call } = setup((path) => {
+      if (path.includes("/discussions/forums/9/topics/")) throw serverError(path);
+      if (path.includes("/discussions/forums/10/topics/")) {
+        return [{ TopicId: 20, Name: "Reading response #2", DueDate: daysFromNow(2), IsHidden: false }];
+      }
+      if (path.includes("/enrollments/")) return enrollments(COURSE_A);
+      if (path.includes("/discussions/forums/")) {
+        return [
+          { ForumId: 9, Name: "Weekly posts" },
+          { ForumId: 10, Name: "Reading Responses" },
+        ];
+      }
+      return [];
+    });
+
+    const result = await call({ daysAhead: 7 });
+
+    expect(body(result).map((i: any) => i.title)).toEqual(["Reading response #2"]);
+    expect(notice(result)).toContain(`${COURSE_A.Id} (discussions)`);
+  });
+
+  it("stays quiet about a 403, which means the tool is restricted in that course", async () => {
+    const { call } = setup((path) => {
+      if (path.includes("/enrollments/")) return enrollments(COURSE_A, COURSE_B);
+      if (path.includes(`/${COURSE_B.Id}/`)) throw forbidden();
+      if (path.includes("/discussions/forums/9/topics/")) throw forbidden();
+      if (path.includes("/discussions/forums/")) return [{ ForumId: 9, Name: "No access" }];
+      return [];
+    });
+
+    const result = await call({ daysAhead: 7 });
+
+    expect(body(result)).toEqual([]);
+    expect(texts(result)).not.toContain("could not be read");
+  });
+
+  it("carries both notices when one course is pending sign-in and another failed", async () => {
+    const { call } = setup((path) => {
+      if (path.includes("/enrollments/")) return enrollments(COURSE_A, COURSE_B);
+      if (path.includes(`/${COURSE_A.Id}/`)) throw mfaPending();
+      if (path.includes(`/${COURSE_B.Id}/dropbox/folders/`)) throw serverError(path);
+      return [];
+    });
+
+    const result = await call({ daysAhead: 7 });
+
+    expect(Array.isArray(body(result))).toBe(true);
+    expect(notice(result)).toContain("Sign-in to Brightspace is still in progress");
+    expect(notice(result)).toContain(`${COURSE_B.Id} (assignments)`);
+  });
+});
