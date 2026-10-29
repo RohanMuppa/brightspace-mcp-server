@@ -66,6 +66,25 @@ interface UpcomingItem {
   url: string;
 }
 
+/** The sources one course's upcoming items are read from. */
+type DueSource = "assignments" | "quizzes" | "discussions" | "calendar";
+
+/** One course's upcoming items, and the sources that could not be read. */
+interface CourseDueItems {
+  items: UpcomingItem[];
+  unavailable: DueSource[];
+}
+
+/**
+ * Whether a failed source must be reported rather than skipped. A 403 means
+ * the tool is restricted or switched off in that course (a past course, a
+ * course with no quizzes): nothing was missed. Anything else (a 404, a 5xx, a
+ * dropped connection) leaves a hole the caller would read as "nothing due".
+ */
+function isReportableFailure(error: unknown): boolean {
+  return (error as { status?: unknown } | null)?.status !== 403;
+}
+
 /** D2L list endpoints return either a paged { Objects: [...] } or a flat array. */
 function unwrapList<T>(raw: unknown): T[] {
   return Array.isArray(raw) ? (raw as T[]) : ((raw as any)?.Objects ?? []);
@@ -78,18 +97,20 @@ function unwrapList<T>(raw: unknown): T[] {
  * hides everything inside it, however visible its topics claim to be, so it is
  * skipped without asking for its topics at all. A forum whose topics fail to
  * load (e.g. no access) is skipped rather than failing the whole course,
- * matching `getForumsOverview` in get-discussions.ts.
+ * matching `getForumsOverview` in get-discussions.ts; `incomplete` marks a
+ * skip that was not a 403, so the caller can say topics may be missing.
  */
 async function fetchDiscussionDueTopics(
   apiClient: D2LApiClient,
   courseId: number
-): Promise<DiscussionTopic[]> {
+): Promise<{ topics: DiscussionTopic[]; incomplete: boolean }> {
   const forums = await apiClient.get<{ Objects: DiscussionForum[] } | DiscussionForum[]>(
     apiClient.le(courseId, "/discussions/forums/"),
     { ttl: DEFAULT_CACHE_TTLS.assignments }
   );
 
   const topics: DiscussionTopic[] = [];
+  let incomplete = false;
   for (const forum of unwrapList<DiscussionForum>(forums)) {
     if (forum.IsHidden === true) continue;
 
@@ -103,6 +124,7 @@ async function fetchDiscussionDueTopics(
       topics.push(...unwrapList<DiscussionTopic>(forumTopics));
     } catch (error) {
       if (isAuthUnavailable(error)) throw error;
+      if (isReportableFailure(error)) incomplete = true;
       log(
         "DEBUG",
         `get_upcoming_due_dates: failed to fetch topics for forum ${forum.ForumId} in course ${courseId}`,
@@ -111,7 +133,7 @@ async function fetchDiscussionDueTopics(
     }
   }
 
-  return topics;
+  return { topics, incomplete };
 }
 
 /**
@@ -154,7 +176,7 @@ async function fetchCourseDueItems(
   course: CourseRef,
   from: number,
   to: number
-): Promise<UpcomingItem[]> {
+): Promise<CourseDueItems> {
   const [dropboxResult, quizResult, discussionResult, calendarResult] = await Promise.allSettled([
     apiClient.get<{ Objects: DropboxFolder[] } | DropboxFolder[]>(
       apiClient.le(course.id, "/dropbox/folders/"),
@@ -175,6 +197,7 @@ async function fetchCourseDueItems(
   }
 
   const items: UpcomingItem[] = [];
+  const unavailable: DueSource[] = [];
   const assignmentLink = assignmentLinkResolver(apiClient, baseUrl, course.id);
 
   if (dropboxResult.status === "fulfilled") {
@@ -204,6 +227,7 @@ async function fetchCourseDueItems(
     }
   } else {
     // 403 for past courses and similar: log and keep the other courses.
+    if (isReportableFailure(dropboxResult.reason)) unavailable.push("assignments");
     log("DEBUG", `get_upcoming_due_dates: failed to fetch dropbox folders for course ${course.id}`, dropboxResult.reason);
   }
 
@@ -229,11 +253,13 @@ async function fetchCourseDueItems(
       });
     }
   } else {
+    if (isReportableFailure(quizResult.reason)) unavailable.push("quizzes");
     log("DEBUG", `get_upcoming_due_dates: failed to fetch quizzes for course ${course.id}`, quizResult.reason);
   }
 
   if (discussionResult.status === "fulfilled") {
-    for (const topic of discussionResult.value) {
+    if (discussionResult.value.incomplete) unavailable.push("discussions");
+    for (const topic of discussionResult.value.topics) {
       if (topic.IsHidden === true) continue;
       if (!topic.DueDate) continue;
 
@@ -251,16 +277,18 @@ async function fetchCourseDueItems(
       });
     }
   } else {
+    if (isReportableFailure(discussionResult.reason)) unavailable.push("discussions");
     log("DEBUG", `get_upcoming_due_dates: failed to fetch discussions for course ${course.id}`, discussionResult.reason);
   }
 
   if (calendarResult.status === "fulfilled") {
     items.push(...calendarItems(calendarResult.value, items));
   } else {
+    if (isReportableFailure(calendarResult.reason)) unavailable.push("calendar");
     log("DEBUG", `get_upcoming_due_dates: failed to fetch calendar events for course ${course.id}`, calendarResult.reason);
   }
 
-  return items;
+  return { items, unavailable };
 }
 
 /**
@@ -304,15 +332,28 @@ export function registerGetUpcomingDueDates(
         // have gone out independently. Collect it rather than failing the
         // whole call and losing every course that *did* answer.
         const pendingCourseIds: number[] = [];
+        // Anything else that failed still must not make items vanish: an
+        // assignment missing from a list that looks complete reads as
+        // "nothing due" (#383).
+        const failedCourses: Array<{ courseId: number; sources: DueSource[] }> = [];
         let firstAuthError: unknown = null;
         const items = results.flatMap((result, i) => {
-          if (result.status === "fulfilled") return result.value;
+          if (result.status === "fulfilled") {
+            if (result.value.unavailable.length > 0) {
+              failedCourses.push({ courseId: courses[i].id, sources: result.value.unavailable });
+            }
+            return result.value.items;
+          }
           if (isAuthUnavailable(result.reason)) {
             pendingCourseIds.push(courses[i].id);
             firstAuthError ??= result.reason;
             log("DEBUG", `get_upcoming_due_dates: sign-in pending for course ${courses[i].id}`, result.reason);
             return [];
           }
+          failedCourses.push({
+            courseId: courses[i].id,
+            sources: ["assignments", "quizzes", "discussions", "calendar"],
+          });
           log("DEBUG", "get_upcoming_due_dates: skipping course after fetch failure", result.reason);
           return [];
         });
@@ -334,23 +375,36 @@ export function registerGetUpcomingDueDates(
         log(
           "INFO",
           `get_upcoming_due_dates: Retrieved ${upcoming.length} items across ${courses.length} courses` +
-          (pendingCourseIds.length > 0 ? ` (${pendingCourseIds.length} pending sign-in)` : "")
+          (pendingCourseIds.length > 0 ? ` (${pendingCourseIds.length} pending sign-in)` : "") +
+          (failedCourses.length > 0 ? ` (${failedCourses.length} incomplete)` : "")
         );
 
         // The response is always a bare array, pending sign-in or not — a
-        // shape change would break every existing caller. A pending course
-        // instead adds a second content block carrying the notice, which
-        // names which course ids are unavailable.
-        if (pendingCourseIds.length === 0) {
+        // shape change would break every existing caller. A pending or
+        // incomplete course instead adds a second content block carrying the
+        // notice, which names which course ids are unavailable.
+        const notices: string[] = [];
+        if (pendingCourseIds.length > 0) {
+          throwIfCredentialRejected(firstAuthError);
+          notices.push(
+            "Sign-in to Brightspace is still in progress, so upcoming due dates for " +
+              `${pendingCourseIds.length} course(s) (${pendingCourseIds.join(", ")}) could not be fetched ` +
+              `yet. ${authPendingNotice(firstAuthError)} Call get_upcoming_due_dates again once sign-in finishes.`
+          );
+        }
+        if (failedCourses.length > 0) {
+          const listed = failedCourses
+            .map(({ courseId, sources }) => `${courseId} (${sources.join(", ")})`)
+            .join("; ");
+          notices.push(
+            `Some upcoming items could not be read from Brightspace, so they may be missing from this list: ${listed}. ` +
+              "Do not report these as having nothing due: call get_upcoming_due_dates again with that courseId."
+          );
+        }
+        if (notices.length === 0) {
           return toolResponse(upcoming);
         }
-        throwIfCredentialRejected(firstAuthError);
-        return toolResponseWithNotice(
-          upcoming,
-          "Sign-in to Brightspace is still in progress, so upcoming due dates for " +
-            `${pendingCourseIds.length} course(s) (${pendingCourseIds.join(", ")}) could not be fetched ` +
-            `yet. ${authPendingNotice(firstAuthError)} Call get_upcoming_due_dates again once sign-in finishes.`
-        );
+        return toolResponseWithNotice(upcoming, notices.join(" "));
       } catch (error) {
         return sanitizeError(error);
       }
