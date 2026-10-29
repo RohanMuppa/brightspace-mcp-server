@@ -314,6 +314,61 @@ describe("BrowserAuth.navigateAndLogin", () => {
       expect(page.waitForTimeout).toHaveBeenCalled();
       expect(ssoFlow.login).toHaveBeenCalledOnce();
     });
+
+    it("reports stuck when the form flickers away after silent sign-in and never comes back", async () => {
+      const { page } = makePage({ url: "https://login.microsoftonline.com/common" });
+      let emailChecks = 0;
+      page.locator = vi.fn((selector: string) => ({
+        first: () => ({
+          isVisible: async () => selector === EMAIL_SELECTOR && ++emailChecks === 1,
+          click: async () => { },
+        }),
+      })) as never;
+
+      const failure = navigate(page);
+      await expect(failure).rejects.toBeInstanceOf(BrowserAuthStuckError);
+      await expect(failure).rejects.toMatchObject({ code: "AUTH_STUCK" });
+      expect(ssoFlow.login).not.toHaveBeenCalled();
+    });
+
+    it("polls again when the page navigates under a silent click", async () => {
+      const { page, state } = makePage({ url: "https://sso.example.edu/idp/profile/SAML2/Redirect/SSO" });
+      let calls = 0;
+      (ssoFlow as any).selectIdentityProvider = vi.fn(async () => {
+        calls += 1;
+        if (calls === 1) throw new Error("locator.click: Execution context was destroyed, most likely because of a navigation");
+        state.visible = [EMAIL_SELECTOR];
+      });
+
+      await expect(navigate(page)).resolves.toBe(false);
+      expect(ssoFlow.login).toHaveBeenCalledOnce();
+    });
+
+    it("re-reads the home page once when it navigates right after the sign-in finished", async () => {
+      const { page } = makePage({ url: "https://login.microsoftonline.com/common", visible: [EMAIL_SELECTOR] });
+      ssoFlow.login.mockImplementation(async (p: any) => {
+        p.context = () => ({ cookies: async () => LIVE_SESSION.cookies });
+        p.url = () => `${BASE_URL}/d2l/home`;
+        let reads = 0;
+        p.evaluate = async () => {
+          reads += 1;
+          if (reads === 1) throw new Error(RACE);
+          return true;
+        };
+        return true;
+      });
+
+      await expect(navigate(page)).resolves.toBe(false);
+      expect(ssoFlow.login).toHaveBeenCalledOnce();
+    });
+
+    it("waits for the home page to load before reading its D2L context", async () => {
+      const { page } = makePage({ url: `${BASE_URL}/d2l/home`, ...LIVE_SESSION });
+
+      await expect(navigate(page)).resolves.toBe(true);
+      expect(page.waitForLoadState).toHaveBeenCalledWith("domcontentloaded", expect.anything());
+      expect(page.waitForLoadState.mock.invocationCallOrder[0]).toBeLessThan(page.evaluate.mock.invocationCallOrder[0]);
+    });
   });
 
   it("gives up at once on a visible email field instead of burning the budget", async () => {

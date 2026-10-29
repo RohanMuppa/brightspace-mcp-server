@@ -163,7 +163,7 @@ const AUTH_FAILURE_GUIDANCE: Record<AuthFailureKind, string> = {
     "password could not be read. Unlock your keychain or keyring, then try again.",
   transport:
     "Brightspace could not be reached to sign in. The saved session was kept. " +
-    "Call sign_in once more with the same arguments; a browser window is not needed and does not help. " +
+    "Call sign_in once more without visible; forcing a browser window does not help. " +
     "If it fails again, ask the user to check their connection and try again in a few minutes.",
   stuck:
     "Sign-in got stuck on the school's sign-in page and stopped; the saved session was kept. " +

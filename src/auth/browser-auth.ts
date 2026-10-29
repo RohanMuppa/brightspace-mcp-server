@@ -469,7 +469,8 @@ export class BrowserAuth {
     // before calling it unsupported. Without credentials there is nothing to
     // do with a challenge anyway, so that path does not wait.
     for (let i = 0; hasCredentials && this.config.headless !== false && !pendingMfa && !credentialPrompt && i < CHALLENGE_SETTLE_POLLS; i++) {
-      await page.waitForTimeout(SILENT_SSO_POLL_MS);
+      // A closed browser is classified by the probe below, not by the wait.
+      await page.waitForTimeout(SILENT_SSO_POLL_MS).catch(() => { });
       if (await this.hasLiveSession(page)) {
         log("INFO", "Saved session is active");
         return true;
@@ -659,6 +660,17 @@ export class BrowserAuth {
    * cookie and a reachable D2L JS context are required.
    */
   private async hasLiveSession(page: Page): Promise<boolean> {
+    // A page caught mid-navigation is read once more after the page that
+    // arrived has loaded: the check right after a sign-in has no next poll, so
+    // a race there would otherwise fail a login the user just approved.
+    for (let attempt = 1; ; attempt++) {
+      const live = await this.readLiveSession(page);
+      if (live !== "raced") return live;
+      if (attempt >= 2) return false;
+    }
+  }
+
+  private async readLiveSession(page: Page): Promise<boolean | "raced"> {
     try {
       const location = new URL(page.url());
       if (location.origin !== new URL(this.config.baseUrl).origin) return false;
@@ -679,8 +691,8 @@ export class BrowserAuth {
         return d2l !== undefined && Boolean(d2l.LP);
       });
     } catch (error) {
-      // Mid-navigation is "not live yet", not a dead browser: the poll asks again.
-      if (isNavigationRace(error)) return false;
+      // Mid-navigation is "not live yet", not a dead browser.
+      if (isNavigationRace(error)) return "raced";
       throw new BrowserAuthTransportError("The browser could not verify the saved Brightspace session. Saved state is preserved.", { cause: error });
     }
   }

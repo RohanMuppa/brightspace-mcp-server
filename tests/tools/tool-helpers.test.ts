@@ -85,8 +85,8 @@ describe("sanitizeError", () => {
 
   it("tells a transport failure to retry the same call with no window", () => {
     const text = textOf(sanitizeError(new AuthProcessError("transport", "x")));
-    expect(text).toContain("Call sign_in once more with the same arguments");
-    expect(text).toContain("a browser window is not needed");
+    expect(text).toContain("Call sign_in once more without visible");
+    expect(text).toContain("forcing a browser window does not help");
   });
 
   it.each(expectedGuidance)("explains a %s sign-in failure", (kind, expected) => {

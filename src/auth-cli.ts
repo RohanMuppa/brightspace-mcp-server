@@ -9,7 +9,6 @@ import dotenv from "dotenv";
 import { loadConfig } from "./utils/config.js";
 import { BrowserAuth, TokenManager } from "./auth/index.js";
 import { MfaApprovalError } from "./auth/sso-flow.js";
-import { NativeCredentialStoreError } from "./auth/credential-store.js";
 import { retireLegacyProfile } from "./auth/legacy-profile.js";
 import { formatPhaseMarker, type AuthPhase } from "./auth/auth-phases.js";
 import { AuthenticationInProgressError } from "./auth/auth-lock.js";
@@ -22,6 +21,7 @@ import { reexecLatestIfStale } from "./utils/self-update.js";
 import { detectSkew } from "./utils/install-sites.js";
 import { BrowserInstallError } from "./utils/browser-install.js";
 import { causeSummaries } from "./auth/error-cause.js";
+import { authExitCode } from "./auth/auth-exit-code.js";
 
 dotenv.config({ quiet: true });
 const pkg = JSON.parse(readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "package.json"), "utf8"));
@@ -111,7 +111,6 @@ async function main(): Promise<void> {
     });
     console.error("\nAuthentication successful. Your encrypted session is ready for the MCP server.");
   } catch (error) {
-    const code = (error as { code?: string })?.code;
     // A pending number-match approval gets its own exit code so the caller
     // can tell "still waiting on the phone" apart from a hard failure, and
     // its own stdout marker so the digits — already validated to 1-3 digits
@@ -128,14 +127,7 @@ async function main(): Promise<void> {
     if (automatic && error instanceof AuthenticationInProgressError) {
       for (const line of relayedLockLines(error.challenge, error.ownerMode)) console.log(line);
     }
-    process.exitCode = error instanceof BrowserInstallError ? (error.dependencyMissing ? 9 : 8)
-      : error instanceof NativeCredentialStoreError ? 5
-        : code === "AUTH_IN_PROGRESS" ? 2
-          : code === "AUTH_COOLDOWN" ? 3
-            : code === "AUTH_UNSUPPORTED" ? 4
-              : code === "AUTH_TRANSPORT" ? 6
-                : code === "AUTH_STUCK" ? 10
-                  : error instanceof MfaApprovalError ? 7 : 1;
+    process.exitCode = authExitCode(error);
     console.error("\nAuthentication failed:", error instanceof Error ? error.message : "Unknown authentication error");
     for (const cause of causeSummaries(error)) console.error(`  caused by: ${cause}`);
     if (!(error instanceof BrowserInstallError)) {
