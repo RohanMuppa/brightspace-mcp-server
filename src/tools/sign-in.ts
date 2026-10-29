@@ -23,8 +23,14 @@ const NO_RUNNER =
 const SUCCESS =
   "Signed in to Brightspace. The session is saved on this computer, so other Brightspace apps here can use it too.";
 /** What an open window means for the caller: this one waits on a person, not on a retry. */
-const WINDOW_OPEN =
-  "A browser window is opening on the user's screen for them to sign in by hand. Tell the user to complete it, including any 2FA, then ask them to say when they are done.";
+const WINDOW_FINISH =
+  "Tell the user to complete it, including any 2FA, then ask them to say when they are done.";
+const WINDOW_ASKED =
+  `A browser window is opening on the user's screen because a window was requested. ${WINDOW_FINISH}`;
+const WINDOW_NO_PASSWORD =
+  `A browser window is opening on the user's screen because no password is saved on this computer, so the user has to type it themselves. ${WINDOW_FINISH}`;
+const WINDOW_JOINED =
+  "No window was opened: a sign-in was already running, and this call joined it.";
 const NEEDS_PASSWORD_FOR_HEADLESS =
   `No password is saved on this computer, so a sign-in with no window has nothing to type into the school's form and would only wait and time out. Either call sign_in again with visible true, or tell the user to run \`${SETUP_COMMAND}\` to save one.`;
 
@@ -79,7 +85,7 @@ export function registerSignIn(
       title: "Sign In to Brightspace",
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
       description:
-        "Sign in to Brightspace on this computer so the other tools work. Does nothing and says so if the saved session is already valid, so it is safe to call first when you are unsure. Opens a browser window for the user to sign in by hand when no password is saved (nothing to type means a windowless sign-in can only time out); otherwise it signs in in the background and reports the 2FA number for the user to approve on their phone. Call this when a Brightspace tool failed because of authentication, or when the user asks to sign in or log in to Brightspace. Every answer says what to do next, including whether to call again.",
+        "Sign in to Brightspace on this computer so the other tools work. Does nothing and says so if the saved session is already valid, so it is safe to call first when you are unsure. Opens a browser window for the user to sign in by hand when no password is saved (nothing to type means a windowless sign-in can only time out); otherwise it signs in in the background and reports the 2FA number for the user to approve on their phone. A window is for the user's own hands only (no saved password, or when the user asks to see one): after a \"could not be reached\", stuck, or timeout answer, call sign_in again without visible. Call this when a Brightspace tool failed because of authentication, or when the user asks to sign in or log in to Brightspace. Every answer says what to do next, including whether to call again.",
       inputSchema: SignInSchema,
     },
     async ({ visible }) => {
@@ -116,7 +122,8 @@ export function registerSignIn(
         if (error instanceof AuthProcessError) {
           const guidance = authPendingNotice(error);
           return text(
-            windowOpened ? `${WINDOW_OPEN} ${guidance}` : guidance,
+            windowOpened ? `${visible === true ? WINDOW_ASKED : WINDOW_NO_PASSWORD} ${guidance}`
+              : wantWindow ? `${WINDOW_JOINED} ${guidance}` : guidance,
             !STILL_WORKING.has(error.kind)
           );
         }

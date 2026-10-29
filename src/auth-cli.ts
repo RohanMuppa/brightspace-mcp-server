@@ -21,6 +21,7 @@ import { initUpdateChecker, peekUpdateNotice } from "./utils/update-checker.js";
 import { reexecLatestIfStale } from "./utils/self-update.js";
 import { detectSkew } from "./utils/install-sites.js";
 import { BrowserInstallError } from "./utils/browser-install.js";
+import { causeSummaries } from "./auth/error-cause.js";
 
 dotenv.config({ quiet: true });
 const pkg = JSON.parse(readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "package.json"), "utf8"));
@@ -133,8 +134,10 @@ async function main(): Promise<void> {
           : code === "AUTH_COOLDOWN" ? 3
             : code === "AUTH_UNSUPPORTED" ? 4
               : code === "AUTH_TRANSPORT" ? 6
-                : error instanceof MfaApprovalError ? 7 : 1;
+                : code === "AUTH_STUCK" ? 10
+                  : error instanceof MfaApprovalError ? 7 : 1;
     console.error("\nAuthentication failed:", error instanceof Error ? error.message : "Unknown authentication error");
+    for (const cause of causeSummaries(error)) console.error(`  caused by: ${cause}`);
     if (!(error instanceof BrowserInstallError)) {
       console.error(`Run \`${SETUP_COMMAND}\` to update saved credentials.`);
       console.error(`Run \`${AUTH_COMMAND}\` to retry explicitly. This bypasses the automatic MFA cooldown.`);

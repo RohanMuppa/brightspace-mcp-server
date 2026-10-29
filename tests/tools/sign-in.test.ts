@@ -166,9 +166,9 @@ describe("sign_in window decision", () => {
     busy.mockReturnValue(true);
     const { text } = await signIn(config(), { visible: true }, fail("inProgress"));
     expect(requestVisibleBrowser).not.toHaveBeenCalled();
-    // No window was promised, so the answer is the plain shared guidance.
+    // No window was promised: the answer says so, then carries the shared guidance.
     expect(text).not.toMatch(/window is opening/i);
-    expect(text).toBe(authPendingNotice(new AuthProcessError("inProgress", "raw message")));
+    expect(text).toContain(authPendingNotice(new AuthProcessError("inProgress", "raw message")));
   });
 });
 
@@ -181,7 +181,7 @@ describe("sign_in failure answers come from the shared guidance", () => {
    * number, and does not paraphrase.
    */
   it.each([
-    "cooldown", "mfaHeld", "transport", "secureStorage", "browserInstall",
+    "cooldown", "mfaHeld", "transport", "stuck", "secureStorage", "browserInstall",
     "unsupported", "timeout", "failed", "cancelled", "busy", "inProgress",
     "dependencyMissing", "automaticPending",
   ] as const)("hands over the guidance for %s verbatim", async (kind) => {
@@ -205,7 +205,7 @@ describe("sign_in failure answers come from the shared guidance", () => {
     expect(isError).toBe(false);
   });
 
-  it.each(["cooldown", "transport", "failed", "secureStorage"] as const)("flags %s as an error", async (kind) => {
+  it.each(["cooldown", "transport", "stuck", "failed", "secureStorage"] as const)("flags %s as an error", async (kind) => {
     const { isError } = await signIn(config(), {}, fail(kind));
     expect(isError).toBe(true);
   });
@@ -215,6 +215,36 @@ describe("sign_in failure answers come from the shared guidance", () => {
     const { text } = await signIn(config({ password: undefined }), {}, fail("mfaPending", "waiting", "7"));
     expect(text).toMatch(/^A browser window is opening/);
     expect(text).toContain(authPendingNotice(error));
+  });
+
+  it("says why a window opened: no saved password", async () => {
+    const { text } = await signIn(config({ password: undefined }), {}, fail("mfaPending", "waiting", "7"));
+    expect(text).toContain("because no password is saved");
+  });
+
+  it("says why a window opened: it was requested", async () => {
+    const { text } = await signIn(config(), { visible: true }, fail("mfaPending", "waiting", "7"));
+    expect(text).toContain("because a window was requested");
+  });
+
+  it("says a requested window was not opened when it joined a running sign-in", async () => {
+    busy.mockReturnValue(true);
+    const { text } = await signIn(config(), { visible: true }, fail("inProgress"));
+    expect(text).toContain("No window was opened: a sign-in was already running");
+  });
+
+  it("tells the model not to open a window after a transport, stuck or timeout failure", async () => {
+    const { client, close } = await connect(config());
+    try {
+      const { tools } = await client.listTools();
+      const tool = tools.find((entry) => entry.name === "sign_in")!;
+      const visible = (tool.inputSchema.properties as Record<string, { description: string }>).visible.description;
+      expect(visible).toMatch(/Do NOT pass true after/);
+      expect(visible).not.toMatch(/Pass true when a background sign-in has already failed/);
+      expect(tool.description).toMatch(/call sign_in again without visible/);
+    } finally {
+      await close();
+    }
   });
 
   it("sends an unexpected error through the house path instead of inventing wording", async () => {
