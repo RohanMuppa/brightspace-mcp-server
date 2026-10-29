@@ -158,7 +158,18 @@ const automaticPendingFailure = (relayed = false): AuthProcessError => new AuthP
   relayed,
 );
 
-export type AuthFailureKind = "busy" | "cooldown" | "unsupported" | "secureStorage" | "transport" | "timeout" | "failed" | "mfaPending" | "automaticPending" | "inProgress" | "browserInstall" | "dependencyMissing" | "cancelled" | "mfaHeld";
+/** What every caller is told when the school's sign-in page never settled. */
+const STUCK_MESSAGE = "Sign-in got stuck on the school's sign-in page and stopped. Call sign_in again.";
+
+/**
+ * Stuck failures from a child that never showed the user anything (no number,
+ * no automatic-code notice, no held prompt). Only these are retried by
+ * themselves: after a prompt reached the user's phone, a second sign-in could
+ * send a second one.
+ */
+const retryableStuck = new WeakSet<AuthProcessError>();
+
+export type AuthFailureKind = "busy" | "cooldown" | "unsupported" | "secureStorage" | "transport" | "timeout" | "failed" | "mfaPending" | "automaticPending" | "inProgress" | "browserInstall" | "dependencyMissing" | "cancelled" | "mfaHeld" | "stuck";
 
 /**
  * Microsoft is refusing a new prompt for the account until an earlier one
@@ -798,7 +809,16 @@ export class AuthRunner {
     // prompt starts a fresh attempt rather than inheriting the stale
     // rejection. Ownership is checked because a caller could in principle
     // clear the latch while this flow is still running.
-    const flow = this.spawnAuth().finally(() => {
+    const flow = this.spawnAuth().catch((error: unknown) => {
+      // The sign-in page jammed before anything reached the user: one more
+      // try, in the same call. Anything else (a number shown, a prompt sent)
+      // is reported as it is.
+      if (error instanceof AuthProcessError && retryableStuck.has(error)) {
+        log("WARN", "Sign-in got stuck before any challenge; trying once more");
+        return this.spawnAuth();
+      }
+      throw error;
+    }).finally(() => {
       if (this.inFlight === flow) this.inFlight = null;
     });
     this.inFlight = flow;
@@ -1201,6 +1221,9 @@ export class AuthRunner {
             4: ["unsupported", "This identity provider cannot complete headless authentication. See the authentication logs."],
             5: ["secureStorage", "The native credential store is unavailable or locked. Unlock it and retry."],
             6: ["transport", "Brightspace authentication is temporarily unavailable because of a network or server failure. Your saved session was preserved. Try again later."],
+            // The page never settled (BrowserAuthStuckError): Brightspace was
+            // reachable, so this is not the network. runOnce retries it once.
+            10: ["stuck", STUCK_MESSAGE],
             // The MFA loop gave up (MfaApprovalError) and recorded the
             // cooldown: the number it showed no longer works, so a caller
             // still polling hears what the next call would, not "enter 42".
@@ -1221,7 +1244,9 @@ export class AuthRunner {
           const [kind, message] = failures[code ?? -1] ?? ["failed", `Authentication failed. Run ${AUTH_COMMAND} to try again.`];
           kill("SIGKILL");
           const challenged = kind === "mfaPending" || kind === "automaticPending" || kind === "inProgress";
-          finishChild(new AuthProcessError(kind, message, kind === "mfaPending" ? numberMatch : undefined, false, relayed && challenged));
+          const failure = new AuthProcessError(kind, message, kind === "mfaPending" ? numberMatch : undefined, false, relayed && challenged);
+          if (kind === "stuck" && !challengeSeen && !automaticSeen && !heldSeen && !relayed) retryableStuck.add(failure);
+          finishChild(failure);
         }
       });
     });

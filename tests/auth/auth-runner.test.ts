@@ -261,6 +261,36 @@ describe("AuthRunner", () => {
     },
   );
 
+  it("retries once by itself when the sign-in page jams before anything reached the user", async () => {
+    const result = new AuthRunner().run();
+    child.emit("close", 10);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(spawn).toHaveBeenCalledTimes(2);
+
+    child.emit("close", 0);
+    expect(await result).toBe(true);
+  });
+
+  it("reports stuck after the one retry is stuck too, without a third attempt", async () => {
+    const result = new AuthRunner().run();
+    const failure = expect(result).rejects.toMatchObject({ kind: "stuck" });
+    child.emit("close", 10);
+    await vi.advanceTimersByTimeAsync(0);
+    child.emit("close", 10);
+    await failure;
+    expect(spawn).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not retry a stuck sign-in that already showed a number, so no second prompt is sent", async () => {
+    const result = new AuthRunner().run();
+    const failure = expect(result).rejects.toMatchObject({ kind: "mfaPending", numberMatch: "47" });
+    child.stdout.write("MFA_NUMBER:47\n");
+    await failure;
+    child.emit("close", 10);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(spawn).toHaveBeenCalledTimes(1);
+  });
+
   it("parses the MFA_NUMBER stdout marker into the mfaPending error, not the logs", async () => {
     const result = new AuthRunner().run();
     const failure = expect(result).rejects.toMatchObject({ kind: "mfaPending", numberMatch: "47" });

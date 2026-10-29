@@ -189,7 +189,7 @@ export const SignOutSchema = z.object({});
 
 export const SignInSchema = z.object({
   visible: z.boolean().optional()
-    .describe("Open a browser window for the user to sign in by hand. Omit to decide automatically: a window opens only when no password is saved on this computer, because a sign-in with no window has nothing to type into the school's form and would only time out. Pass true when a background sign-in has already failed or the school's page needs a step it cannot do, false to insist on a background sign-in."),
+    .describe("Open a browser window for the user to sign in by hand. Omit it: a window then opens by itself only when no password is saved on this computer, because a sign-in with no window has nothing to type into the school's form and would only time out. Pass true ONLY when the user asks for a window, or an error says a step needs the user's own hands (an unsupported sign-in, or no saved password). Do NOT pass true after a \"could not be reached\", stuck, or timeout failure: just call sign_in again, because the saved password is typed in the background and a window adds nothing. Pass false to insist on a background sign-in."),
 });
 
 // ── Instructor / TA dropbox tools ──────────────────────────────────────────

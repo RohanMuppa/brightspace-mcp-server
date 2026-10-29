@@ -72,6 +72,7 @@ describe("sanitizeError", () => {
     ["unsupported", "usually a code from an authenticator app"],
     ["secureStorage", "credential store is locked"],
     ["transport", "could not be reached to sign in"],
+    ["stuck", "Sign-in got stuck on the school's sign-in page and stopped; the saved session was kept. Call sign_in again — no window is needed."],
     ["timeout", "did not finish in time"],
     ["failed", "did not complete"],
     ["mfaPending", "Approve the sign-in request"],
@@ -81,6 +82,12 @@ describe("sanitizeError", () => {
     ["inProgress", "still starting in the background"],
     ["cancelled", "Calling this tool again starts a new sign-in"],
   ];
+
+  it("tells a transport failure to retry the same call with no window", () => {
+    const text = textOf(sanitizeError(new AuthProcessError("transport", "x")));
+    expect(text).toContain("Call sign_in once more without visible");
+    expect(text).toContain("forcing a browser window does not help");
+  });
 
   it.each(expectedGuidance)("explains a %s sign-in failure", (kind, expected) => {
     const result = sanitizeError(new AuthProcessError(kind, "internal detail"));

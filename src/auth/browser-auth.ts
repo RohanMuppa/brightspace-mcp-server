@@ -25,6 +25,9 @@ import { signInCommand } from "../utils/commands.js";
 
 const SILENT_SSO_TIMEOUT_MS = 30000;
 const SILENT_SSO_POLL_MS = 1000;
+/** How long navigateAndLogin keeps looking for a challenge once silent SSO ends on a page it does not recognise. */
+const CHALLENGE_SETTLE_POLLS = 5;
+const LOAD_STATE_WAIT_MS = 2000;
 const INITIAL_NAVIGATION_TIMEOUT_MS = 60000;
 const VISIBLE_LOGIN_TIMEOUT_MS = 5 * 60 * 1000;
 const SILENT_SSO = {
@@ -52,11 +55,37 @@ const SILENT_SSO = {
 } as const;
 
 export class BrowserAuthTransportError extends Error {
-  readonly code = "AUTH_TRANSPORT";
+  readonly code: string = "AUTH_TRANSPORT";
   constructor(message: string, options?: ErrorOptions) {
     super(message, options);
     this.name = "BrowserAuthTransportError";
   }
+}
+
+/**
+ * The school's sign-in page never settled on anything the sign-in can act on:
+ * Brightspace was reachable, the page just kept moving or showed something
+ * unrecognized. Still a BrowserAuthTransportError for existing callers, but
+ * its own code, so the user is told to call sign_in again rather than that the
+ * network is down.
+ */
+export class BrowserAuthStuckError extends BrowserAuthTransportError {
+  override readonly code: string = "AUTH_STUCK";
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "BrowserAuthStuckError";
+  }
+}
+
+/**
+ * Playwright's errors for a page that navigated while it was being read. They
+ * are the normal state of a redirect chain, not a dead browser: the next poll
+ * reads the page that arrived.
+ */
+const NAVIGATION_RACE = /Execution context was destroyed|because of a navigation|Cannot find context with specified id|frame was detached/i;
+
+export function isNavigationRace(error: unknown): boolean {
+  return error instanceof Error && NAVIGATION_RACE.test(error.message);
 }
 
 /** Non-secret identity read off a validated /users/whoami response. */
@@ -433,9 +462,22 @@ export class BrowserAuth {
       log("INFO", "Saved session is active");
       return true;
     }
-    const pendingMfa = await this.hasMfaChallenge(page);
-    const credentialPrompt = await this.hasCredentialPrompt(page);
+    let pendingMfa = await this.hasMfaChallenge(page);
+    let credentialPrompt = await this.hasCredentialPrompt(page);
     const hasCredentials = this.ssoFlow.hasCredentials();
+    // A page caught mid-redirect shows nothing yet; give it a few more seconds
+    // before calling it unsupported. Without credentials there is nothing to
+    // do with a challenge anyway, so that path does not wait.
+    for (let i = 0; hasCredentials && this.config.headless !== false && !pendingMfa && !credentialPrompt && i < CHALLENGE_SETTLE_POLLS; i++) {
+      // A closed browser is classified by the probe below, not by the wait.
+      await page.waitForTimeout(SILENT_SSO_POLL_MS).catch(() => { });
+      if (await this.hasLiveSession(page)) {
+        log("INFO", "Saved session is active");
+        return true;
+      }
+      pendingMfa = await this.hasMfaChallenge(page);
+      credentialPrompt = await this.hasCredentialPrompt(page);
+    }
     if (!hasCredentials && !pendingMfa) {
       if (this.config.headless === false) {
         await this.waitForVisibleLogin(page);
@@ -448,7 +490,7 @@ export class BrowserAuth {
         await this.waitForVisibleLogin(page);
         return false;
       }
-      throw new BrowserAuthTransportError(
+      throw new BrowserAuthStuckError(
         "The sign-in page has not settled on a supported login challenge. Retry shortly; saved state is preserved.",
         navigationError === undefined ? undefined : { cause: navigationError }
       );
@@ -514,7 +556,10 @@ export class BrowserAuth {
     let accountHintAttempted = false;
     let passwordPromptPolls = 0;
     let passwordSwitchAttempted = false;
-    do {
+    // The poll that starts at or after the deadline is the last: it still looks
+    // for a challenge, so a password field first seen on it is acted on.
+    for (;;) {
+      const finalPoll = Date.now() >= deadline;
       if (await this.hasLiveSession(page)) return true;
 
       // Only a visible supported challenge justifies entering credentials or
@@ -556,7 +601,7 @@ export class BrowserAuth {
         // Entra can briefly expose a password-shaped control while its email
         // view initializes. Brightspace Bar polls the evolving page instead of
         // concluding from that first transient snapshot.
-        if (passwordPromptPolls >= 2) {
+        if (passwordPromptPolls >= 2 || finalPoll) {
           log("INFO", "The identity provider requires a login challenge");
           return false;
         }
@@ -564,18 +609,25 @@ export class BrowserAuth {
         continue;
       }
       passwordPromptPolls = 0;
+      if (finalPoll) break;
 
       try {
         await this.clickSilentSurfaces(page);
         await page.waitForTimeout(SILENT_SSO_POLL_MS);
       } catch (error) {
         if (error instanceof BrowserAuthError || error instanceof BrowserAuthTransportError) throw error;
+        // The page navigated under the click: read the page that arrived.
+        if (isNavigationRace(error)) {
+          log("DEBUG", "The sign-in page navigated during a poll; polling again");
+          await page.waitForTimeout(SILENT_SSO_POLL_MS).catch(() => { });
+          continue;
+        }
         throw new BrowserAuthTransportError("Silent sign-in could not reach the identity provider. Saved state is preserved.", { cause: error });
       }
-    } while (Date.now() < deadline);
+    }
 
     if (this.config.headless === false) return false;
-    throw new BrowserAuthTransportError("Silent sign-in did not reach Brightspace or a supported login challenge within 30 seconds. Retry shortly; saved state is preserved.");
+    throw new BrowserAuthStuckError("Silent sign-in did not reach Brightspace or a supported login challenge within 30 seconds. Retry shortly; saved state is preserved.");
   }
 
   private async hasCredentialPrompt(page: Page): Promise<boolean> {
@@ -608,6 +660,17 @@ export class BrowserAuth {
    * cookie and a reachable D2L JS context are required.
    */
   private async hasLiveSession(page: Page): Promise<boolean> {
+    // A page caught mid-navigation is read once more after the page that
+    // arrived has loaded: the check right after a sign-in has no next poll, so
+    // a race there would otherwise fail a login the user just approved.
+    for (let attempt = 1; ; attempt++) {
+      const live = await this.readLiveSession(page);
+      if (live !== "raced") return live;
+      if (attempt >= 2) return false;
+    }
+  }
+
+  private async readLiveSession(page: Page): Promise<boolean | "raced"> {
     try {
       const location = new URL(page.url());
       if (location.origin !== new URL(this.config.baseUrl).origin) return false;
@@ -618,6 +681,9 @@ export class BrowserAuth {
       if (!cookies.some((c) => c.name === "d2lSessionVal" && Boolean(c.value))) {
         return false;
       }
+      // An expired session answers /d2l/home with a stub that redirects to the
+      // login page while already carrying the cookie; read it once it loads.
+      await page.waitForLoadState("domcontentloaded", { timeout: LOAD_STATE_WAIT_MS }).catch(() => { });
       return await page.evaluate(() => {
         const d2l = (window as unknown as Record<string, unknown>).D2L as
           | Record<string, unknown>
@@ -625,6 +691,8 @@ export class BrowserAuth {
         return d2l !== undefined && Boolean(d2l.LP);
       });
     } catch (error) {
+      // Mid-navigation is "not live yet", not a dead browser.
+      if (isNavigationRace(error)) return "raced";
       throw new BrowserAuthTransportError("The browser could not verify the saved Brightspace session. Saved state is preserved.", { cause: error });
     }
   }
@@ -683,6 +751,7 @@ export class BrowserAuth {
     try {
       return await page.locator(selector).first().isVisible();
     } catch (error) {
+      if (isNavigationRace(error)) return false;
       throw new BrowserAuthTransportError("The browser could not inspect the sign-in page. Saved state is preserved.", { cause: error });
     }
   }

@@ -10,6 +10,8 @@ Tokens renew over HTTPS, and a background browser silently replays your saved Mi
 
 The number to approve shows up right in the tool's response, and sign-in finishes in the background — approve it, call the tool again, and use the newest number if one goes stale. TOTP apps (Google Authenticator, etc.) get prompted via the terminal; visible-browser mode opens a window instead, though automatic recovery during a tool call still runs headless unless you set `D2L_HEADLESS=false`.
 
+If `sign_in` says Brightspace "could not be reached" or that sign-in "got stuck", just call it again: a window is not needed and does not help when a password is saved. A stuck sign-in (the school's sign-in page never settled) is retried once automatically before it is reported. A window opens only when no password is saved, or when you ask for one.
+
 If a second app (say Claude Desktop and a terminal session) is signed in to the same account, it waits on the first app's sign-in instead of asking again: approve the number once and both carry on.
 
 **Duo:** sign-in auto-answers "Is this your device?" with **yes**, since a headless run has nobody to click it — this also makes Duo remember the device, so skip it on shared machines. Set `D2L_DUO_PASSCODE` to swap the push for a typed passcode.

@@ -163,10 +163,15 @@ const AUTH_FAILURE_GUIDANCE: Record<AuthFailureKind, string> = {
     "password could not be read. Unlock your keychain or keyring, then try again.",
   transport:
     "Brightspace could not be reached to sign in. The saved session was kept. " +
-    "Check your connection and try again in a few minutes.",
+    "Call sign_in once more without visible; forcing a browser window does not help. " +
+    "If it fails again, ask the user to check their connection and try again in a few minutes.",
+  stuck:
+    "Sign-in got stuck on the school's sign-in page and stopped; the saved session was kept. " +
+    "Call sign_in again — no window is needed.",
   timeout:
     "The sign-in did not finish in time, usually a missed MFA prompt, and has stopped: the prompt it " +
     "sent no longer works. The next call starts a new sign-in, or says automatic sign-in is paused. " +
+    "Don't open a window to retry; a window does not skip the prompt. " +
     `Run \`${AUTH_COMMAND}\` in a terminal (from your home folder) to complete it with the number visible.`,
   failed:
     `The sign-in did not complete. Run \`${AUTH_COMMAND}\` in a terminal (from your home folder) to see why, ` +
