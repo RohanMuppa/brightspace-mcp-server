@@ -260,3 +260,86 @@ describe("get_roster role name fallback", () => {
     expect(payload.users.map((r: { name: string }) => r.name)).toEqual(["coord", "grader"]);
   });
 });
+
+/**
+ * A role route that failed for any reason but a pending sign-in or a 403 was
+ * only logged, so a 500 on the TA route returned the instructors alone and
+ * read as "this course has no TAs". The payload now names the roles that
+ * could not be read.
+ */
+describe("get_roster when a role route fails", () => {
+  const serverError = () => Object.assign(new Error("Internal Server Error"), { status: 500 });
+
+  it("marks TAs unavailable when the TA route fails with a 5xx", async () => {
+    const { call } = setup((path) => {
+      if (path.includes("roleId=135")) throw serverError();
+      return { Objects: [user("prof")], Next: null };
+    });
+
+    const result = await call({ courseId: COURSE_ID });
+
+    expect(result.isError).toBeUndefined();
+    const parsed = parse(result);
+    expect(parsed.users.map((u: any) => u.name)).toEqual(["prof"]);
+    expect(parsed.unavailable).toEqual(["TAs"]);
+    expect(parsed.notice).toMatch(/TAs .*could not be read/);
+    expect(parsed.authPending).toBeUndefined();
+  });
+
+  it("marks instructors unavailable when the instructor route fails with a 5xx", async () => {
+    const { call } = setup((path) => {
+      if (path.includes("roleId=109")) throw serverError();
+      return { Objects: [user("ta")], Next: null };
+    });
+
+    const parsed = parse(await call({ courseId: COURSE_ID }));
+
+    expect(parsed.users.map((u: any) => u.name)).toEqual(["ta"]);
+    expect(parsed.unavailable).toEqual(["instructors"]);
+  });
+
+  it("keeps both notices when one route is auth-pending and the other failed", async () => {
+    const { call } = setup((path) => {
+      if (path.includes("roleId=109")) throw serverError();
+      if (path.includes("roleId=135")) throw new ApiError(401, path, "expired");
+      return { Objects: [{ ...user("prof"), ClasslistRoleDisplayName: "Instructor" }], Next: null };
+    });
+
+    const parsed = parse(await call({ courseId: COURSE_ID }));
+
+    // Both role routes failed, so the unfiltered fallback ran and covered
+    // every role: nothing is reported unavailable.
+    expect(parsed.users.map((u: any) => u.name)).toEqual(["prof"]);
+    expect(parsed.unavailable).toBeUndefined();
+    expect(parsed.authPending).toBe(true);
+    expect(parsed.notice).toContain("Authentication expired");
+  });
+
+  it("does not mark a role unavailable when the fallback covered it", async () => {
+    const { call } = setup((path) => {
+      if (path.includes("roleId=109")) throw serverError();
+      if (path.includes("roleId=135")) return { Objects: [], Next: null };
+      return { Objects: [{ ...user("prof"), ClasslistRoleDisplayName: "Instructor" }], Next: null };
+    });
+
+    const parsed = parse(await call({ courseId: COURSE_ID }));
+
+    expect(parsed.users.map((u: any) => u.name)).toEqual(["prof"]);
+    expect(parsed.unavailable).toBeUndefined();
+    expect(parsed.notice).toBeUndefined();
+  });
+
+  it("stays quiet on a 403, which means the role list is restricted", async () => {
+    const { call } = setup((path) => {
+      if (path.includes("roleId=135")) {
+        throw Object.assign(new Error("Forbidden"), { status: 403 });
+      }
+      return { Objects: [user("prof")], Next: null };
+    });
+
+    const parsed = parse(await call({ courseId: COURSE_ID }));
+
+    expect(parsed.unavailable).toBeUndefined();
+    expect(parsed.notice).toBeUndefined();
+  });
+});
