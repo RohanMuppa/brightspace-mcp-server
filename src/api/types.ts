@@ -48,7 +48,6 @@ export interface RateLimitConfig {
 export interface D2LApiClientOptions {
   baseUrl: string;
   tokenManager: TokenManager; // from auth module
-  cacheTTLs?: Partial<CacheTTLs>;
   rateLimitConfig?: RateLimitConfig;
   timeoutMs?: number; // default 30_000
   /** Called when auth is expired and retries are exhausted. Return true if re-auth succeeded. */
