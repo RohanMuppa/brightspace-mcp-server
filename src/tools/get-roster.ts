@@ -45,6 +45,19 @@ function isTeachingRoleByName(user: ClasslistUser): boolean {
   return TEACHING_ROLE_NAME.test(user.ClasslistRoleDisplayName ?? "");
 }
 
+/** The staff roles the default view reads, one classlist route each. */
+type StaffRole = "instructors" | "TAs";
+
+/**
+ * Whether a failed role route must be reported rather than skipped. A 403
+ * means the classlist is restricted for that role: nothing was missed.
+ * Anything else (a 404, a 5xx, a dropped connection) leaves a hole the caller
+ * would read as "this course has no TAs".
+ */
+function isReportableFailure(error: unknown): boolean {
+  return (error as { status?: unknown } | null)?.status !== 403;
+}
+
 /**
  * Fetch every classlist user matching the optional filters, across all pages.
  *
@@ -105,6 +118,7 @@ export function registerGetRoster(
           const allUsers: ClasslistUser[] = [];
           let authFailure: PromiseRejectedResult | undefined;
           let roleFallbackUsed = false;
+          let unavailable: StaffRole[] = [];
 
           if (!includeStudents) {
             // Fetch instructors and TAs in parallel
@@ -136,6 +150,12 @@ export function registerGetRoster(
             if (instructorResult.status === "fulfilled") {
               allUsers.push(...instructorResult.value);
             } else {
+              if (
+                !isAuthUnavailable(instructorResult.reason) &&
+                isReportableFailure(instructorResult.reason)
+              ) {
+                unavailable.push("instructors");
+              }
               log("WARN", "get_roster: Failed to fetch instructors", {
                 error: instructorResult.reason,
               });
@@ -144,6 +164,9 @@ export function registerGetRoster(
             if (taResult.status === "fulfilled") {
               allUsers.push(...taResult.value);
             } else {
+              if (!isAuthUnavailable(taResult.reason) && isReportableFailure(taResult.reason)) {
+                unavailable.push("TAs");
+              }
               log("WARN", "get_roster: Failed to fetch TAs", {
                 error: taResult.reason,
               });
@@ -162,6 +185,9 @@ export function registerGetRoster(
               });
               allUsers.push(...everyone.filter(isTeachingRoleByName));
               roleFallbackUsed = true;
+              // The unfiltered fetch covered every role, so nothing the
+              // failed role routes would have returned is missing any more.
+              unavailable = [];
             }
           } else {
             // Fetch all users
@@ -197,6 +223,22 @@ export function registerGetRoster(
             `get_roster: Retrieved ${users.length} users for course ${courseId}` +
               (authFailure ? " (sign-in pending for one route)" : "")
           );
+          const notices: string[] = [];
+          if (unavailable.length > 0) {
+            notices.push(
+              `The ${unavailable.join(" and ")} for this course could not be read from ` +
+                "Brightspace, so they may be missing from this list. Do not report this " +
+                `course as having no ${unavailable.join(" or ")}; call get_roster again to retry.`
+            );
+          }
+          if (authFailure) {
+            notices.push(
+              "Sign-in to Brightspace is still in progress, so part of the roster for this " +
+                `course could not be fetched yet. ${authPendingNotice(authFailure.reason)} Call ` +
+                "get_roster again once sign-in finishes."
+            );
+          }
+
           return toolResponse({
             courseId,
             total,
@@ -212,15 +254,9 @@ export function registerGetRoster(
                 }
               : {}),
             users,
-            ...(authFailure
-              ? {
-                  authPending: true,
-                  notice:
-                    "Sign-in to Brightspace is still in progress, so part of the roster for this " +
-                    `course could not be fetched yet. ${authPendingNotice(authFailure.reason)} Call ` +
-                    "get_roster again once sign-in finishes.",
-                }
-              : {}),
+            ...(unavailable.length > 0 ? { unavailable } : {}),
+            ...(authFailure ? { authPending: true } : {}),
+            ...(notices.length > 0 ? { notice: notices.join(" ") } : {}),
           });
         } catch (error) {
           // A pending sign-in is not an empty roster: the route never
