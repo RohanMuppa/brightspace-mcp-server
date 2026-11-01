@@ -94,12 +94,14 @@ export function registerGetMyGroups(
         // though it looks numeric, so it must be coerced before it can be
         // used as a key alongside the numeric Enrollments ids.
         let classlistById = new Map<number, ClasslistUser>();
+        let namesUnavailable = false;
         try {
           const classlist = await fetchClasslistUsers(apiClient, courseId);
           classlistById = new Map(classlist.map((u) => [Number(u.Identifier), u]));
         } catch (error) {
           if (isMissingOrForbidden(error)) {
             log("INFO", "get_my_groups: Classlist not accessible, member names will be null", { courseId });
+            namesUnavailable = true;
           } else {
             throw error;
           }
@@ -123,7 +125,14 @@ export function registerGetMyGroups(
         });
 
         log("INFO", `get_my_groups: Found ${groups.length} groups for course ${courseId}`);
-        return toolResponse({ courseId, groups, ...(unreadNote ? { note: unreadNote } : {}) });
+        // Null names are only meaningful with a reason attached: without one,
+        // a caller can't tell "the classlist couldn't be read" from "these
+        // members have no names", and may report the group as anonymous.
+        const namesNote = namesUnavailable
+          ? "Couldn't read this course's classlist, so member names are null; only user ids are listed."
+          : undefined;
+        const note = [unreadNote, namesNote].filter(Boolean).join(" ") || undefined;
+        return toolResponse({ courseId, groups, ...(note ? { note } : {}) });
       } catch (error) {
         return sanitizeError(error);
       }
