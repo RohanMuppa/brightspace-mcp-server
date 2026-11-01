@@ -159,6 +159,25 @@ describe("get_my_groups classlist access", () => {
       { userId: MY_ID, name: null },
       { userId: 7, name: null },
     ]);
+    expect(payload.note).toMatch(/member names are null/i);
+  });
+
+  it("notes both an unread category and an unreadable classlist", async () => {
+    const { call } = setup({
+      categories: [
+        { GroupCategoryId: 1, Name: "Project Groups" },
+        { GroupCategoryId: 2, Name: "Lab Sections" },
+      ],
+      groups: { 1: [{ GroupId: 10, Name: "Group A", Enrollments: [MY_ID, 7] }] },
+      groupsError: { 2: new ApiError(403, groupsPath(2), "Forbidden") },
+      classlistError: new ApiError(403, CLASSLIST_PATH, "Forbidden"),
+    });
+
+    const payload = parse(await call({ courseId: COURSE_ID }));
+
+    expect(payload.groups).toHaveLength(1);
+    expect(payload.note).toContain('"Lab Sections"');
+    expect(payload.note).toMatch(/member names are null/i);
   });
 });
 
