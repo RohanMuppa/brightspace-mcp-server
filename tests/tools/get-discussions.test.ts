@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { registerGetDiscussions } from "../../src/tools/get-discussions.js";
+import { ApiError } from "../../src/api/errors.js";
 
 /**
  * get_discussions drops deleted posts from `posts`, so `postCount` must be
@@ -211,5 +212,75 @@ describe("get_discussions topic read (#364)", () => {
     const result = await call(TOPIC_ARGS);
 
     expect(result.isError).toBe(true);
+  });
+});
+
+/**
+ * Issue #398: the course overview and the forum view fetch one sub-list per
+ * item. A failed read there must come back as null with a reason, never as an
+ * empty list, and a session that can't be used must fail the whole call.
+ */
+const FORUMS_PATH = `${LE_PREFIX}/${COURSE_ID}/discussions/forums/`;
+const OTHER_FORUM_ID = 31;
+const OTHER_FORUM = { ...FORUM, ForumId: OTHER_FORUM_ID, Name: "Q&A" };
+const OTHER_TOPICS_PATH = `${FORUMS_PATH}${OTHER_FORUM_ID}/topics/`;
+const OTHER_TOPIC_ID = 41;
+const OTHER_TOPIC = { ...TOPIC, TopicId: OTHER_TOPIC_ID, Name: "Week 1" };
+const OTHER_POSTS_PATH = `${TOPICS_PATH}${OTHER_TOPIC_ID}/posts/`;
+
+describe("get_discussions sub-lists that couldn't be read (#398)", () => {
+  it("marks a forum's topics unavailable, not empty, when its topic list fails", async () => {
+    const { call } = setupWith({
+      [FORUMS_PATH]: () => [FORUM, OTHER_FORUM],
+      [TOPICS_PATH]: () => [TOPIC],
+      [OTHER_TOPICS_PATH]: () => { throw new ApiError(500, OTHER_TOPICS_PATH, "boom"); },
+    });
+
+    const result = await call({ courseId: COURSE_ID });
+
+    expect(result.isError).toBeFalsy();
+    const [readable, failed] = parse(result).forums;
+    expect(readable.topics).toHaveLength(1);
+    expect(readable.topicsUnavailable).toBeUndefined();
+    expect(failed.topics).toBeNull();
+    expect(failed.topicsUnavailable).toMatchObject({ operation: "listTopics", status: 500 });
+  });
+
+  it("marks a topic's posts unavailable, not empty, in the forum view", async () => {
+    const { call } = setupWith({
+      [FORUM_PATH]: () => FORUM,
+      [TOPICS_PATH]: () => [TOPIC, OTHER_TOPIC],
+      [POSTS_PATH]: () => POSTS,
+      [OTHER_POSTS_PATH]: () => { throw forbidden(OTHER_POSTS_PATH); },
+    });
+
+    const result = await call({ courseId: COURSE_ID, forumId: FORUM_ID });
+
+    expect(result.isError).toBeFalsy();
+    const [readable, failed] = parse(result).topics;
+    expect(readable.postCount).toBe(2);
+    expect(readable.postsUnavailable).toBeUndefined();
+    expect(failed.posts).toBeNull();
+    expect(failed.postCount).toBeNull();
+    expect(failed.postsUnavailable).toMatchObject({ operation: "listPosts", status: 403 });
+  });
+
+  it("fails the overview when the session is unusable instead of listing empty forums", async () => {
+    const { call } = setupWith({
+      [FORUMS_PATH]: () => [FORUM],
+      [TOPICS_PATH]: () => { throw new ApiError(401, TOPICS_PATH, "expired"); },
+    });
+
+    expect((await call({ courseId: COURSE_ID })).isError).toBe(true);
+  });
+
+  it("fails the forum view when the session is unusable instead of listing empty topics", async () => {
+    const { call } = setupWith({
+      [FORUM_PATH]: () => FORUM,
+      [TOPICS_PATH]: () => [TOPIC],
+      [POSTS_PATH]: () => { throw new ApiError(401, POSTS_PATH, "expired"); },
+    });
+
+    expect((await call({ courseId: COURSE_ID, forumId: FORUM_ID })).isError).toBe(true);
   });
 });
