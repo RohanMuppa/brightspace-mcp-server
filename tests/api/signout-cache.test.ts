@@ -6,7 +6,7 @@ import { D2LApiClient } from "../../src/api/client.js";
 import { TokenManager } from "../../src/auth/token-manager.js";
 import { SessionStore, SESSION_FILE } from "../../src/auth/session-store.js";
 import type { TokenData } from "../../src/types/index.js";
-import { MemoryCredentialBackend, retireTestFile } from "../auth/secure-store-fixtures.js";
+import { MemoryCredentialBackend } from "../auth/secure-store-fixtures.js";
 
 const BASE_URL = "https://purdue.brightspace.com";
 const VERSIONS_URL = `${BASE_URL}/d2l/api/versions/`;
@@ -219,7 +219,7 @@ describe("D2LApiClient with a real TokenManager and session file", () => {
   beforeEach(async () => {
     dir = await fs.mkdtemp(path.join(os.tmpdir(), "signout-cache-"));
     backend = new MemoryCredentialBackend();
-    other = new SessionStore(dir, { backend, trash: retireTestFile });
+    other = new SessionStore(dir, { backend });
     originalFetch = global.fetch;
     apiCalls = 0;
     global.fetch = (async (url: string) => {
@@ -228,7 +228,7 @@ describe("D2LApiClient with a real TokenManager and session file", () => {
       return jsonResponse({ call: apiCalls });
     }) as unknown as typeof global.fetch;
 
-    const tokenManager = new TokenManager({ baseUrl: BASE_URL, sessionStore: new SessionStore(dir, { backend, trash: retireTestFile }) });
+    const tokenManager = new TokenManager({ baseUrl: BASE_URL, sessionStore: new SessionStore(dir, { backend }) });
     await tokenManager.setToken(alice("alice-token-12345678"));
     client = new D2LApiClient({ baseUrl: BASE_URL, tokenManager });
   });

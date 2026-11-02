@@ -271,7 +271,7 @@ function descendantPids(parentPid: number): number[] {
 function forceStop(pid: number): void {
   if (process.platform === "win32") {
     try {
-      execFileSync("taskkill", ["/pid", String(pid), "/t", "/f"], { stdio: "ignore", timeout: 5000 });
+      execFileSync("taskkill", ["/pid", String(pid), "/t", "/f"], { stdio: "ignore", timeout: 5000, windowsHide: true });
     } catch { /* Already exited. */ }
     return;
   }
@@ -973,7 +973,7 @@ export class AuthRunner {
         try {
           if (child.pid && process.platform === "win32") {
             execFileSync("taskkill", ["/pid", String(child.pid), "/t", "/f"], {
-              stdio: "ignore", timeout: 5000,
+              stdio: "ignore", timeout: 5000, windowsHide: true,
             });
           } else if (child.pid) {
             if (signal === "SIGKILL") {
