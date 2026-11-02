@@ -151,6 +151,7 @@ describe("SessionStore", () => {
     const own = new SessionStore(dir, { backend, trash });
     await own.save(testToken);
     await own.clear();
+    expect(await own.load()).toBeNull();
     await own.save(testToken);
     expect(await own.clearIfCurrent(testToken)).toBe(true);
     expect(trash).not.toHaveBeenCalled();
