@@ -7,7 +7,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { D2LApiClient, DEFAULT_CACHE_TTLS } from "../api/index.js";
 import { GetCourseContentSchema } from "./schemas.js";
-import { toolResponse, sanitizeError } from "./tool-helpers.js";
+import { toolResponse, sanitizeError, isAuthUnavailable } from "./tool-helpers.js";
 import { convertHtmlToMarkdown } from "../utils/html-converter.js";
 import { matchesModifiedSince } from "../utils/modified-since.js";
 import { log } from "../utils/logger.js";
@@ -88,25 +88,48 @@ export async function fetchRootContent(
   );
 }
 
+/** Why a module's children are missing from the tree. */
+export interface ChildrenUnavailable {
+  status: number | null;
+  reason: string;
+}
+
 /**
- * Fetch a single module's structure, or null when the dedicated endpoint
- * fails (locked module, transient error) so the caller can fall back to
- * whatever structure the parent listing already embedded.
+ * Fetch a single module's structure, or say why it couldn't be read (locked
+ * module, transient error, an answer that is not a list) so the caller can
+ * fall back to whatever structure the parent listing already embedded. A
+ * pending or expired sign-in is rethrown: it fails every module the same way,
+ * and must fail the call so the user is told to sign in, not shown a course
+ * whose every module looks empty.
  */
 export async function fetchModuleStructure(
   apiClient: D2LApiClient,
   courseId: number,
   moduleId: number
-): Promise<ContentObject[] | null> {
+): Promise<ContentObject[] | ChildrenUnavailable> {
+  let structure: unknown;
   try {
-    return await apiClient.get<ContentObject[]>(
+    structure = await apiClient.get<ContentObject[]>(
       apiClient.le(courseId, `/content/modules/${moduleId}/structure/`),
       { ttl: DEFAULT_CACHE_TTLS.courseContent }
     );
-  } catch (e) {
-    log('DEBUG', `Failed to fetch children for module ${moduleId}: falling back to the embedded structure`);
-    return null;
+  } catch (error) {
+    if (isAuthUnavailable(error)) throw error;
+    log('DEBUG', `Failed to fetch children for module ${moduleId}: falling back to the embedded structure`, error);
+    const status = typeof (error as any)?.status === 'number' ? (error as any).status : null;
+    return {
+      status,
+      reason: status === 403
+        ? "Brightspace refused this account's request for this module's contents. It may hold items; open the module in a browser to see what this account can read."
+        : `Couldn't read this module's contents${status !== null ? ` (Brightspace answered ${status})` : ''}. It may hold items; try again.`,
+    };
   }
+  if (Array.isArray(structure)) return structure;
+  log('DEBUG', `Module ${moduleId} structure was not a list: falling back to the embedded structure`);
+  return {
+    status: null,
+    reason: "Brightspace answered with something other than a list of this module's contents. It may hold items; try again.",
+  };
 }
 
 /**
@@ -156,6 +179,7 @@ export async function buildContentTree(
     if (item.Type === 0) {
       // Module: fetch children recursively (unless the depth limit is reached)
       let processedChildren: any[] = [];
+      let childrenUnavailable: ChildrenUnavailable | undefined;
 
       if (currentDepth < depthLimit) {
         // The parent listing already embeds this module's immediate children
@@ -165,21 +189,31 @@ export async function buildContentTree(
         // what the parent already handed us. Falling through to an empty list
         // made a locked or erroring module look like an empty one, and under a
         // typeFilter it dropped the module from the tree with no trace.
-        let children = await fetchModuleStructure(apiClient, courseId, item.Id);
-
-        if (!Array.isArray(children)) {
-          children = Array.isArray(item.Structure) ? item.Structure : [];
+        // When neither copy is readable, the module's children are reported
+        // as null with a reason, never as [], so it can't pass for an empty
+        // module, and the module is kept under any typeFilter because nothing
+        // says it holds no matching items.
+        const structure = await fetchModuleStructure(apiClient, courseId, item.Id);
+        let children: ContentObject[] | null = null;
+        if (Array.isArray(structure)) {
+          children = structure;
+        } else if (Array.isArray(item.Structure)) {
+          children = item.Structure;
+        } else {
+          childrenUnavailable = structure;
         }
 
-        processedChildren = await buildContentTree(
-          apiClient, courseId, children, progressMap, typeFilter, maxDepth, currentDepth + 1, availability, now
-        );
+        if (children) {
+          processedChildren = await buildContentTree(
+            apiClient, courseId, children, progressMap, typeFilter, maxDepth, currentDepth + 1, availability, now
+          );
+        }
       } else if (currentDepth >= MAX_CONTENT_DEPTH) {
         log('DEBUG', `Content depth ceiling of ${MAX_CONTENT_DEPTH} reached at module ${item.Id}: not descending further`);
       }
 
       // Only include module if it has matching children (or filter is 'all')
-      if (typeFilter === 'all' || processedChildren.length > 0) {
+      if (typeFilter === 'all' || processedChildren.length > 0 || childrenUnavailable) {
         const courseFiles = item.Description?.Html ? extractCourseFilePaths(item.Description.Html, courseId, apiClient.origin) : [];
         tree.push({
           type: 'module',
@@ -194,7 +228,8 @@ export async function buildContentTree(
           ...(item.IsLocked ? { isLocked: item.IsLocked } : {}),
           ...availabilityFields(availability),
           lastModified: item.LastModifiedDate ?? null,
-          children: processedChildren,
+          ...(childrenUnavailable ? { childrenUnavailable } : {}),
+          children: childrenUnavailable ? null : processedChildren,
         });
       }
     } else if (item.Type === 1) {
@@ -260,6 +295,12 @@ function filterTreeByModifiedSince(tree: any[], cutoff: Date): any[] {
         result.push(item);
       }
     } else if (item.type === 'module') {
+      // A module whose children couldn't be read stays in, children null:
+      // nothing says none of them changed since the cutoff.
+      if (item.childrenUnavailable) {
+        result.push(item);
+        continue;
+      }
       const filteredChildren = filterTreeByModifiedSince(item.children ?? [], cutoff);
       const moduleMatches = matchesModifiedSince(item.lastModified, cutoff);
       if (moduleMatches || filteredChildren.length > 0) {
@@ -296,6 +337,20 @@ function countModules(tree: any[]): number {
       if (item.children) {
         count += countModules(item.children);
       }
+    }
+  }
+  return count;
+}
+
+/**
+ * Count modules whose children couldn't be read (for the notice).
+ */
+export function countUnreadableModules(tree: any[]): number {
+  let count = 0;
+  for (const item of tree) {
+    if (item.type === 'module') {
+      if (item.childrenUnavailable) count++;
+      if (item.children) count += countUnreadableModules(item.children);
     }
   }
   return count;
@@ -379,7 +434,9 @@ export function registerGetCourseContent(
         const topicCount = countTopics(contentTree);
         const moduleCount = countModules(contentTree);
 
-        log("INFO", `get_course_content: Retrieved ${moduleCount} modules and ${topicCount} topics for course ${courseId} (filter: ${typeFilter})`);
+        const unreadable = countUnreadableModules(contentTree);
+
+        log("INFO", `get_course_content: Retrieved ${moduleCount} modules and ${topicCount} topics for course ${courseId} (filter: ${typeFilter})${unreadable > 0 ? `, ${unreadable} module(s) unreadable` : ""}`);
 
         return toolResponse({
           courseId,
@@ -388,6 +445,14 @@ export function registerGetCourseContent(
           topicCount,
           moduleCount,
           ...(modifiedSince ? { modifiedSince, returned: topicCount, filteredOut } : {}),
+          ...(unreadable > 0
+            ? {
+                notice:
+                  `The contents of ${unreadable} module(s) couldn't be read; they have children null and a ` +
+                  "childrenUnavailable reason. topicCount leaves out whatever they hold. Do not report " +
+                  "those modules as empty.",
+              }
+            : {}),
         });
       } catch (error) {
         return sanitizeError(error);
