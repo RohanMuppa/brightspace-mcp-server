@@ -183,6 +183,13 @@ export const GetMyGroupsSchema = z.object({
     .describe("Course ID to list the current user's project/discussion groups for."),
 });
 
+export const GetAvailableGroupsSchema = z.object({
+  courseId: z.coerce.number().int().positive().optional()
+    .describe("Course ID to list joinable groups for. If omitted, checks courses that started in the last 12 months."),
+  includeOlder: z.boolean().default(false)
+    .describe("Without courseId, also check older and undated courses. Schools that never close a course keep years of finished courses whose sign-ups still look open."),
+});
+
 export const GetServerInfoSchema = z.object({});
 
 export const SignOutSchema = z.object({});

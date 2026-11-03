@@ -27,6 +27,7 @@ import {
   registerGetClasslistEmails,
   registerGetRoster,
   registerGetMyGroups,
+  registerGetAvailableGroups,
   registerGetSyllabus,
   registerGetDiscussions,
   registerGetVideoTranscript,
@@ -153,6 +154,7 @@ export function createMcpServer(runtime: ServerRuntime): McpServer {
   registerGetClasslistEmails(server, apiClient);
   registerGetRoster(server, apiClient);
   registerGetMyGroups(server, apiClient);
+  registerGetAvailableGroups(server, apiClient, config);
   registerGetSyllabus(server, apiClient);
   registerGetDiscussions(server, apiClient, config.baseUrl);
   registerGetVideoTranscript(server, apiClient);
@@ -167,7 +169,7 @@ export function createMcpServer(runtime: ServerRuntime): McpServer {
   registerGetDropboxFeedback(server, apiClient);
   registerGetRubricsForObject(server, apiClient);
   registerDownloadDropboxSubmissionFile(server, apiClient);
-  log("DEBUG", "MCP tools registered (26 tools)");
+  log("DEBUG", "MCP tools registered (28 tools)");
 
   // Register MCP prompts — surfaced in clients (e.g. Claude Desktop) as a
   // picker, distinct from tools. Each one is a canned user message that

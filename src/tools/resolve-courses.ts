@@ -27,6 +27,8 @@ interface EnrollmentItem {
 export interface CourseRef {
   id: number;
   name: string | null;
+  /** The enrollment's access start, when Brightspace has one. */
+  startDate?: string | null;
 }
 
 /**
@@ -65,7 +67,7 @@ export async function resolveCourses(
 
   if (courseId) {
     const match = items.find((item) => item.OrgUnit.Id === courseId);
-    return [{ id: courseId, name: match?.OrgUnit.Name ?? null }];
+    return [{ id: courseId, name: match?.OrgUnit.Name ?? null, startDate: match?.Access.StartDate ?? null }];
   }
 
   const filtered = applyCourseFilter(
@@ -81,5 +83,5 @@ export async function resolveCourses(
     config.courseFilter
   );
 
-  return filtered.map((course) => ({ id: course.id, name: course.name }));
+  return filtered.map((course) => ({ id: course.id, name: course.name, startDate: course.startDate }));
 }

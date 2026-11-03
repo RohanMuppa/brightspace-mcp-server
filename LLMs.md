@@ -209,6 +209,7 @@ Registered in `src/tools/index.ts`, schemas in `src/tools/schemas.ts`:
 | `search_course` | Keyword search across a course's content (modules/topics/file names), announcements, and discussion forums/topics in one call |
 | `get_roster` | Classlist for a course |
 | `get_my_groups` | The current user's project/discussion groups in a course, with each group's members |
+| `get_available_groups` | Groups the current user can still join themselves, with spots left and when sign-up closes |
 | `get_classlist_emails` | Emails of classmates and instructors |
 | `download_file` | Get a file attachment — course content (`topicId`), a file an instructor linked by path inside a module description rather than adding as a topic (`coursePath`: `Notes/Lecture 1.pdf`, the `quickLink.d2l?...type=coursefile` URL from `get_course_content`, or a `/content/enforced/<course folder>/...` link as `get_assignments` returns it; fetched with the saved web session, so it needs a signed-in session), a submission (`folderId` + `fileId`), or an announcement attachment (`newsId` + `fileId`). `downloadPath` is optional: omit it to get the file back inline in the tool response (extracted text for PDFs/Office docs, an image block for jpeg/png/gif/webp, capped at 10MB / 400k extracted characters), or pass the absolute path of an existing host directory (it is not created for you) to save it to disk (streamed, up to 2GB) |
 | `get_assignment_files` | Read the files attached to an assignment (spec, rubric, starter workbook) and return their text |
