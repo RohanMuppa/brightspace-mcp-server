@@ -1,10 +1,10 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as os from "node:os";
 import { SessionStore } from "../../src/auth/session-store.js";
 import { NativeCredentialStoreError } from "../../src/auth/credential-store.js";
-import { MemoryCredentialBackend, retireTestFile, testToken, writeLegacySession } from "./secure-store-fixtures.js";
+import { MemoryCredentialBackend, testToken, writeLegacySession } from "./secure-store-fixtures.js";
 
 describe("SessionStore", () => {
   let dir: string;
@@ -13,7 +13,7 @@ describe("SessionStore", () => {
   beforeEach(async () => {
     dir = await fs.mkdtemp(path.join(os.tmpdir(), "secure-session-test-"));
     backend = new MemoryCredentialBackend();
-    store = new SessionStore(dir, { backend, trash: retireTestFile });
+    store = new SessionStore(dir, { backend });
   });
   afterEach(async () => { await fs.rm(dir, { recursive: true, force: true }); });
 
@@ -146,11 +146,16 @@ describe("SessionStore", () => {
     expect(backend.writes).toBe(0);
   });
 
-  it("clears a readable session recoverably", async () => {
-    await store.save(testToken);
-    await store.clear();
-    expect(await store.load()).toBeNull();
-    expect((await fs.readdir(dir)).some((name) => name.startsWith("session.json.retired-"))).toBe(true);
+  it("deletes a cleared session without running Trash, whose Windows helper opens a console", async () => {
+    const trash = vi.fn();
+    const own = new SessionStore(dir, { backend, trash });
+    await own.save(testToken);
+    await own.clear();
+    expect(await own.load()).toBeNull();
+    await own.save(testToken);
+    expect(await own.clearIfCurrent(testToken)).toBe(true);
+    expect(trash).not.toHaveBeenCalled();
+    await expect(fs.access(path.join(dir, "session.json"))).rejects.toThrow();
   });
 
   it("never clears unreadable data", async () => {
@@ -171,7 +176,7 @@ describe("SessionStore", () => {
 
   it("serializes simultaneous compare-and-save updates", async () => {
     await store.save(testToken);
-    const other = new SessionStore(dir, { backend, trash: retireTestFile });
+    const other = new SessionStore(dir, { backend });
     const result = await Promise.all([
       store.saveIfCurrent({ ...testToken, accessToken: "mint-a" }, testToken),
       other.saveIfCurrent({ ...testToken, accessToken: "mint-b" }, testToken),
