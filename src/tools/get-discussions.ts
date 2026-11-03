@@ -7,7 +7,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { D2LApiClient, DEFAULT_CACHE_TTLS } from "../api/index.js";
 import { GetDiscussionsSchema } from "./schemas.js";
-import { toolResponse, sanitizeError, errorResponse } from "./tool-helpers.js";
+import { toolResponse, sanitizeError, errorResponse, isAuthUnavailable } from "./tool-helpers.js";
 import { convertHtmlToMarkdown } from "../utils/html-converter.js";
 import { log } from "../utils/logger.js";
 import { discussionUrl } from "../utils/deep-links.js";
@@ -142,6 +142,33 @@ export function registerGetDiscussions(
   );
 }
 
+/** Why one forum's topics or one topic's posts are missing from a multi-item view. */
+interface SubListUnavailable {
+  operation: "listTopics" | "listPosts";
+  status: number | null;
+  reason: string;
+}
+
+/**
+ * Describe a failed per-item read, or rethrow it when the session itself is
+ * unusable. A pending or expired sign-in fails every item the same way, and
+ * must fail the call so the user is told to sign in, not shown a course
+ * whose every forum looks empty.
+ */
+function subListUnavailable(
+  error: unknown,
+  operation: SubListUnavailable["operation"],
+  what: "topics" | "posts"
+): SubListUnavailable {
+  if (isAuthUnavailable(error)) throw error;
+  const status = typeof (error as any)?.status === "number" ? (error as any).status : null;
+  const reason =
+    status === 403
+      ? `Brightspace refused this account's request for the ${what}. They may exist; open the discussion in a browser to see what this account can read.`
+      : `Couldn't read the ${what}${status !== null ? ` (Brightspace answered ${status})` : ""}. They may exist; try again.`;
+  return { operation, status, reason };
+}
+
 /**
  * Get all forums for a course with their topics (no posts).
  */
@@ -154,16 +181,16 @@ async function getForumsOverview(
   const result = [];
 
   for (const forum of forums) {
-    // Fetch topics for each forum
-    let topics: D2LTopic[] = [];
+    // Fetch topics for each forum. A failed read is reported as null with a
+    // reason, never as [], so it can't pass for a forum with no topics.
+    let topics: D2LTopic[] | null;
+    let topicsUnavailable: SubListUnavailable | undefined;
     try {
       topics = await fetchForumTopics(apiClient, courseId, forum.ForumId);
-    } catch (error: any) {
-      if (error?.status === 403) {
-        log("DEBUG", `No access to topics for forum ${forum.ForumId}, skipping`);
-      } else {
-        log("DEBUG", `Failed to fetch topics for forum ${forum.ForumId}`, error);
-      }
+    } catch (error) {
+      topicsUnavailable = subListUnavailable(error, "listTopics", "topics");
+      log("INFO", `get_discussions: Topics for forum ${forum.ForumId} unavailable`, error);
+      topics = null;
     }
 
     result.push({
@@ -172,7 +199,8 @@ async function getForumsOverview(
       description: forum.Description?.Text ?? null,
       isLocked: forum.IsLocked,
       isHidden: forum.IsHidden,
-      topics: topics.map((t) => ({
+      ...(topicsUnavailable ? { topicsUnavailable } : {}),
+      topics: topics?.map((t) => ({
         topicId: t.TopicId,
         forumId: t.ForumId,
         name: t.Name,
@@ -182,7 +210,7 @@ async function getForumsOverview(
         isHidden: t.IsHidden,
         mustPostToParticipate: t.MustPostToParticipate,
         scoreOutOf: t.ScoreOutOf,
-      })),
+      })) ?? null,
     });
   }
 
@@ -227,24 +255,26 @@ async function getForumDetail(
   // Fetch posts for each topic
   const topicsWithPosts = [];
   for (const topic of topics) {
-    let posts: D2LPost[] = [];
+    // A failed posts read is reported as null with a reason, never as an
+    // empty thread, matching the single-topic view.
+    let formatted: ReturnType<typeof formatPosts> | null;
+    let postsUnavailable: SubListUnavailable | undefined;
     try {
       const postsPath = apiClient.le(
         courseId,
         `/discussions/forums/${forumId}/topics/${topic.TopicId}/posts/`
       );
-      posts = await apiClient.get<D2LPost[]>(postsPath, {
-        ttl: DEFAULT_CACHE_TTLS.announcements,
-      });
-    } catch (error: any) {
-      if (error?.status === 403) {
-        log("DEBUG", `No access to posts for topic ${topic.TopicId}, skipping`);
-      } else {
-        log("DEBUG", `Failed to fetch posts for topic ${topic.TopicId}`, error);
-      }
+      formatted = formatPosts(
+        await apiClient.get<D2LPost[]>(postsPath, {
+          ttl: DEFAULT_CACHE_TTLS.announcements,
+        })
+      );
+    } catch (error) {
+      postsUnavailable = subListUnavailable(error, "listPosts", "posts");
+      log("INFO", `get_discussions: Posts for topic ${topic.TopicId} unavailable`, error);
+      formatted = null;
     }
 
-    const formatted = formatPosts(posts);
     topicsWithPosts.push({
       topicId: topic.TopicId,
       name: topic.Name,
@@ -255,8 +285,9 @@ async function getForumDetail(
       isLocked: topic.IsLocked,
       mustPostToParticipate: topic.MustPostToParticipate,
       scoreOutOf: topic.ScoreOutOf,
-      postCount: formatted.length,
+      postCount: formatted?.length ?? null,
       posts: formatted,
+      ...(postsUnavailable ? { postsUnavailable } : {}),
     });
   }
 

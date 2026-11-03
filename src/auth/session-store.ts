@@ -12,7 +12,7 @@ import type { TokenData, SessionFile } from "../types/index.js";
 import { SessionStoreError } from "../utils/errors.js";
 import { acquireProcessLock, AuthenticationInProgressError } from "./auth-lock.js";
 import { hasSessionEncryptionKey, NativeCredentialStoreError } from "./credential-store.js";
-import { decrypt, readEncryptedRecord, saveEncryptedRecord, trashFile, type EncryptedRecord, type SecureStoreOptions } from "./encrypted-store.js";
+import { decrypt, readEncryptedRecord, saveEncryptedRecord, type EncryptedRecord, type SecureStoreOptions } from "./encrypted-store.js";
 
 const DEFAULT_SESSION_DIR = path.join(os.homedir(), ".d2l-session");
 
@@ -213,13 +213,18 @@ export class SessionStore {
     }
   }
 
+  /**
+   * Delete the saved session once it reads back. Not moved to Trash: nothing
+   * restores a session, and on Windows Trash's console helper opens a terminal
+   * window from the shared runtime, which has no console to run it in.
+   */
   async clear(): Promise<void> {
     try {
       await this.withWriteLock(async () => {
         const current = await this.readFile();
         if (!current) return;
         await this.decode(current);
-        await trashFile(this.sessionFilePath, this.options);
+        await fs.rm(this.sessionFilePath, { force: true });
       });
     } catch (error) {
       this.storeError("clear", error);
@@ -266,7 +271,7 @@ export class SessionStore {
     try {
       return await this.withWriteLock(async () => {
         if (!equalToken(await this.loadUnlocked(), expected)) return false;
-        await trashFile(this.sessionFilePath, this.options);
+        await fs.rm(this.sessionFilePath, { force: true });
         return true;
       });
     } catch (error) {

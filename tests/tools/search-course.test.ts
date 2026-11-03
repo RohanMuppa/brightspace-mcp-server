@@ -139,7 +139,7 @@ interface Harness {
 
 function setup(options: {
   rootModules?: unknown[] | (() => unknown[]);
-  moduleStructures?: Record<number, unknown[]>;
+  moduleStructures?: Record<number, unknown[] | (() => unknown[])>;
   news?: unknown[];
   forums?: unknown[] | (() => unknown[]);
   forumTopics?: Record<number, unknown[] | (() => unknown[])>;
@@ -163,7 +163,8 @@ function setup(options: {
       const moduleMatch = path.match(/\/content\/modules\/(\d+)\/structure\/$/);
       if (moduleMatch) {
         const id = Number(moduleMatch[1]);
-        return moduleStructures[id] ?? [];
+        const structure = moduleStructures[id] ?? [];
+        return typeof structure === "function" ? structure() : structure;
       }
       if (path.endsWith("/news/")) return newsFails ? newsFails() : news;
       if (path.endsWith("/discussions/forums/")) {
@@ -472,6 +473,25 @@ describe("search_course when signing in is unavailable", () => {
     const result = await call({ courseId: COURSE_ID, query: "midterm review", limit: 50 });
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toMatch(/Authentication expired/);
+  });
+
+  it("notes the modules whose contents couldn't be searched (#405)", async () => {
+    const { call } = setup({
+      moduleStructures: { [MODULE_ID]: () => { throw new ApiError(500, "/content/modules/10/structure/", "boom"); } },
+    });
+    const result = await call({ courseId: COURSE_ID, query: "midterm review", limit: 50 });
+    expect(result.isError).toBeUndefined();
+    const body = JSON.parse(result.content[0].text);
+    expect(body.note).toContain("content inside 1 module(s) whose contents couldn't be read");
+  });
+
+  it("fails the call when a module's structure hits a pending sign-in (#405)", async () => {
+    const { call } = setup({
+      moduleStructures: { [MODULE_ID]: () => { throw new TokenRefreshError("HTTP 503"); } },
+    });
+    const result = await call({ courseId: COURSE_ID, query: "midterm review", limit: 50 });
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toMatch(/could not renew your session/i);
   });
 
   it("still reports a server error on one source as a note, searching the rest", async () => {

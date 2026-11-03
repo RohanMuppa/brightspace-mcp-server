@@ -152,7 +152,7 @@ if (subcommand === 'setup') {
       const { resolveHttpPort, resolveHttpToken, startHttpServer } = await import("./http-server.js");
       const running = await startHttpServer({ runtime, token: resolveHttpToken(), port: resolveHttpPort() });
       stopServing = running.close;
-      log("INFO", `Brightspace MCP Server by Rohan Muppa — shared HTTP server listening on ${running.url} (26 tools, 4 prompts registered)`);
+      log("INFO", `Brightspace MCP Server by Rohan Muppa — shared HTTP server listening on ${running.url} (28 tools, 4 prompts registered)`);
       log("INFO", "Leave this running; every MCP client on this computer connects to that URL. Press Ctrl+C to stop.");
     } catch (error) {
       log("ERROR", "MCP Server failed to start", error);
