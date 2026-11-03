@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { registerGetMyGroups } from "../../src/tools/get-my-groups.js";
+import { registerGetMyGroups, memberNamesFromPage } from "../../src/tools/get-my-groups.js";
 import { ApiError } from "../../src/api/errors.js";
 
 const COURSE_ID = 202;
@@ -13,6 +13,16 @@ const CATEGORIES_PATH = `${LP_PREFIX}/${COURSE_ID}/groupcategories/`;
 const CLASSLIST_PATH = `${LE_PREFIX}/${COURSE_ID}/classlist/paged/`;
 const groupsPath = (categoryId: number) =>
   `${LP_PREFIX}/${COURSE_ID}/groupcategories/${categoryId}/groups/`;
+
+const memberPagePath = (groupId: number) =>
+  `/d2l/lms/group/group_member_list.d2l?ou=${COURSE_ID}&groupId=${groupId}`;
+
+/** The member table as the "View Members" page renders it: a sortable header row, then one name per row. */
+const memberPage = (names: string[]) =>
+  `<html><body><table id="z_a" class="d2l-table d2l-grid d_gl" type="list">` +
+  `<tr class="d_gh" header><th scope="col" class="d_hch "><d2l-table-col-sort-button>Learner</d2l-table-col-sort-button></th></tr>` +
+  names.map((name) => `<tr><td>${name}</td></tr>`).join("") +
+  `</table></body></html>`;
 
 const classlistUser = (id: number | string, name: string) => ({
   Identifier: id,
@@ -33,6 +43,8 @@ interface Routes {
   groupsError?: Record<number, Error>;
   classlist?: unknown;
   classlistError?: Error;
+  /** Member page HTML by group id; null models a session with no stored cookie. */
+  pages?: Record<number, string | null>;
 }
 
 function setup(routes: Routes) {
@@ -63,6 +75,13 @@ function setup(routes: Routes) {
       }
 
       throw new Error(`Unexpected path requested: ${path}`);
+    }),
+    getPage: vi.fn(async (path: string) => {
+      requested.push(path);
+      for (const [groupId, html] of Object.entries(routes.pages ?? {})) {
+        if (path === memberPagePath(Number(groupId))) return html;
+      }
+      throw new Error(`Unexpected page requested: ${path}`);
     }),
   };
 
@@ -160,6 +179,56 @@ describe("get_my_groups classlist access", () => {
       { userId: 7, name: null },
     ]);
     expect(payload.note).toMatch(/member names are null/i);
+  });
+
+  it("lists member names from each group's member page when the classlist is forbidden", async () => {
+    const { call, requested } = setup({
+      categories: [{ GroupCategoryId: 1, Name: "Project Groups" }],
+      groups: { 1: [{ GroupId: 10, Name: "Group A", Enrollments: [MY_ID, 7] }] },
+      classlistError: new ApiError(403, CLASSLIST_PATH, "Forbidden"),
+      pages: { 10: memberPage(["Grace Hopper", "Ada Lovelace"]) },
+    });
+
+    const payload = parse(await call({ courseId: COURSE_ID }));
+
+    expect(requested).toContain(memberPagePath(10));
+    expect(payload.groups[0].members).toEqual([
+      { userId: MY_ID, name: null },
+      { userId: 7, name: null },
+    ]);
+    expect(payload.groups[0].memberNames).toEqual(["Grace Hopper", "Ada Lovelace"]);
+    expect(payload.note).toMatch(/memberNames lists each group's members/);
+  });
+
+  it("leaves memberNames out when the member page can't be read", async () => {
+    const { call } = setup({
+      categories: [{ GroupCategoryId: 1, Name: "Project Groups" }],
+      groups: { 1: [
+        { GroupId: 10, Name: "Group A", Enrollments: [MY_ID, 7] },
+        { GroupId: 11, Name: "Group B", Enrollments: [MY_ID] },
+      ] },
+      classlistError: new ApiError(403, CLASSLIST_PATH, "Forbidden"),
+      pages: { 10: null, 11: "<html><body>Not the member list</body></html>" },
+    });
+
+    const payload = parse(await call({ courseId: COURSE_ID }));
+
+    expect(payload.groups.map((g: any) => g.memberNames)).toEqual([undefined, undefined]);
+    expect(payload.note).toMatch(/only user ids are listed\.$/);
+  });
+
+  it("never reads member pages when the classlist names everyone", async () => {
+    const { call, requested } = setup({
+      categories: [{ GroupCategoryId: 1, Name: "Project Groups" }],
+      groups: { 1: [{ GroupId: 10, Name: "Group A", Enrollments: [MY_ID] }] },
+      classlist: { Objects: [classlistUser(MY_ID, "Ada Lovelace")], Next: null },
+    });
+
+    const payload = parse(await call({ courseId: COURSE_ID }));
+
+    expect(payload.groups[0].members).toEqual([{ userId: MY_ID, name: "Ada Lovelace" }]);
+    expect(payload.groups[0].memberNames).toBeUndefined();
+    expect(requested).not.toContain(memberPagePath(10));
   });
 
   it("notes both an unread category and an unreadable classlist", async () => {
@@ -285,5 +354,19 @@ describe("get_my_groups schema validation", () => {
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toMatch(/courseId/);
     expect(requested).toEqual([]);
+  });
+});
+
+describe("memberNamesFromPage", () => {
+  it("reads one name per row, skipping the header and decoding entities", () => {
+    expect(memberNamesFromPage(memberPage(["Jos&#233; de Vries", "Ana &amp; Bo"]))).toEqual(["José de Vries", "Ana & Bo"]);
+  });
+
+  it("returns an empty list for a member table with no rows", () => {
+    expect(memberNamesFromPage(memberPage([]))).toEqual([]);
+  });
+
+  it("returns null for a page without the member table", () => {
+    expect(memberNamesFromPage("<html><body><p>Session expired</p></body></html>")).toBeNull();
   });
 });
