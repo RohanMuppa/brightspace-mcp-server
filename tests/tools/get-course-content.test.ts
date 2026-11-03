@@ -1,6 +1,9 @@
 import { describe, it, expect, vi } from "vitest";
 import { registerGetCourseContent } from "../../src/tools/get-course-content.js";
 import { flattenContentTree, rankEntries } from "../../src/tools/search-course.js";
+import { ApiError } from "../../src/api/index.js";
+import { TokenRefreshError } from "../../src/api/errors.js";
+import { AuthProcessError } from "../../src/auth/auth-runner.js";
 
 /**
  * A module whose structure lists itself is a cycle, and with no maxDepth the
@@ -364,13 +367,125 @@ describe("get_course_content embedded structure fallback", () => {
     expect(body.topicCount).toBe(1);
   });
 
-  it("still reports an empty module as empty when nothing was embedded", async () => {
+  it("reports children null with a reason, not an empty module, when nothing was embedded (#405)", async () => {
     const { call } = setupBrokenStructure(SELF_REFERENCING_MODULE);
 
     const body = JSON.parse((await call({ courseId: COURSE_ID })).content[0].text);
 
     expect(body.moduleCount).toBe(1);
+    expect(body.contentTree[0].children).toBeNull();
+    expect(body.contentTree[0].childrenUnavailable).toMatchObject({ status: 403 });
+    expect(body.contentTree[0].childrenUnavailable.reason).toMatch(/refused/);
+    expect(body.notice).toMatch(/1 module\(s\) couldn't be read/);
+    expect(body.notice).toMatch(/Do not report those modules as empty/);
+  });
+
+  it("omits childrenUnavailable and the notice when the embedded structure covered the failure", async () => {
+    const { call } = setupBrokenStructure(MODULE_WITH_EMBEDDED_STRUCTURE);
+
+    const body = JSON.parse((await call({ courseId: COURSE_ID })).content[0].text);
+
+    expect(body.contentTree[0]).not.toHaveProperty("childrenUnavailable");
+    expect(body).not.toHaveProperty("notice");
+  });
+});
+
+/**
+ * A module whose /structure/ call failed with nothing embedded used to come
+ * back as children: [], indistinguishable from a module with nothing in it,
+ * and a pending sign-in mid-walk produced a tree of empty modules (#405).
+ */
+describe("get_course_content unreadable module structure (#405)", () => {
+  function setupStructure(structure: () => unknown) {
+    const apiClient = {
+      le: (orgUnitId: number, p: string) => `/d2l/api/le/1.0/${orgUnitId}${p}`,
+      get: vi.fn(async (path: string) => {
+        if (path.endsWith("/content/userprogress/")) return [];
+        if (path.includes("/structure/")) return structure();
+        return [SELF_REFERENCING_MODULE];
+      }),
+    };
+    let handler: (args: unknown) => Promise<any>;
+    const server = {
+      registerTool: (_n: string, _m: unknown, fn: (args: unknown) => Promise<any>) => {
+        handler = fn;
+      },
+    };
+    registerGetCourseContent(server as any, apiClient as any);
+    return { call: (args: unknown) => handler!(args) };
+  }
+
+  it("still reports a module that answered with an empty list as empty", async () => {
+    const { call } = setupStructure(() => []);
+
+    const body = JSON.parse((await call({ courseId: COURSE_ID })).content[0].text);
+
     expect(body.contentTree[0].children).toEqual([]);
+    expect(body.contentTree[0]).not.toHaveProperty("childrenUnavailable");
+    expect(body).not.toHaveProperty("notice");
+  });
+
+  it("names the status of a server error and says to try again", async () => {
+    const { call } = setupStructure(() => {
+      throw new ApiError(500, "/content/modules/1/structure/", "boom");
+    });
+
+    const body = JSON.parse((await call({ courseId: COURSE_ID })).content[0].text);
+
+    expect(body.contentTree[0].children).toBeNull();
+    expect(body.contentTree[0].childrenUnavailable).toEqual({
+      status: 500,
+      reason: "Couldn't read this module's contents (Brightspace answered 500). It may hold items; try again.",
+    });
+  });
+
+  it("treats an answer that is not a list as unreadable", async () => {
+    const { call } = setupStructure(() => ({ unexpected: true }));
+
+    const body = JSON.parse((await call({ courseId: COURSE_ID })).content[0].text);
+
+    expect(body.contentTree[0].children).toBeNull();
+    expect(body.contentTree[0].childrenUnavailable.status).toBeNull();
+  });
+
+  it("keeps the unreadable module under a typeFilter instead of dropping it", async () => {
+    const { call } = setupStructure(() => {
+      throw new ApiError(500, "/content/modules/1/structure/", "boom");
+    });
+
+    const body = JSON.parse((await call({ courseId: COURSE_ID, typeFilter: "file" })).content[0].text);
+
+    expect(body.moduleCount).toBe(1);
+    expect(body.contentTree[0].childrenUnavailable).toBeDefined();
+  });
+
+  it("keeps the unreadable module under modifiedSince, children still null", async () => {
+    const { call } = setupStructure(() => {
+      throw new ApiError(500, "/content/modules/1/structure/", "boom");
+    });
+
+    const body = JSON.parse(
+      (await call({ courseId: COURSE_ID, modifiedSince: "2026-01-01T00:00:00Z" })).content[0].text
+    );
+
+    expect(body.moduleCount).toBe(1);
+    expect(body.contentTree[0].children).toBeNull();
+    expect(body.notice).toBeDefined();
+  });
+
+  it.each([
+    ["a pending MFA sign-in", () => new AuthProcessError("mfaPending", "Open Microsoft Authenticator and enter 42 within 5 minutes, then try again.", "42"), /42/],
+    ["a token that could not be renewed", () => new TokenRefreshError("HTTP 503"), /could not renew your session/i],
+    ["a 401 left over after signing in", () => new ApiError(401, "/content/modules/1/structure/", "Session expired"), /Authentication expired/],
+  ])("fails the call on %s instead of reporting an unreadable module", async (_label, makeError, message) => {
+    const { call } = setupStructure(() => {
+      throw makeError();
+    });
+
+    const result = await call({ courseId: COURSE_ID });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toMatch(message);
   });
 });
 
@@ -385,7 +500,7 @@ describe("get_course_content module descriptions (#152)", () => {
     });
     const body = JSON.parse((await call({ courseId: COURSE_ID })).content[0].text);
     const module = body.contentTree[0];
-    expect(module.children).toEqual([]);
+    expect(module.children).toBeNull();
     expect(module.description).toBe("[MOSFET recording](/d2l/common/dialogs/quickLink/quickLink.d2l?type=lti&ou=101)");
     expect(module.description).not.toContain("secret");
     const hits = rankEntries(flattenContentTree(body.contentTree), "MOSFET", 10);

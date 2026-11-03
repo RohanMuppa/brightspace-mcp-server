@@ -9,7 +9,7 @@ import { D2LApiClient, ApiError } from "../api/index.js";
 import { SearchCourseSchema } from "./schemas.js";
 import { toolResponse, sanitizeError, isAuthUnavailable } from "./tool-helpers.js";
 import { log } from "../utils/logger.js";
-import { fetchRootContent, buildContentTree } from "./get-course-content.js";
+import { fetchRootContent, buildContentTree, countUnreadableModules } from "./get-course-content.js";
 import { fetchCourseNews, isPublishedNewsItem, mapNewsItem } from "./get-announcements.js";
 import { fetchForums, fetchForumTopics } from "./get-discussions.js";
 
@@ -233,6 +233,10 @@ export function registerSearchCourse(
           const rootModules = await fetchRootContent(apiClient, courseId);
           const tree = await buildContentTree(apiClient, courseId, rootModules, new Map(), "all");
           entries.push(...flattenContentTree(tree));
+          const unreadable = countUnreadableModules(tree);
+          if (unreadable > 0) {
+            notes.push(`content inside ${unreadable} module(s) whose contents couldn't be read`);
+          }
         } catch (error) {
           // A pending or refused sign-in is not a source that failed: the
           // search never ran, and its answer carries what the user must do.
