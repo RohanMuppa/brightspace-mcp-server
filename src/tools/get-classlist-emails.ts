@@ -8,7 +8,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { D2LApiClient, DEFAULT_CACHE_TTLS } from "../api/index.js";
 import { fetchAllObjects } from "../api/paginate.js";
 import { GetClasslistEmailsSchema } from "./schemas.js";
-import { toolResponse, sanitizeError } from "./tool-helpers.js";
+import { toolResponse, toolResponseWithNotice, sanitizeError } from "./tool-helpers.js";
 import { log } from "../utils/logger.js";
 
 interface ClasslistUser {
@@ -58,6 +58,20 @@ export function registerGetClasslistEmails(
           }));
 
         log("INFO", `get_classlist_emails: ${emails.length} emails from ${users.length} users in course ${courseId}`);
+
+        // People whose email Brightspace hides are left out of the list. Say
+        // so, or a partial list reads as the whole class and an all-hidden
+        // course reads as an empty one.
+        const hidden = users.length - emails.length;
+        if (hidden > 0) {
+          const who = hidden === 1 ? "person" : "people";
+          const has = hidden === 1 ? "has" : "have";
+          return toolResponseWithNotice(
+            emails,
+            `${hidden} of ${users.length} ${who} in this course ${has} no email visible to you ` +
+            `(Brightspace hides it), so they are not listed.`
+          );
+        }
         return toolResponse(emails);
       } catch (error) {
         return sanitizeError(error);
