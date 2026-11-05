@@ -31,7 +31,8 @@ describe("MUN flow routing", () => {
   });
 });
 
-describe("MUN sign-in against copies of its pages", () => {
+// Same switch as browser-live.test.ts: CI installs with --ignore-scripts, so it has no Chromium.
+describe.runIf(process.env.BRIGHTSPACE_TEST_BROWSER === "1")("MUN sign-in against copies of its pages", () => {
   let browser: Browser;
   let context: BrowserContext;
   let page: Page;
