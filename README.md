@@ -30,14 +30,14 @@ Works with Claude Desktop, Claude Code, Cursor, ChatGPT Desktop, Windsurf, and a
    **On a Mac:** when Keychain asks whether `node` may use the saved Brightspace password, choose **Always Allow**, not just Allow. That lets later sign-ins (the `auth` command and questions from your AI app) read it without asking again.
 3. **Restart your AI app and ask it something** — the first question signs you in. If your phone asks you to approve a sign-in, approve it and ask again.
 
-At one of these schools, add the flag and skip typing the address: `--purdue`, `--suny`, `--western`, `--tudelft`, `--cuny`, `--leiden`, `--mcgill`, `--ngeeann`, `--javeriana`.
+At one of these schools, add the flag and skip typing the address: `--purdue`, `--suny`, `--western`, `--tudelft`, `--cuny`, `--leiden`, `--mcgill`, `--mun`, `--ngeeann`, `--javeriana`.
 
 **Rather have the AI install it for you?** Paste this into Claude Code, Cursor, Windsurf, Copilot, or Codex:
 
 ```
 Install brightspace-mcp-server for me by following
 https://github.com/RohanMuppa/brightspace-mcp-server/blob/main/LLMs.md
-(use --purdue at Purdue, --suny at SUNY, --tudelft at TU Delft, --cuny at CUNY, --leiden at Leiden, --mcgill at McGill, --ngeeann at Ngee Ann Polytechnic, or --javeriana at Javeriana Cali).
+(use --purdue at Purdue, --suny at SUNY, --tudelft at TU Delft, --cuny at CUNY, --leiden at Leiden, --mcgill at McGill, --mun at Memorial University, --ngeeann at Ngee Ann Polytechnic, or --javeriana at Javeriana Cali).
 ```
 
 The AI does everything it can by itself: it checks your computer, downloads the browser sign-in uses, and connects your AI apps. Then it gives you one command to run in a terminal. That command asks for your password and waits for you to approve the sign-in on your phone. That's the only part that needs you. Afterwards the AI checks that it can see your courses.
@@ -57,6 +57,7 @@ If your school uses D2L Brightspace, yes. These have automatic sign-in built in:
 | CUNY | CUNY Login, authenticator code each time | `--cuny` |
 | Leiden University | SURFconext → Microsoft | `--leiden` |
 | McGill University | Microsoft Entra | `--mcgill` |
+| Memorial University of Newfoundland | MUN Login (CAS, no two-factor when tested) | `--mun` |
 | Javeriana Cali | OneGate (password + authenticator code) | `--javeriana` |
 | Ngee Ann Polytechnic | Microsoft Entra | `--ngeeann` |
 | Any other D2L school | Paste your Brightspace address. If the login page isn't recognized, pick option 2 at setup's sign-in question so the page opens for you to finish by hand | none |

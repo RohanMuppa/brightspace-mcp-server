@@ -26,7 +26,7 @@ npx -y brightspace-mcp-server@latest setup --purdue --prepare --username <their 
 
 How to run it:
 
-- **School:** use the school's flag: `--purdue`, `--suny`, `--western`, `--tudelft`, `--cuny`, `--leiden`, `--mcgill`, `--ngeeann` or `--javeriana`. For any other school, use `--url <their Brightspace address>` instead.
+- **School:** use the school's flag: `--purdue`, `--suny`, `--western`, `--tudelft`, `--cuny`, `--leiden`, `--mcgill`, `--mun`, `--ngeeann` or `--javeriana`. For any other school, use `--url <their Brightspace address>` instead.
 - **SUNY campus:** add `--campus "<campus>"` if you know it. Otherwise stage 2 asks.
 - **Timeout:** allow several minutes. A first run can download Chromium (about 200 MB).
 
@@ -334,6 +334,7 @@ src/
     suny-sso.ts             SUNY campus selection
     cuny-sso.ts             CUNY Login (Oracle OAM) credentials and authenticator code
     mcgill-sso.ts           McGill myCourses SAML entry point, then shared Entra flow
+    mun-sso.ts              Memorial University landing button and CAS credentials
     javeriana-sso.ts        Javeriana Cali (MobilityGuard OneGate) credentials and authenticator code
     session-store.ts        AES-256-GCM token persistence and v1 migration
     browser-state-store.ts  Encrypted cookie and browser storage persistence
@@ -376,6 +377,7 @@ src/
 | `npx -y brightspace-mcp-server@latest setup --suny` | Setup with SUNY preset (also asks for campus) |
 | `npx -y brightspace-mcp-server@latest setup --cuny` | Setup with CUNY preset |
 | `npx -y brightspace-mcp-server@latest setup --mcgill` | Setup with McGill preset |
+| `npx -y brightspace-mcp-server@latest setup --mun` | Setup with Memorial University preset |
 | `npx -y brightspace-mcp-server@latest setup --ngeeann` | Setup with Ngee Ann Polytechnic preset |
 | `npx -y brightspace-mcp-server@latest setup --javeriana` | Setup with Javeriana Cali preset |
 | `npx -y brightspace-mcp-server@latest auth` | Manual reauth |
