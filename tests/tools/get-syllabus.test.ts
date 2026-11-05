@@ -425,3 +425,78 @@ describe("get_syllabus when signing in fails part-way", () => {
     expect(result.content[0].text).toBe(guidance);
   });
 });
+
+// Only a 404 means the course has no syllabus attachment. Any other failure
+// leaves that unknown, and the result must say so instead of `hasAttachment: false`.
+describe("get_syllabus when the attachment can't be read (#414)", () => {
+  let dir: string;
+
+  beforeEach(async () => {
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), "syllabus-"));
+  });
+
+  afterEach(async () => {
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  const failingWith = (error: Error) => () => {
+    throw error;
+  };
+
+  it("adds no unreadable flag when the attachment 404s", async () => {
+    const call = setup({ overview: EMPTY_OVERVIEW, toc: tocWith([]), ltiLinks: [] });
+    const result = await call();
+    expect(result.hasAttachment).toBe(false);
+    expect(result.attachmentUnreadable).toBeUndefined();
+    expect(result.attachmentNote).toBeUndefined();
+  });
+
+  it.each([
+    ["a 403", new ApiError(403, "/overview/attachment", "Forbidden")],
+    ["a 500", new ApiError(500, "/overview/attachment", "Server Error")],
+    ["a network failure", new TypeError("fetch failed")],
+  ])("flags the attachment as unreadable after %s", async (_label, error) => {
+    const call = setup({
+      overview: EMPTY_OVERVIEW,
+      toc: tocWith([]),
+      ltiLinks: [],
+      attachment: failingWith(error),
+    });
+    const result = await call();
+    expect(result.attachmentUnreadable).toBe(true);
+    expect(result.attachmentNote).toMatch(/could not be read/);
+    expect(result.attachmentNote).toMatch(/Do not report the course as having no syllabus attachment/);
+  });
+
+  it("says the download failed because the attachment was unreadable, not missing", async () => {
+    const call = setup({
+      overview: EMPTY_OVERVIEW,
+      toc: tocWith([]),
+      ltiLinks: [],
+      attachment: failingWith(new ApiError(500, "/overview/attachment", "Server Error")),
+    });
+    const result = await call({ downloadPath: dir });
+    expect(result.download.success).toBe(false);
+    expect(result.download.error).toMatch(/could not be read/);
+    expect(result.download.error).not.toMatch(/No attachment found/);
+  });
+
+  it("keeps the no-attachment download error when the attachment 404s", async () => {
+    const call = setup({ overview: EMPTY_OVERVIEW, toc: tocWith([]), ltiLinks: [] });
+    const result = await call({ downloadPath: dir });
+    expect(result.download.error).toBe("No attachment found for this course's syllabus.");
+  });
+
+  it("passes a rejected credential through instead of hiding it", async () => {
+    const guidance = "The pasted D2L_SESSION_COOKIE has expired. Copy a fresh pair.";
+    const call = setup({
+      overview: EMPTY_OVERVIEW,
+      toc: tocWith([]),
+      ltiLinks: [],
+      attachment: failingWith(new CredentialRejectedError("/overview/attachment", guidance)),
+    });
+    const result = await call.raw();
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toBe(guidance);
+  });
+});
