@@ -447,7 +447,7 @@ Build paths with `apiClient.lp()`, `le()`, or `leGlobal()` and nothing else. The
 
 ## Release workflow
 
-Publishing is automated by GitHub Actions on push to `main` when `version` in `package.json` changes, after the reusable CI matrix passes on macOS, Windows, and Linux. Keep `package.json`, the lockfile, and `server.json` versions aligned. Create the GitHub release only from the verified published commit.
+Publishing is automated by GitHub Actions on push to `main` when `version` in `package.json` changes, after the reusable CI matrix passes on macOS, Windows, and Linux. Keep `package.json`, the lockfile, and `server.json` versions aligned. After a publish, the `github-release` job tags that run's commit `v<version>` and creates its GitHub release with generated notes, so releases come only from the verified published commit.
 
 Always bump `version` in `package.json` in the same commit as any code or docs change. The Action skips publish if the version is unchanged, which means users will not receive the update via `npx ...@latest`.
 
