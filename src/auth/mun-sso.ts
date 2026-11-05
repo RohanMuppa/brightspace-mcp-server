@@ -109,10 +109,15 @@ export class MunSSOFlow {
         }
         await page.waitForTimeout(POLL_MS);
       }
+    } catch (error) {
+      if (error instanceof BrowserAuthError) throw error;
+      throw new UnsupportedAuthenticationError("MUN Login could not complete automatic sign-in.", error as Error);
     } finally {
       page.off("framenavigated", onNavigated);
     }
-    throw new UnsupportedAuthenticationError("MUN sign-in did not reach Brightspace. MUN may have changed its login pages.");
+    throw new UnsupportedAuthenticationError(
+      "MUN sign-in did not reach Brightspace. MUN may have changed its login pages or asked for a second factor; set D2L_HEADLESS=false to finish sign-in in the browser.",
+    );
   }
 
   private async enterCredentials(page: Page): Promise<void> {
@@ -120,6 +125,8 @@ export class MunSSOFlow {
     if (!this.config.password) throw new BrowserAuthError("Password is required for SSO login", "credentials");
     log("INFO", "Entering MUN Login credentials");
     await page.locator(SELECTORS.username).first().fill(this.config.username);
+    // Re-check right before the password goes in, in case the page moved since the poll.
+    if (secureHost(page.url()) !== CAS_HOST) return;
     await page.locator(SELECTORS.password).first().fill(this.config.password);
     // CAS answers with a full navigation, which can detach the button.
     await page.locator(SELECTORS.submit).first().click().catch(() => {});

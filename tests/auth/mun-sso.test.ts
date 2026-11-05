@@ -89,16 +89,25 @@ describe.runIf(process.env.BRIGHTSPACE_TEST_BROWSER === "1")("MUN sign-in agains
     "never sends the password to a look-alike page: %s",
     async (fake) => {
       let posted = false;
+      let typed: string | undefined;
       await context.route(fake, (route) => {
         if (route.request().method() === "POST") posted = true;
         return html(route, CAS_FORM);
       });
       await page.goto(fake);
       const flowUnderTest = new MunSSOFlow({ baseUrl: MUN_URL, username: USER, password: SECRET, headless: true });
-      const clock = setTimeout(() => { void page.close(); }, 1500);
-      await expect(flowUnderTest.login(page)).rejects.toThrow();
-      clearTimeout(clock);
+      const clock = setTimeout(() => {
+        void page.locator("#password").inputValue()
+          .then((value) => { typed = value; })
+          .finally(() => page.close());
+      }, 1500);
+      try {
+        await expect(flowUnderTest.login(page)).rejects.toThrow();
+      } finally {
+        clearTimeout(clock);
+      }
       expect(posted).toBe(false);
+      expect(typed).toBe("");
     },
   );
 
