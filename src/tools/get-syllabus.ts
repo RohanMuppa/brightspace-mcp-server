@@ -7,7 +7,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { D2LApiClient, ApiError, DEFAULT_CACHE_TTLS } from "../api/index.js";
 import { GetSyllabusSchema } from "./schemas.js";
-import { toolResponse, sanitizeError, errorResponse, isAuthUnavailable } from "./tool-helpers.js";
+import { toolResponse, sanitizeError, errorResponse, isAuthUnavailable, throwIfCredentialRejected } from "./tool-helpers.js";
 import { convertHtmlToMarkdown } from "../utils/html-converter.js";
 import { stripD2lSessionParams } from "../utils/session-params.js";
 import { secureDownload, readBodyCapped } from "../utils/download-helpers.js";
@@ -185,7 +185,7 @@ export function registerGetSyllabus(
     {
       title: "Get Course Syllabus",
       description:
-        "Fetch the syllabus/overview text and optional attachment for a course. Returns the course overview description as markdown. When the syllabus lives in an external LTI tool (e.g. Simple Syllabus), lists those sources in externalSyllabusSources; their contents cannot be read. If some of those lookups could not be completed (e.g. permission denied), externalSyllabusDiscovery says which, and an empty result is then not proof the course has no syllabus. If downloadPath is provided, also downloads the syllabus attachment (e.g. PDF); the directory must already exist, since it is not created for you. IMPORTANT: You MUST ask the user where they want to save the file before calling this tool with a downloadPath.",
+        "Fetch the syllabus/overview text and optional attachment for a course. Returns the course overview description as markdown. When the syllabus lives in an external LTI tool (e.g. Simple Syllabus), lists those sources in externalSyllabusSources; their contents cannot be read. If some of those lookups could not be completed (e.g. permission denied), externalSyllabusDiscovery says which, and an empty result is then not proof the course has no syllabus. If the attachment request fails with anything but a 404, attachmentUnreadable is true and an empty hasAttachment is not proof the course has no syllabus file. If downloadPath is provided, also downloads the syllabus attachment (e.g. PDF); the directory must already exist, since it is not created for you. IMPORTANT: You MUST ask the user where they want to save the file before calling this tool with a downloadPath.",
       inputSchema: GetSyllabusSchema,
     },
     async (args: any) => {
@@ -250,6 +250,9 @@ export function registerGetSyllabus(
         let attachmentBuffer: Buffer | null = null;
         let attachmentFilename = "syllabus";
         let hasAttachment = false;
+        // Set when the attachment request failed for any reason but a 404, so
+        // a failed read is never reported as "this course has no attachment".
+        let attachmentUnreadable = false;
 
         try {
           const response = await apiClient.getRaw(
@@ -289,10 +292,12 @@ export function registerGetSyllabus(
             }
           }
         } catch (error) {
+          throwIfCredentialRejected(error);
           if (error instanceof ApiError && error.status === 404) {
             hasAttachment = false;
           } else {
-            log("DEBUG", "Could not fetch syllabus attachment", error);
+            attachmentUnreadable = true;
+            log("INFO", `get_syllabus: Syllabus attachment for course ${courseId} could not be read`, error);
           }
         }
 
@@ -333,7 +338,9 @@ export function registerGetSyllabus(
         } else if (downloadPath && !attachmentBuffer) {
           download = {
             success: false,
-            error: "No attachment found for this course's syllabus.",
+            error: attachmentUnreadable
+              ? "The syllabus attachment could not be read from Brightspace, so nothing was saved. Try again, or download it from the course in Brightspace."
+              : "No attachment found for this course's syllabus.",
           };
         }
 
@@ -347,6 +354,14 @@ export function registerGetSyllabus(
           if (totalPages) result.totalPages = totalPages;
         } else {
           result.hasAttachment = hasAttachment;
+        }
+
+        if (attachmentUnreadable) {
+          result.attachmentUnreadable = true;
+          result.attachmentNote =
+            "The syllabus attachment could not be read from Brightspace, so this course may still have " +
+            "a syllabus file. Do not report the course as having no syllabus attachment: call " +
+            "get_syllabus again, or check the course overview in Brightspace.";
         }
 
         if (download) {
