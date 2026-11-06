@@ -4,6 +4,7 @@ import {
   fetchAssignmentRubrics,
 } from "../../src/tools/get-assignment-rubric.js";
 import { ApiError } from "../../src/api/errors.js";
+import { CredentialRejectedError } from "../../src/api/index.js";
 
 /**
  * get_assignments only ever surfaced rubric NAMES. This tool answers "what
@@ -193,6 +194,65 @@ describe("get_assignment_rubric: fallback to the rubrics endpoint", () => {
     const payload = parse(await call({ courseId: COURSE, assignmentId: FOLDER }));
     expect(payload.rubrics).toEqual([]);
     expect(payload.note).toMatch(/no rubric/i);
+    expect(payload.rubricsUnreadable).toBeUndefined();
+  });
+
+  it("keeps the no-rubric note when the rubrics endpoint 403s", async () => {
+    const { call } = setup({
+      folderResult: folderWith({ Rubrics: [] }),
+      rubricsListResult: forbidden,
+    });
+
+    const payload = parse(await call({ courseId: COURSE, assignmentId: FOLDER }));
+    expect(payload.rubrics).toEqual([]);
+    expect(payload.note).toBe("This assignment has no rubric attached.");
+    expect(payload.rubricsUnreadable).toBeUndefined();
+  });
+
+  it("never reports 'no rubric' when the rubrics endpoint fails with a 5xx", async () => {
+    const { call, requested } = setup({
+      folderResult: folderWith({ Rubrics: [] }),
+      rubricsListResult: () => {
+        throw new ApiError(503, "/rubrics", "Service Unavailable");
+      },
+    });
+
+    const result = await call({ courseId: COURSE, assignmentId: FOLDER });
+    expect(result.isError).toBeFalsy();
+    const payload = parse(result);
+    expect(payload.rubrics).toEqual([]);
+    expect(payload.rubricsUnreadable).toBe(true);
+    expect(payload.note).not.toMatch(/has no rubric attached/i);
+    expect(payload.note).toMatch(/could not be read/i);
+    // The outcome lookup is pointless without a rubric to merge it into.
+    expect(requested.some((p) => p.includes("/feedback/myFeedback/"))).toBe(false);
+  });
+
+  it("never reports 'no rubric' when the rubrics endpoint has a network error", async () => {
+    const { call } = setup({
+      folderResult: folderWith(null),
+      rubricsListResult: () => {
+        throw new Error("socket hang up");
+      },
+    });
+
+    const payload = parse(await call({ courseId: COURSE, assignmentId: FOLDER }));
+    expect(payload.rubricsUnreadable).toBe(true);
+    expect(payload.note).not.toMatch(/has no rubric attached/i);
+  });
+
+  it("passes a rejected credential through instead of hiding it", async () => {
+    const guidance = "The pasted D2L_SESSION_COOKIE has expired. Copy a fresh pair.";
+    const { call } = setup({
+      folderResult: folderWith({ Rubrics: [] }),
+      rubricsListResult: () => {
+        throw new CredentialRejectedError("/rubrics", guidance);
+      },
+    });
+
+    const result = await call({ courseId: COURSE, assignmentId: FOLDER });
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toBe(guidance);
   });
 });
 
