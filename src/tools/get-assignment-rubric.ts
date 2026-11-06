@@ -7,7 +7,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { D2LApiClient, ApiError, DEFAULT_CACHE_TTLS } from "../api/index.js";
 import { GetAssignmentRubricSchema } from "./schemas.js";
-import { toolResponse, sanitizeError } from "./tool-helpers.js";
+import { toolResponse, sanitizeError, throwIfCredentialRejected } from "./tool-helpers.js";
 import { feedbackText } from "../utils/feedback.js";
 import { log } from "../utils/logger.js";
 
@@ -164,6 +164,11 @@ const SCORING_METHOD_NAMES: Record<number, string> = {
 export interface GetAssignmentRubricResult {
   rubrics: OutputRubric[];
   note?: string;
+  /**
+   * True when the rubrics listing failed for a reason other than 403/404, so
+   * an empty `rubrics` is not proof the assignment has no rubric.
+   */
+  rubricsUnreadable?: boolean;
 }
 
 /** Rich text to plain markdown, or undefined when there is nothing to say. */
@@ -379,12 +384,22 @@ export async function fetchAssignmentRubrics(
       );
       rubrics = Array.isArray(raw) ? raw : raw?.Objects ?? [];
     } catch (error) {
-      if (error instanceof ApiError && (error.status === 403 || error.status === 404)) {
-        rubrics = [];
-      } else {
-        log("DEBUG", `Failed to fetch rubrics for assignment ${assignmentId} via the rubrics endpoint`, error);
-        rubrics = [];
+      throwIfCredentialRejected(error);
+      if (!(error instanceof ApiError && (error.status === 403 || error.status === 404))) {
+        // Only a 403/404 means "nothing to show here". Anything else (5xx,
+        // timeout, network) leaves it unknown whether a rubric is attached,
+        // so it must never be reported as "no rubric".
+        log("INFO", `get_assignment_rubric: Rubrics for assignment ${assignmentId} in course ${courseId} could not be read`, error);
+        return {
+          rubrics: [],
+          rubricsUnreadable: true,
+          note:
+            "The rubric for this assignment could not be read from Brightspace, so it may still have one. " +
+            "Do not report the assignment as having no rubric: call get_assignment_rubric again, or check " +
+            "the assignment in Brightspace.",
+        };
       }
+      rubrics = [];
     }
   }
 
@@ -431,7 +446,7 @@ export function registerGetAssignmentRubric(
       title: "Get Assignment Rubric",
       annotations: { readOnlyHint: true },
       description:
-        "Fetch the full grading rubric for a dropbox assignment: every criteria group, criterion, and achievement level with its points and description, plus the student's own graded outcome per criterion once it has been released. Use this when the user asks what a rubric wants, how an assignment will be graded, or why they got a particular score on a criterion.",
+        "Fetch the full grading rubric for a dropbox assignment: every criteria group, criterion, and achievement level with its points and description, plus the student's own graded outcome per criterion once it has been released. If the rubric lookup fails with anything but a 403/404, rubricsUnreadable is true and an empty rubrics list is not proof the assignment has no rubric. Use this when the user asks what a rubric wants, how an assignment will be graded, or why they got a particular score on a criterion.",
       inputSchema: GetAssignmentRubricSchema,
     },
     async (args: any) => {
