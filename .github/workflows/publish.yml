@@ -16,6 +16,7 @@ jobs:
       id-token: write
     outputs:
       published: ${{ steps.publish.outputs.published }}
+      version: ${{ steps.publish.outputs.version }}
     steps:
       - uses: actions/checkout@v7
 
@@ -32,6 +33,7 @@ jobs:
         id: publish
         run: |
           CURRENT=$(node -p "require('./package.json').version")
+          echo "version=$CURRENT" >> "$GITHUB_OUTPUT"
           PUBLISHED=$(npm view brightspace-mcp-server version 2>/dev/null || echo "0.0.0")
           if [ "$CURRENT" != "$PUBLISHED" ]; then
             npm publish --provenance --access public
@@ -43,6 +45,29 @@ jobs:
           fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  # Tags the commit npm just published and creates its GitHub release, so the
+  # repo's releases and "Latest" follow npm instead of being made by hand.
+  # Runs only after an actual npm publish, from that run's commit, and never
+  # blocks it. A release that already exists (a re-run) is left alone.
+  github-release:
+    needs: publish
+    if: needs.publish.outputs.published == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    continue-on-error: true
+    steps:
+      - name: Create the GitHub release for the published version
+        run: |
+          TAG="v${{ needs.publish.outputs.version }}"
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            echo "Release $TAG already exists, skipping"
+          else
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "$TAG" --generate-notes
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
 
   # Mirrors the npm release into the official MCP registry (registry.modelcontextprotocol.io)
   # so this server is discoverable there, not just on npm. Runs only after an actual npm
