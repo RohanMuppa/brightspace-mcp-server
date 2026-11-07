@@ -11,7 +11,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { D2LApiClient, ApiError, DEFAULT_CACHE_TTLS } from "../api/index.js";
 import { GetDropboxSubmissionsSchema } from "./schemas.js";
-import { toolResponse, sanitizeError, errorResponse } from "./tool-helpers.js";
+import { toolResponse, sanitizeError, errorResponse, throwIfCredentialRejected } from "./tool-helpers.js";
 import { log } from "../utils/logger.js";
 
 // D2L submission API types (instructor/TA view — every submitter, not just "mine")
@@ -169,6 +169,7 @@ export function registerGetDropboxSubmissions(
               const fb = await apiClient.get<D2LFeedback>(feedbackPath);
               feedbackMap.set(userId, fb);
             } catch (error) {
+              throwIfCredentialRejected(error);
               if (!(error instanceof ApiError && error.status === 404)) {
                 feedbackUnread.add(userId);
               }

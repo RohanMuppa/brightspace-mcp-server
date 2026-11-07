@@ -11,7 +11,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { D2LApiClient, ApiError } from "../api/index.js";
 import { GetDropboxUserSubmissionsSchema } from "./schemas.js";
-import { toolResponse, sanitizeError, errorResponse } from "./tool-helpers.js";
+import { toolResponse, sanitizeError, errorResponse, throwIfCredentialRejected } from "./tool-helpers.js";
 import { log } from "../utils/logger.js";
 
 interface D2LSubmissionFile {
@@ -113,6 +113,7 @@ export function registerGetDropboxUserSubmissions(
             );
             feedback = await apiClient.get<D2LFeedback>(feedbackPath);
           } catch (error) {
+            throwIfCredentialRejected(error);
             if (!(error instanceof ApiError && error.status === 404)) {
               feedbackUnread = true;
               log("INFO", "get_dropbox_user_submissions: Feedback could not be read", { courseId, folderId, userId });

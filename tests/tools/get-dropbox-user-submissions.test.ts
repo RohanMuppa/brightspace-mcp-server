@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { registerGetDropboxUserSubmissions } from "../../src/tools/get-dropbox-user-submissions.js";
-import { ApiError } from "../../src/api/errors.js";
+import { ApiError, CredentialRejectedError } from "../../src/api/errors.js";
 
 const COURSE_ID = 101;
 const FOLDER_ID = 55;
@@ -131,5 +131,20 @@ describe("get_dropbox_user_submissions", () => {
     expect(parsed.submissions).toHaveLength(1);
     expect(parsed.feedbackStatus).toBeNull();
     expect(parsed.note).toContain("Couldn't read this user's feedback");
+  });
+
+  it("fails the call when the feedback read hits a rejected credential", async () => {
+    const guidance = "Your D2L_ACCESS_TOKEN was rejected. Replace it and try again.";
+    const { call } = setup((path) => {
+      if (path.endsWith(`/submissions/users/${USER_ID}`)) return [submission()];
+      if (path.includes(`/feedback/user/${USER_ID}`)) {
+        throw new CredentialRejectedError("/feedback/user", guidance);
+      }
+      throw notFound();
+    });
+
+    const result = await call({ courseId: COURSE_ID, folderId: FOLDER_ID, userId: USER_ID });
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain(guidance);
   });
 });
