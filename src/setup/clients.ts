@@ -30,20 +30,84 @@ interface McpConfig {
   [key: string]: unknown;
 }
 
+const CLAUDE_DESKTOP_CONFIG = "claude_desktop_config.json";
+const USER_DATA_LEFT_MARKER = ".user-data-left.";
+
+function listDirs(dir: string): string[] {
+  try {
+    return fs.readdirSync(dir, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name);
+  } catch {
+    return [];
+  }
+}
+
+function mtimeMs(file: string): number {
+  try {
+    return fs.statSync(file).mtimeMs;
+  } catch {
+    return -1;
+  }
+}
+
+/**
+ * Newer Windows builds of Claude Desktop (the Microsoft Store package) keep
+ * their data outside the package, in %LOCALAPPDATA%\Claude-Data\<package>\,
+ * and no longer read %APPDATA%\Claude. They leave a
+ * `.user-data-left.<package>` file behind in %APPDATA%\Claude to say so.
+ * Writing to the old folder there registers the server in a file the app
+ * never reads, so Claude Code works and chats in the app do not.
+ *
+ * Returns the folder the app reads, or null when there is no Claude-Data
+ * folder (an install that still uses %APPDATA%\Claude). With several package
+ * folders, the one the marker names wins, then the one whose config the app
+ * wrote most recently (it rewrites the file as preferences change).
+ */
+export function findRelocatedClaudeDataDir(
+  home: string = os.homedir(),
+  env: NodeJS.ProcessEnv = process.env,
+): string | null {
+  const roaming = env.APPDATA || path.join(home, "AppData", "Roaming");
+  const local = env.LOCALAPPDATA || path.join(home, "AppData", "Local");
+  const root = path.join(local, "Claude-Data");
+  const packages = listDirs(root);
+  if (packages.length === 0) return null;
+
+  let markers: string[] = [];
+  try {
+    markers = fs.readdirSync(path.join(roaming, "Claude"))
+      .filter((name) => name.startsWith(USER_DATA_LEFT_MARKER))
+      .map((name) => name.slice(USER_DATA_LEFT_MARKER.length).toLowerCase());
+  } catch {
+    // No old folder at all is fine: the app may never have used it.
+  }
+  const marked = packages.find((name) => markers.includes(name.toLowerCase()));
+  if (marked) return path.join(root, marked);
+
+  const withConfig = packages
+    .map((name) => ({ name, mtime: mtimeMs(path.join(root, name, CLAUDE_DESKTOP_CONFIG)) }))
+    .filter((p) => p.mtime >= 0)
+    .sort((a, b) => b.mtime - a.mtime);
+  if (withConfig.length > 0) return path.join(root, withConfig[0].name);
+
+  return packages.length === 1 ? path.join(root, packages[0]) : null;
+}
+
 export function getClaudeDesktopConfigPath(
   platform: NodeJS.Platform = os.platform(),
   home: string = os.homedir(),
   env: NodeJS.ProcessEnv = process.env,
 ): string | null {
   if (platform === "darwin") {
-    return path.join(home, "Library", "Application Support", "Claude", "claude_desktop_config.json");
+    return path.join(home, "Library", "Application Support", "Claude", CLAUDE_DESKTOP_CONFIG);
   }
   if (platform === "win32") {
+    const relocated = findRelocatedClaudeDataDir(home, env);
+    if (relocated) return path.join(relocated, CLAUDE_DESKTOP_CONFIG);
     const appdata = env.APPDATA || path.join(home, "AppData", "Roaming");
-    return path.join(appdata, "Claude", "claude_desktop_config.json");
+    return path.join(appdata, "Claude", CLAUDE_DESKTOP_CONFIG);
   }
   if (platform === "linux") {
-    return path.join(home, ".config", "Claude", "claude_desktop_config.json");
+    return path.join(home, ".config", "Claude", CLAUDE_DESKTOP_CONFIG);
   }
   return null;
 }
