@@ -24,6 +24,7 @@ import {
 } from "../utils/file-validator.js";
 import { secureStreamDownload, readBodyCapped, expectedLength } from "../utils/download-helpers.js";
 import { DownloadError } from "../utils/download-errors.js";
+import { sensitiveDestination, sensitiveDestinationMessage } from "../utils/sensitive-paths.js";
 import { AUTH_COMMAND } from "../utils/commands.js";
 import { parseCoursePath, QUICKLINK_PATH } from "../utils/course-files.js";
 import { extractPdfText } from "../utils/pdf-extractor.js";
@@ -385,6 +386,10 @@ export function registerDownloadFile(
               );
             }
             throw error;
+          }
+          const protectedReason = await sensitiveDestination(downloadPath);
+          if (protectedReason) {
+            return errorResponse(sensitiveDestinationMessage(downloadPath, protectedReason), "destination");
           }
         }
 
