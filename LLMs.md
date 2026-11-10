@@ -204,7 +204,7 @@ Registered in `src/tools/index.ts`, schemas in `src/tools/schemas.ts`:
 | `get_calendar_events` | Course calendar events (exams, labs, schedule changes, hand-made deadlines) in a window, default the next 7 days |
 | `get_announcements` | Recent course announcements, with each one's attached files (`attachments`). `body` is the full post as markdown converted from D2L's Html (links, lists, tables and embedded-content addresses kept), falling back to D2L's plain Text only for a text-only post; `pagination.truncated` means more posts remain, never that a body was cut |
 | `get_syllabus` | Syllabus document for a course |
-| `get_course_content` | Module tree and content topics; module descriptions are Markdown preserving embedded links (with plain-text fallback); a module that links course files from its description also carries `courseFiles`, the paths to pass to `download_file` as `coursePath`; a module whose contents couldn't be read (and that the parent listing didn't embed) has `children: null` and a `childrenUnavailable` `{ status, reason }`, is kept under any `typeFilter` or `modifiedSince`, and the response adds a `notice`, so it never passes for an empty module. A pending or expired sign-in fails the call instead |
+| `get_course_content` | Module tree and content topics; a `ContentService` topic (embedded video) carries `embeddedMedia: true` and a `note` that `download_file` cannot fetch it; module descriptions are Markdown preserving embedded links (with plain-text fallback); a module that links course files from its description also carries `courseFiles`, the paths to pass to `download_file` as `coursePath`; a module whose contents couldn't be read (and that the parent listing didn't embed) has `children: null` and a `childrenUnavailable` `{ status, reason }`, is kept under any `typeFilter` or `modifiedSince`, and the response adds a `notice`, so it never passes for an empty module. A pending or expired sign-in fails the call instead |
 | `get_discussions` | Discussion forums and recent posts |
 | `search_course` | Keyword search across a course's content (modules/topics/file names), announcements, and discussion forums/topics in one call |
 | `get_roster` | Classlist for a course |
@@ -212,6 +212,7 @@ Registered in `src/tools/index.ts`, schemas in `src/tools/schemas.ts`:
 | `get_available_groups` | Groups the current user can still join themselves, with spots left and when sign-up closes |
 | `get_classlist_emails` | Emails of classmates and instructors |
 | `download_file` | Get a file attachment — course content (`topicId`), a file an instructor linked by path inside a module description rather than adding as a topic (`coursePath`: `Notes/Lecture 1.pdf`, the `quickLink.d2l?...type=coursefile` URL from `get_course_content`, or a `/content/enforced/<course folder>/...` link as `get_assignments` returns it; fetched with the saved web session, so it needs a signed-in session), a submission (`folderId` + `fileId`), or an announcement attachment (`newsId` + `fileId`). `downloadPath` is optional: omit it to get the file back inline in the tool response (extracted text for PDFs/Office docs, an image block for jpeg/png/gif/webp, capped at 10MB / 400k extracted characters), or pass the absolute path of an existing host directory (it is not created for you) to save it to disk (streamed, up to 2GB) |
+| `download_course_files` | Download every File topic of a course (`/content/toc`) into `downloadPath`, folders named after the modules; a rerun is a sync. `downloadPath` is required and must be an existing absolute directory (not created for you). `existing`: `skip` (default, never overwrites annotated copies) / `replace` / `keep_both` (`name (1).ext`, unless a copy of the same size exists); `moduleId` limits it to one module subtree; `dryRun` lists the plan and writes nothing; `maxFiles` (default 300, files already on disk don't count) leaves the rest as `notAttempted`. Retries 408/425/429/500/502/503/504 and network errors (about 1.5 s, then 4 s, Retry-After honoured up to 30 s); a lost session (401) stops the run with the sign-in guidance and counts the rest as not attempted; locked or unreleased topics count as `unavailable`, not failures. The text answer counts downloaded / already on disk / failed / not attempted and what was not a file (links, embedded media, broken, other). Not annotated read-only: it writes files |
 | `get_assignment_files` | Read the files attached to an assignment (spec, rubric, starter workbook) and return their text |
 | `get_announcement_files` | Read the files attached to an announcement (prompts, rubric, updated schedule) and return their text |
 | `get_video_transcript` | Transcript of a video embedded in course content (Kaltura, YouTube), with timestamps |
@@ -225,7 +226,7 @@ Registered in `src/tools/index.ts`, schemas in `src/tools/schemas.ts`:
 | `sign_in` | Start a sign-in from a chat: a no-op when the saved session is still valid, a visible browser window when no password is saved (headless has nothing to type, so it would only time out), otherwise a background sign-in whose MFA number it reports. Every answer says whether to call again, since a cooldown, a held prompt and an unapproved number all need waiting rather than a retry |
 | `sign_out` | Cancel a sign-in still waiting for MFA approval on this computer (this does not get a new prompt sooner: Microsoft sends the account no other until the one already sent expires, up to 5 minutes after it was sent), then delete this computer's saved Brightspace session for the configured account (the in-chat `auth --logout`) and clear this server's response cache and in-memory token. Call it ONLY when the user explicitly asks to sign out or log out of Brightspace — never on its own to fix an error, to get a new prompt, or as part of another answer. Annotated `destructiveHint: true` (not read-only), so clients ask first. Plain-text result; no arguments |
 
-These twenty-seven are the whole surface. An available-update notice, when there is one, rides along as a second text block on the first successful result.
+These twenty-nine are the whole surface. An available-update notice, when there is one, rides along as a second text block on the first successful result.
 
 Of the `get_dropbox_*`/`download_dropbox_submission_file` tools above, `get_dropbox_submissions`, `get_dropbox_user_submissions`, `get_dropbox_feedback` (when given another user's or a group's id), and `download_dropbox_submission_file` are instructor/TA-side: they read every student's submissions and feedback for a course, which Brightspace only grants to course staff. A student account calling one of those gets a clear "Instructor or TA access required for this course" note (403) rather than a generic or broken-looking error. `get_dropbox_folders` and `get_rubrics_for_object` read the same folder-listing endpoint a student's own client uses, so they are not gated the same way. `get_dropbox_feedback` called with no `entityType`/`entityId` reads the student's own feedback (`feedback/user/{whoami id}`), which D2L documents as visible to the learner once released: a 403 or 404 there is reported as "not released / not graded", not as a missing staff role. A 404 (no folders, no submissions, folder not found) comes back as an empty list/null with an explanatory `note`, not a failure. They are read-only — there is no tool in this server that posts a grade or feedback back to Brightspace.
 
@@ -301,12 +302,18 @@ src/
   auth-cli.ts               Manual reauth (CLI subcommand `auth`; `auth --logout` ends the saved session)
   doctor.ts                 Beginner diagnostic (CLI subcommand `doctor`)
   update.ts                 Self-update checker
+  sync/
+    course-sync.ts          Whole-course download shared by `download_course_files` and `sync`: reads `/content/toc` once, plans folders and files, retries, stops on a lost session
+    names.ts                Cross-platform name sanitising (Windows-invalid characters, reserved names, 150-character cap, NFC) and case-insensitive `name (2).ext` dedupe
+    summary.ts              Compact plain-text summary of a sync result
+    sync-cli.ts             `sync` argument parsing, JSON/human output and exit codes
   tools/
     index.ts                Tool registry
     schemas.ts              Zod input schemas for every tool
     tool-helpers.ts         Shared helpers (course resolution, formatting)
     get-*.ts                One file per tool
-    download-file.ts        Binary download + file-type detection
+    download-file.ts        Binary download + file-type detection; `openContentTopic` is the topic download the course sync reuses
+    download-course-files.ts  `download_course_files` tool (thin wrapper over `sync/course-sync.ts`)
     content-availability.ts Shared release-window logic (hidden/locked/not_yet_open/ended)
     topic-availability.ts   Explains a download_file failure using topic/TOC availability metadata
   prompts/
@@ -351,7 +358,7 @@ src/
     config.ts               Resolved config (store + env fallback)
     course-filter.ts        Filter enrolled vs archived courses, and (currentOnly) vs out-of-term courses
     course-files.ts         Course-file path rules shared by download_file (`coursePath`) and get_course_content (`courseFiles`)
-    download-helpers.ts     Stream-to-disk with validation
+    download-helpers.ts     Stream-to-disk with validation; fails a body shorter than its Content-Length ("download incomplete", nothing left behind); `replaceExisting` renames over the old file
     browser-install.ts      Chromium check (prepare, doctor), install via the bundled Playwright, missing-browser hint
     file-validator.ts       Magic-byte file-type checks
     saved-session.ts        Read-only saved sign-in checks shared by doctor and prepare
@@ -382,6 +389,7 @@ src/
 | `npx -y brightspace-mcp-server@latest setup --javeriana` | Setup with Javeriana Cali preset |
 | `npx -y brightspace-mcp-server@latest auth` | Manual reauth |
 | `npx -y brightspace-mcp-server@latest auth --logout` | Delete this computer's saved session so the next call does a full sign-in. Keeps the password, `config.json`, and credential-store entries. Local only |
+| `npx -y brightspace-mcp-server@latest sync --course <id> --dest <dir> [--existing skip\|replace\|keep_both] [--module <id>] [--dry-run] [--json] [--max-files N]` | Download a whole course into folders named after its modules, using the saved sign-in. A rerun fetches only what is new. `--json` prints only the result object on stdout (progress and the summary go to stderr). Exit 0 all done, 1 something failed or was not attempted (a lost session included), 2 usage error. `sync --help` lists the flags |
 | `npx -y brightspace-mcp-server@latest doctor` | Diagnose a broken setup — Node version, Chromium, saved config, credential store, Brightspace reachability, saved sign-in, a real course-list call, and installed version, each as a ✓/✗ line with one plain-English next step, then one informational line on the 2FA shortcuts (remember this device, saved authenticator key). `--json` prints `{checks, allOk, notes}` instead |
 | `npx -y brightspace-mcp-server@latest` | Run the MCP server (registered in AI client config) |
 | `npx -y brightspace-mcp-server@latest` (default) | stdio relay. The first message starts (or reuses) one detached shared runtime per account, settings, and package version, under `<session dir>/shared-runtime/<hash>/` (`state.json`, `runtime.log`); every client sharing those settings shares its sign-in, session, and cache. Concurrent starts converge on one; it stops after `D2L_RUNTIME_IDLE_SECONDS` (default 600) with no request in progress and the next request starts it again. Sign-in progress lines go to `runtime.log`; each call's MFA challenge still reaches the calling client |
@@ -450,6 +458,8 @@ Build paths with `apiClient.lp()`, `le()`, or `leGlobal()` and nothing else. The
 ## Release workflow
 
 Publishing is automated by GitHub Actions on push to `main` when `version` in `package.json` changes, after the reusable CI matrix passes on macOS, Windows, and Linux. Keep `package.json`, the lockfile, and `server.json` versions aligned. After a publish, the `github-release` job tags that run's commit `v<version>` and creates its GitHub release with generated notes, so releases come only from the verified published commit.
+
+Publishing is serialized (`concurrency: publish-npm`, no cancelling) and the publish step runs `npm publish` only when `package.json`'s version is semver-greater than `npm view brightspace-mcp-server version`, so a run for an older commit that finishes late can no longer leave npm's `latest` on an older version.
 
 Always bump `version` in `package.json` in the same commit as any code or docs change. The Action skips publish if the version is unchanged, which means users will not receive the update via `npx ...@latest`.
 

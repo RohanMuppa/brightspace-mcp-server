@@ -73,7 +73,7 @@ School-specific quirks: [docs/sign-in.md](docs/sign-in.md#per-school-notes).
 | Assignments and rubrics | "What does the lab 4 spec actually ask for?" · "Why did I lose points on the analysis criterion?" · "Did I turn in HW 3?" (if Brightspace won't give students their own submission list, the assignment's feedback page is checked instead; when neither shows a submission it's reported as unknown, never as missing) |
 | Quizzes and exams | "Which quizzes close this week?" · "Is there a midterm in the gradebook that isn't on my assignments list?" (quizzes are collected from the quiz list, the course content, and the gradebook, so a closed quiz or one the list leaves out still shows up; each course says whether its quiz sources all answered, and if Brightspace refused one it's marked incomplete rather than passed off as everything; "complete" means every source answered, not that every quiz is guaranteed to be listed. A gradebook column linked to a quiz the list omits now shows up as a quiz with its dates and attempts instead of a bare grade-only row when the quiz can be read. Gradebook-only rows now also appear on tenants that send only the documented `GradeType` on grade columns; hidden grade columns, hidden assignments and inactive quizzes never produce one. Content quizzes beyond the first 30 per course are listed from the course content alone and the course is marked incomplete. Quiz rows may also say whether they are open, closed, or not yet open, and mark a quiz whose details Brightspace would not return; gradebook lookups for unlisted quizzes are capped at 20 per course, or 5 when the course's quiz tool can't be identified) |
 | Announcements | "Did any professor post something important today?" · "Read the file attached to today's announcement" |
-| Course content | "Find the midterm review slides" · "Download every PDF from Module 5" · "Search this course for office hours" · or just read a file inline instead of saving it |
+| Course content | "Find the midterm review slides" · "Download every PDF from Module 5" · "Save this whole course to a folder on my computer" (`download_course_files`, one folder per module; run it again later and it only fetches what is new) · "Search this course for office hours" · or just read a file inline instead of saving it |
 | Syllabus | "What's the late policy in ECE 264's syllabus?" (if the course keeps its syllabus in an external tool such as Simple Syllabus, you get the link to open instead) |
 | People | "Who are the TAs for ECE 264?" · "Who is in my project group?" |
 | Discussions | "Summarize the latest posts in the final project thread" |
@@ -81,6 +81,26 @@ School-specific quirks: [docs/sign-in.md](docs/sign-in.md#per-school-notes).
 | Calendar | "When is my midterm?" · "Is lab cancelled on Thursday?" |
 | For instructors and TAs | "Which students haven't submitted Lab 4 yet?" · "What feedback did I leave on this student's homework?" · "Download that student's submitted PDF" (students get a clear "instructor access required" note for these, but can read their own released feedback, below) |
 | Signing out | "Sign me out of Brightspace" (your AI app may ask you to confirm first; details under [When it asks you to sign in](#when-it-asks-you-to-sign-in)) |
+
+## Download a whole course
+
+Ask your assistant to save a course, or run it yourself from a terminal:
+
+```bash
+npx -y brightspace-mcp-server@latest sync --course 123456 --dest ~/Courses/ECE-264
+```
+
+Every file in the course's Content area is saved into folders named after its modules. Running it again downloads only what is new: files already there are left alone, so your annotated copies are never overwritten. Options:
+
+| Option | What it does |
+|--------|--------------|
+| `--existing skip\|replace\|keep_both` | What to do with a file that is already there. `skip` (default) leaves it, `replace` downloads it again, `keep_both` saves a differing copy as `name (1).ext` |
+| `--module <id>` | Only that module and the modules inside it |
+| `--dry-run` | List what would be downloaded and download nothing |
+| `--max-files <n>` | Most files in one run (default 300); run it again to continue |
+| `--json` | Print the result as JSON on stdout (progress goes to stderr), for scripts and schedulers |
+
+It exits 0 when everything was done, 1 if a file failed or was not attempted (including a sign-in that expired partway; files already saved are kept), and 2 for a usage error. Web links, embedded videos, quizzes and locked items are not files; the result counts them so they are not mistaken for missing downloads.
 
 ## Prompts
 
