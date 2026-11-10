@@ -11,6 +11,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { D2LApiClient } from "../api/index.js";
 import { SyncInputError, syncCourse, type ExistingMode, type SyncResult } from "./course-sync.js";
+import { sanitizeError } from "../tools/tool-helpers.js";
 import { summarizeSync } from "./summary.js";
 
 export const SYNC_USAGE = `Usage: brightspace-mcp-server sync --course <id> --dest <dir> [options]
@@ -112,6 +113,12 @@ export interface SyncCliDeps {
   sleep?: (ms: number) => Promise<void>;
 }
 
+/** One printable line of at most 300 characters: no control or escape characters from whatever text came back. */
+export function cleanLine(text: string): string {
+  const flat = text.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, " ").trim();
+  return flat.length > 300 ? `${flat.slice(0, 297)}...` : flat;
+}
+
 const exitCodeFor = (result: SyncResult): number =>
   result.failed.length === 0 && result.notAttempted === 0 && !result.authError ? 0 : 1;
 
@@ -147,7 +154,7 @@ export async function runSync(argv: string[], io: SyncCliIO, deps: SyncCliDeps):
       sleep: deps.sleep,
       onProgress: (event) => {
         const detail = event.type === "failed" ? `: ${event.error}` : event.bytes !== undefined ? ` (${event.bytes} bytes)` : "";
-        io.stderr(`${event.type} ${event.path}${detail}\n`);
+        io.stderr(`${cleanLine(`${event.type} ${event.path}${detail}`)}\n`);
       },
     });
     if (args.json) {
@@ -158,8 +165,10 @@ export async function runSync(argv: string[], io: SyncCliIO, deps: SyncCliDeps):
     }
     return exitCodeFor(result);
   } catch (error) {
-    if (error instanceof SyncInputError) return report(error.message, 2);
-    return report(`Could not sync the course: ${error instanceof Error ? error.message : String(error)}`, 1);
+    if (error instanceof SyncInputError) return report(cleanLine(error.message), 2);
+    // The tools' own wording for each kind of failure; the raw message may carry a response body or URL.
+    const first = sanitizeError(error).content[0];
+    return report(cleanLine(`Could not sync the course: ${first.type === "text" ? first.text : "unexpected error"}`), 1);
   }
 }
 

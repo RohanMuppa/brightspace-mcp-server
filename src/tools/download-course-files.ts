@@ -27,10 +27,10 @@ export function registerDownloadCourseFiles(server: McpServer, apiClient: D2LApi
         "Download every file in a course's Content area to a folder on the host computer, in sub-folders named after the course's modules. Use this when the user wants a whole course (or one module) saved, instead of calling download_file once per file. Ask the user where to save it before calling; never guess a directory. It is safe to run again: files already on disk are skipped by default, so a rerun fetches only what is new and never overwrites the user's annotated copies. Use dryRun first to preview a large course. The answer counts what was downloaded, skipped, failed and not attempted, and what was not a file (web links, embedded videos, broken items, locked items), so do not report those as missing. If the Brightspace session expires mid-run it stops with sign-in instructions and the files already saved are kept; sign in and call it again.",
       inputSchema: DownloadCourseFilesSchema,
     },
-    async (args: any) => {
+    async (args: any, extra?: any) => {
       try {
         log("DEBUG", "download_course_files tool called", { args });
-        const { courseId, downloadPath, existing, moduleId, dryRun, maxFiles } = DownloadCourseFilesSchema.parse(args);
+        const { courseId, downloadPath, existing, moduleId, dryRun, maxFiles, maxMinutes, maxTotalMB } = DownloadCourseFilesSchema.parse(args);
         validateContentId(courseId);
 
         // Same rules as download_file's disk mode: an absolute path to a directory that exists.
@@ -54,7 +54,33 @@ export function registerDownloadCourseFiles(server: McpServer, apiClient: D2LApi
 
         let result;
         try {
-          result = await syncCourse(apiClient, { courseId, destination: downloadPath, existing, moduleId, dryRun, maxFiles });
+          // A client that sent a progress token sees each file as it is handled, and a
+          // client that cancels the call (or a deadline) ends the run cleanly.
+          const progressToken = extra?._meta?.progressToken;
+          result = await syncCourse(apiClient, {
+            courseId,
+            destination: downloadPath,
+            existing,
+            moduleId,
+            dryRun,
+            maxFiles,
+            maxTotalBytes: maxTotalMB * 1024 * 1024,
+            deadlineMs: maxMinutes * 60_000,
+            signal: extra?.signal,
+            onProgress: progressToken === undefined || typeof extra?.sendNotification !== "function"
+              ? undefined
+              : (event) => {
+                  void extra.sendNotification({
+                    method: "notifications/progress",
+                    params: {
+                      progressToken,
+                      progress: event.done,
+                      total: event.total,
+                      message: `${event.type} ${JSON.stringify(event.path)}`,
+                    },
+                  }).catch(() => {});
+                },
+          });
         } catch (error) {
           if (error instanceof SyncInputError) return errorResponse(error.message, "invalidInput");
           throw error;

@@ -109,6 +109,10 @@ export const DownloadCourseFilesSchema = z.object({
     .describe("List the files that would be downloaded without downloading anything or creating any folder. Use it first on a large course."),
   maxFiles: z.coerce.number().int().min(1).max(5000).default(300)
     .describe("Most files to download in one call (default 300). Files already on disk do not count. The rest are reported as not attempted: call again to continue, since existing files are skipped."),
+  maxMinutes: z.coerce.number().int().min(1).max(120).default(8)
+    .describe("Wall-clock limit for this call in minutes (default 8). When it passes, the call stops cleanly and reports the rest as not attempted; call it again to continue, since files already on disk are skipped. Raise it only if the client allows long tool calls."),
+  maxTotalMB: z.coerce.number().int().min(1).max(1048576).default(5120)
+    .describe("Most megabytes to download in one call (default 5120, i.e. 5 GB). The rest is reported as not attempted; call again to continue."),
 });
 
 export const GetSyllabusSchema = z.object({

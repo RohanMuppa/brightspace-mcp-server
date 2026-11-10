@@ -164,7 +164,25 @@ describe("runSync", () => {
     fake.client.get.mockRejectedValue(new Error("boom"));
     const code = await runSync(["--course", "42", "--dest", dest], io(), { createClient: async () => fake.client });
     expect(code).toBe(1);
-    expect(err).toMatch(/could not|failed/i);
+    expect(err).toMatch(/could not sync the course/i);
+  });
+
+  it("does not echo a raw error message: it goes through the tools' wording, one clean short line", async () => {
+    fake = await fakeBrightspace(toc, {});
+    fake.client.get.mockRejectedValue(new Error(`secret-body \u001b[31mred\u001b[0m ${"x".repeat(2000)}`));
+    const code = await runSync(["--course", "42", "--dest", dest, "--json"], io(), { createClient: async () => fake.client });
+    expect(code).toBe(1);
+    expect(err).not.toContain("secret-body");
+    expect(err).not.toMatch(/[\u0000-\u0009\u000b-\u001f\u007f]/);
+    expect(JSON.parse(out).error.length).toBeLessThanOrEqual(300);
+  });
+
+  it("strips escape characters and truncates a long input error", async () => {
+    const code = await go(["--course", "42", "--dest", dest, "--module", "999"], {});
+    expect(code).toBe(2);
+    const { cleanLine } = await import("../../src/sync/sync-cli.js");
+    expect(cleanLine(`a\u001b[2Jb\nc${"z".repeat(500)}`).length).toBeLessThanOrEqual(300);
+    expect(cleanLine("a\u001b[2Jb\nc")).not.toMatch(/[\u0000-\u001f]/);
   });
 
   it("prints usage on stdout and exits 0 for --help", async () => {
