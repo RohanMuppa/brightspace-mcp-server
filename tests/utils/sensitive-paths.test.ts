@@ -1,8 +1,8 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { sensitiveDestination, sensitiveDestinationMessage } from "../../src/utils/sensitive-paths.js";
+import { downloadRootsFromEnv, sensitiveDestination, sensitiveDestinationMessage } from "../../src/utils/sensitive-paths.js";
 
 const posix = process.platform !== "win32";
 
@@ -144,5 +144,93 @@ describe("sensitiveDestination: allowed roots for tests", () => {
 describe("sensitiveDestinationMessage", () => {
   it("tells the user a folder to choose instead", () => {
     expect(sensitiveDestinationMessage("/etc", "x")).toContain("~/Documents/Brightspace");
+  });
+});
+
+describe("D2L_DOWNLOAD_ROOTS", () => {
+  const saved = process.env.D2L_DOWNLOAD_ROOTS;
+  afterEach(() => {
+    if (saved === undefined) delete process.env.D2L_DOWNLOAD_ROOTS;
+    else process.env.D2L_DOWNLOAD_ROOTS = saved;
+    vi.restoreAllMocks();
+  });
+  const withRoots = (...roots: string[]) => {
+    process.env.D2L_DOWNLOAD_ROOTS = roots.join(path.delimiter);
+  };
+
+  it("allows a destination inside a listed root, and the root itself", async () => {
+    withRoots(elsewhere);
+    expect(await check(elsewhere)).toBeNull();
+    expect(await check(path.join(elsewhere, "courses", "ECE"))).toBeNull();
+  });
+
+  it("still refuses what is outside the listed roots, and a hidden folder inside one", async () => {
+    withRoots(elsewhere);
+    const other = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "sensitive-other-")));
+    try {
+      expect(await check(other)).toMatch(/not inside your home/);
+    } finally {
+      await fs.rm(other, { recursive: true, force: true });
+    }
+    expect(await check(path.join(elsewhere, ".hidden"))).toMatch(/not inside your home/);
+  });
+
+  it("is not in force when the variable is unset or empty", async () => {
+    delete process.env.D2L_DOWNLOAD_ROOTS;
+    expect(await check(elsewhere)).toMatch(/not inside your home/);
+    process.env.D2L_DOWNLOAD_ROOTS = "";
+    expect(await check(elsewhere)).toMatch(/not inside your home/);
+  });
+
+  it("follows a symlinked root to its real path", async () => {
+    if (!posix) return;
+    const link = path.join(home, "linked-root");
+    await fs.symlink(elsewhere, link);
+    withRoots(link);
+    expect(await check(path.join(elsewhere, "x"))).toBeNull();
+  });
+
+  it("parses a path-delimiter list, ignoring blanks and spaces around entries", async () => {
+    const second = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "sensitive-second-")));
+    try {
+      expect(await downloadRootsFromEnv(` ${elsewhere} ${path.delimiter}${path.delimiter}${second}${path.delimiter}`, home)).toEqual([elsewhere, second]);
+      expect(await downloadRootsFromEnv(undefined, home)).toEqual([]);
+      expect(await downloadRootsFromEnv("", home)).toEqual([]);
+    } finally {
+      await fs.rm(second, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ["a relative path", () => "data/courses"],
+    ["the filesystem root", () => path.parse(process.cwd()).root],
+    ["the home directory itself", () => home],
+    ["a folder that holds the home directory", () => path.dirname(home)],
+    ["a hidden folder", () => path.join(elsewhere, ".secret")],
+    ["a folder inside a hidden folder", () => path.join(elsewhere, ".a", "b")],
+    ["a device path", () => "//?/data"],
+  ])("ignores %s with a warning, and does not allow a destination inside it", async (_label, entry) => {
+    const warn = vi.spyOn(console, "error").mockImplementation(() => {});
+    const value = entry();
+    withRoots(value);
+    expect(await downloadRootsFromEnv(value, home)).toEqual([]);
+    expect(warn.mock.calls.some((call) => String(call[0]).includes("D2L_DOWNLOAD_ROOTS"))).toBe(true);
+    expect(await check(path.join(elsewhere, "inside"))).toMatch(/not inside your home/);
+  });
+
+  it.runIf(posix)("ignores system folders", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    for (const dir of ["/etc", "/usr/local", "/System", "/Library", "/Applications", "/root"]) {
+      expect(await downloadRootsFromEnv(dir, home), dir).toEqual([]);
+    }
+  });
+
+  it("keeps the valid entries when others are ignored", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(await downloadRootsFromEnv(["relative", elsewhere, "/"].join(path.delimiter), home)).toEqual([elsewhere]);
+  });
+
+  it("names the variable in the refusal text", () => {
+    expect(sensitiveDestinationMessage("/data", "x")).toContain("D2L_DOWNLOAD_ROOTS");
   });
 });

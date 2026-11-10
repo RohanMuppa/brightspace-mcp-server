@@ -14,6 +14,7 @@
 
 import { realpath } from "node:fs";
 import { promisify } from "node:util";
+import { log } from "./logger.js";
 import os from "node:os";
 import path from "node:path";
 
@@ -71,6 +72,59 @@ const hidden = (components: string[]): boolean => components.some((c) => c.start
 
 const WINDOWS_SYSTEM_FOLDERS = new Set(["windows", "program files", "program files (x86)", "programdata", "system volume information", "$recycle.bin"]);
 
+const SYSTEM_FOLDERS_POSIX = ["/etc", "/usr", "/bin", "/sbin", "/lib", "/lib64", "/boot", "/dev", "/proc", "/sys", "/root", "/System", "/Library", "/Applications", "/private/etc"];
+
+/** Why an entry of D2L_DOWNLOAD_ROOTS cannot be used as an allowed root, or null when it can. */
+async function unusableRoot(entry: string, real: string, realHome: string): Promise<string | null> {
+  if (!path.isAbsolute(entry)) return "it is not an absolute path";
+  if (DEVICE_PREFIX.test(entry) || DEVICE_PREFIX.test(real)) return "it is a Windows device path";
+  if (path.parse(real).root === real) return "it is the root of a drive";
+  // A root that holds the home folder (/home, /Users) would allow other users' folders and the home itself.
+  if (below(realHome, real)) return "it contains your home folder";
+  if (hidden(path.relative(path.parse(real).root, real).split(path.sep))) return "it is inside a hidden folder";
+  for (const system of SYSTEM_FOLDERS_POSIX) {
+    if (below(real, system) || below(real, await resolveReal(system))) return "it is a system folder";
+  }
+  if (process.platform === "win32") {
+    const parts = path.relative(path.parse(real).root, real).split(path.sep);
+    if (WINDOWS_SYSTEM_FOLDERS.has(parts[0]?.toLowerCase() ?? "")) return "it is a system folder";
+    if (fold(path.parse(real).root) === fold(`${process.env.SystemDrive ?? "C:"}\\`)) return "it is on the system drive, outside your home folder";
+  }
+  return null;
+}
+
+const warnedRoots = new Set<string>();
+
+/**
+ * The extra allowed roots named by D2L_DOWNLOAD_ROOTS, a path.delimiter
+ * separated list, each resolved to its real path. It is read from the
+ * server's own environment, which a tool argument cannot set. An entry that
+ * would be unsafe (a relative path, a drive root, a hidden or system folder, a
+ * folder holding the home folder, a device path) is ignored with a warning.
+ */
+export async function downloadRootsFromEnv(value: string | undefined = process.env.D2L_DOWNLOAD_ROOTS, home: string = os.homedir()): Promise<string[]> {
+  const roots: string[] = [];
+  const realHome = await resolveReal(home);
+  for (const entry of (value ?? "").split(path.delimiter).map((e) => e.trim()).filter(Boolean)) {
+    let real: string;
+    try {
+      real = path.isAbsolute(entry) ? await resolveReal(entry) : entry;
+    } catch {
+      real = entry;
+    }
+    const reason = await unusableRoot(entry, real, realHome);
+    if (reason) {
+      if (!warnedRoots.has(entry)) {
+        warnedRoots.add(entry);
+        log("WARN", `[config] Ignoring D2L_DOWNLOAD_ROOTS entry ${JSON.stringify(entry)}: ${reason}.`);
+      }
+      continue;
+    }
+    roots.push(real);
+  }
+  return roots;
+}
+
 /**
  * Why `dir` may not be a download destination, or null when it may: it must
  * be inside the user's home folder (not the folder itself, no hidden folder in
@@ -102,7 +156,7 @@ export async function sensitiveDestination(dir: string, options: DestinationPoli
     return null;
   }
 
-  for (const allowed of policy.allowRoots ?? []) {
+  for (const allowed of [...(policy.allowRoots ?? []), ...(await downloadRootsFromEnv(undefined, policy.home))]) {
     const inside = below(real, await resolveReal(allowed));
     if (inside && !hidden(inside)) return null;
   }
@@ -127,5 +181,5 @@ export async function sensitiveDestination(dir: string, options: DestinationPoli
 
 /** The refusal shown for a protected destination. */
 export function sensitiveDestinationMessage(dir: string, reason: string): string {
-  return `Cannot save into ${dir}: ${reason}. Choose a folder of your own, such as ~/Documents/Brightspace.`;
+  return `Cannot save into ${dir}: ${reason}. Choose a folder of your own, such as ~/Documents/Brightspace, or add the folder to D2L_DOWNLOAD_ROOTS.`;
 }

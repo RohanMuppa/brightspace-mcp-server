@@ -287,7 +287,7 @@ const DOWNLOAD_FAILURE_GUIDANCE: Record<DownloadFailureKind, string> = {
     "Try again.",
   forbiddenDestination:
     "That folder is not an allowed place to save files: it is outside your home folder, or it is a hidden, system or application folder. " +
-    "Choose a folder of your own, such as ~/Documents/Brightspace.",
+    "Choose a folder of your own, such as ~/Documents/Brightspace, or add the folder to D2L_DOWNLOAD_ROOTS.",
 };
 
 /**
