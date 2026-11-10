@@ -72,7 +72,8 @@ describe("manifest: files this sync wrote", () => {
   it("records what it wrote in a manifest in the destination root", async () => {
     await run(xlsToc, { 5: xls });
     const manifest = JSON.parse(await fs.readFile(path.join(root, MANIFEST_NAME), "utf8"));
-    expect(manifest.courses["42"]["5"]).toEqual({ path: "M/Grades.xls", bytes: cfb().length });
+    const onDisk = await fs.stat(path.join(root, "M", "Grades.xls"));
+    expect(manifest.courses["42"]["5"]).toEqual({ path: "M/Grades.xls", bytes: cfb().length, size: onDisk.size, mtimeMs: onDisk.mtimeMs });
     expect((await fs.readdir(root)).filter((n) => n.includes(".tmp-"))).toEqual([]);
   });
 
@@ -116,6 +117,11 @@ describe("manifest: files this sync wrote", () => {
     const { result } = await run(toc, { 10: ok("a") }, { existing: "replace" });
     expect(await fs.readFile(outside, "utf8")).toBe("VICTIM");
     expect(result.downloaded.map((f) => f.path)).toEqual(["M/A.pdf"]);
+  });
+
+  it.runIf(process.platform !== "win32")("writes the manifest readable only by the user", async () => {
+    await run(xlsToc, { 5: xls });
+    expect((await fs.stat(path.join(root, MANIFEST_NAME))).mode & 0o777).toBe(0o600);
   });
 
   it("a dry run writes no manifest and no lock", async () => {
@@ -314,5 +320,82 @@ describe("protected destinations", () => {
     }
     expect(fake.tocReads()).toBe(0);
     expect(fake.requests.size).toBe(0);
+  });
+});
+
+describe("replace never overwrites a synced file the user has since changed", () => {
+  const toc = { Modules: [module_(1, "M", [fileTopic(10, url("A.pdf"))])] };
+  const target = () => path.join(root, "M", "A.pdf");
+  const synced = async () => {
+    await run(toc, { 10: ok("v1") });
+  };
+
+  it("replaces an untouched synced file", async () => {
+    await synced();
+    const fresh = pdf("v2", 300);
+    const { result } = await run(toc, { 10: { body: fresh } }, { existing: "replace" });
+    expect(result.downloaded).toHaveLength(1);
+    expect(await fs.readFile(target())).toEqual(fresh);
+  });
+
+  it("skips a file whose size changed (annotations added)", async () => {
+    await synced();
+    const annotated = Buffer.concat([pdf("v1"), Buffer.from("MY ANNOTATIONS")]);
+    await fs.writeFile(target(), annotated);
+    const { result, fake: used } = await run(toc, { 10: ok("v2", 300) }, { existing: "replace" });
+    expect(result.skippedExisting).toBe(1);
+    expect(result.downloaded).toEqual([]);
+    expect(await fs.readFile(target())).toEqual(annotated);
+    expect(used.requests.size).toBe(0);
+  });
+
+  it("skips a file edited to the same size, because its modification time moved", async () => {
+    await synced();
+    const same = Buffer.from(pdf("v1"));
+    same[12] = same[12] ^ 1;
+    await fs.writeFile(target(), same);
+    const later = new Date(Date.now() + 60_000);
+    await fs.utimes(target(), later, later);
+    const { result } = await run(toc, { 10: ok("v2", 300) }, { existing: "replace" });
+    expect(result.skippedExisting).toBe(1);
+    expect(await fs.readFile(target())).toEqual(same);
+  });
+
+  it("under keep_both, saves the new copy beside an edited file", async () => {
+    await synced();
+    const annotated = Buffer.concat([pdf("v1"), Buffer.from("MY ANNOTATIONS")]);
+    await fs.writeFile(target(), annotated);
+    const { result } = await run(toc, { 10: ok("v2", 900) }, { existing: "keep_both" });
+    expect(result.downloaded.map((f) => f.path)).toEqual(["M/A (1).pdf"]);
+    expect(await fs.readFile(target())).toEqual(annotated);
+  });
+
+  it("does not replace a file named by an entry that was written by hand", async () => {
+    const mine = pdf("my own");
+    await fs.mkdir(path.join(root, "M"));
+    await fs.writeFile(target(), mine);
+    const stat = await fs.stat(target());
+    for (const entry of [
+      { path: "M/A.pdf", bytes: mine.length },
+      { path: "M/A.pdf", bytes: mine.length, size: mine.length + 1, mtimeMs: stat.mtimeMs },
+      { path: "M/A.pdf", bytes: mine.length, size: mine.length, mtimeMs: stat.mtimeMs - 5000 },
+    ]) {
+      await fs.writeFile(path.join(root, MANIFEST_NAME), JSON.stringify({ courses: { 42: { 10: entry } } }));
+      const { result } = await run(toc, { 10: ok("v2", 300) }, { existing: "replace" });
+      expect(result.skippedExisting).toBe(1);
+      expect(await fs.readFile(target())).toEqual(mine);
+    }
+  });
+
+  it("still finds a file from an entry with no recorded state, but never replaces it", async () => {
+    await synced();
+    const manifest = JSON.parse(await fs.readFile(path.join(root, MANIFEST_NAME), "utf8"));
+    delete manifest.courses["42"]["10"].size;
+    delete manifest.courses["42"]["10"].mtimeMs;
+    await fs.writeFile(path.join(root, MANIFEST_NAME), JSON.stringify(manifest));
+    expect((await run(toc, {})).result.skippedExisting).toBe(1);
+    const { result } = await run(toc, { 10: ok("v2", 300) }, { existing: "replace" });
+    expect(result.skippedExisting).toBe(1);
+    expect(result.downloaded).toEqual([]);
   });
 });

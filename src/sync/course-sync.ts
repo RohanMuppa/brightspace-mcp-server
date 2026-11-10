@@ -21,7 +21,7 @@ import { sensitiveDestination, sensitiveDestinationMessage } from "../utils/sens
 import { log } from "../utils/logger.js";
 import { SyncInputError } from "./errors.js";
 import { acquireSyncLock } from "./lock.js";
-import { SyncManifest } from "./manifest.js";
+import { SyncManifest, unchangedSinceSync } from "./manifest.js";
 import { NameSet, fileNameFromTopic, sanitizeComponent, splitExtension } from "./names.js";
 
 export { SyncInputError } from "./errors.js";
@@ -492,6 +492,8 @@ async function runSync(
       let dir: string | null = null;
       let present = false;
       let owned = false;
+      // The file is still exactly what the sync wrote: only then may replace overwrite it.
+      let untouched = false;
       try {
         // A file this sync wrote is found by its topic, wherever it ended up and whatever it was named.
         const entry = manifest.get(courseId, file.topicId);
@@ -499,11 +501,13 @@ async function runSync(
           const parts = entry.path.split("/");
           const entryName = parts.pop()!;
           const entryDir = await locateFolder(root, parts, false);
-          if (entryDir && (await lstatOrNull(path.join(entryDir, entryName)))?.isFile()) {
+          const onDisk = entryDir ? await lstatOrNull(path.join(entryDir, entryName)) : null;
+          if (entryDir && onDisk?.isFile()) {
             segments = parts;
             name = entryName;
             dir = entryDir;
             present = owned = true;
+            untouched = unchangedSinceSync(entry, onDisk);
           }
         }
         if (!owned) {
@@ -533,8 +537,8 @@ async function runSync(
         fail(rel, `The path is too long (over ${budget} characters)`);
         continue;
       }
-      // Present but not written by this sync, or a replace of something this sync did not write: the user's own file.
-      if (present && (existing === "skip" || (existing === "replace" && !owned))) {
+      // Present and not (or no longer) exactly what this sync wrote: the user's own file, edited or not ours.
+      if (present && (existing === "skip" || (existing === "replace" && !untouched))) {
         result.skippedExisting++;
         emit({ type: "skipped", path: rel });
         continue;
@@ -558,7 +562,7 @@ async function runSync(
         const outcome = await withBackoff(
           () => downloadOne(apiClient, courseId, file.topicId, {
             root, dir, segments, name, saveAs,
-            replace: present && owned && existing === "replace",
+            replace: present && untouched && existing === "replace",
             compare: present && existing === "keep_both",
             remainingBytes: maxTotalBytes - totalBytes,
             signal: stop.signal,
@@ -571,7 +575,9 @@ async function runSync(
           const saved = [...segments, outcome.savedName].join("/");
           result.downloaded.push({ path: saved, bytes: outcome.bytes });
           totalBytes += outcome.bytes;
-          manifest.set(courseId, file.topicId, { path: saved, bytes: outcome.bytes });
+          // The file as left on disk, so a later edit by the user is noticed.
+          const written = await fs.stat(path.join(root, ...segments, outcome.savedName));
+          manifest.set(courseId, file.topicId, { path: saved, bytes: outcome.bytes, size: written.size, mtimeMs: written.mtimeMs });
           await manifest.save();
           emit({ type: "downloaded", path: saved, bytes: outcome.bytes });
           if (totalBytes >= maxTotalBytes) stopWith("max_total_bytes");

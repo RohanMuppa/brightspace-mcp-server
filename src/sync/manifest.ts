@@ -22,6 +22,19 @@ export interface ManifestEntry {
   /** Relative to the destination, with "/" separators. */
   path: string;
   bytes: number;
+  /** Size and modification time of the file as the sync left it. Absent in an entry that cannot vouch for the file. */
+  size?: number;
+  mtimeMs?: number;
+}
+
+/**
+ * True when the file is still exactly as the sync left it. A file the user has
+ * since edited (annotations) differs in size or modification time, and an
+ * entry with no recorded state (or one written by hand) matches nothing, so
+ * neither is ever overwritten.
+ */
+export function unchangedSinceSync(entry: ManifestEntry, stat: { size: number; mtimeMs: number }): boolean {
+  return entry.size !== undefined && entry.mtimeMs !== undefined && stat.size === entry.size && Math.abs(stat.mtimeMs - entry.mtimeMs) < 1;
 }
 
 /** A recorded path is read back from disk, so it is checked like any other input. */
@@ -47,9 +60,10 @@ export class SyncManifest {
         for (const [courseId, topics] of Object.entries(courses as Record<string, unknown>)) {
           if (!topics || typeof topics !== "object" || Array.isArray(topics)) continue;
           for (const [topicId, entry] of Object.entries(topics as Record<string, unknown>)) {
-            const { path: rel, bytes } = (entry ?? {}) as Partial<ManifestEntry>;
+            const { path: rel, bytes, size, mtimeMs } = (entry ?? {}) as Partial<ManifestEntry>;
             if (validRelativePath(rel) && typeof bytes === "number" && Number.isFinite(bytes)) {
-              (manifest.courses[courseId] ??= {})[topicId] = { path: rel, bytes };
+              const state = Number.isFinite(size) && Number.isFinite(mtimeMs) ? { size, mtimeMs } : {};
+              (manifest.courses[courseId] ??= {})[topicId] = { path: rel, bytes, ...state };
             }
           }
         }
@@ -83,7 +97,8 @@ export class SyncManifest {
   /** Write the manifest atomically, only if something changed. */
   async save(): Promise<void> {
     if (!this.changed) return;
-    await writeFileAtomic(this.file, `${JSON.stringify({ version: 1, courses: this.courses }, null, 1)}\n`);
+    // Only the user reads it: it says which of their files the sync may overwrite.
+    await writeFileAtomic(this.file, `${JSON.stringify({ version: 1, courses: this.courses }, null, 1)}\n`, { mode: 0o600 });
     this.changed = false;
   }
 }

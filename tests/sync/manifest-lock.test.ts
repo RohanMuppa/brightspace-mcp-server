@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { LOCK_NAME, MANIFEST_NAME, SyncManifest } from "../../src/sync/manifest.js";
+import { LOCK_NAME, MANIFEST_NAME, SyncManifest, unchangedSinceSync } from "../../src/sync/manifest.js";
 import { STALE_LOCK_MS, acquireSyncLock } from "../../src/sync/lock.js";
 import { SyncInputError } from "../../src/sync/errors.js";
 
@@ -32,6 +32,18 @@ describe("SyncManifest", () => {
     expect(again.get(42, 10)).toEqual({ path: "Week 1/A.pdf", bytes: 7 });
     expect(again.get(43, 10)).toEqual({ path: "Other/A.pdf", bytes: 8 });
     expect(again.get(42, 11)).toBeUndefined();
+  });
+
+  it("keeps recorded size and modification time, and tells an unchanged file from an edited one", async () => {
+    const manifest = await SyncManifest.load(dir);
+    manifest.set(1, 2, { path: "a.pdf", bytes: 10, size: 10, mtimeMs: 1000.5 });
+    await manifest.save();
+    const entry = (await SyncManifest.load(dir)).get(1, 2)!;
+    expect(entry).toEqual({ path: "a.pdf", bytes: 10, size: 10, mtimeMs: 1000.5 });
+    expect(unchangedSinceSync(entry, { size: 10, mtimeMs: 1000.5 })).toBe(true);
+    expect(unchangedSinceSync(entry, { size: 11, mtimeMs: 1000.5 })).toBe(false);
+    expect(unchangedSinceSync(entry, { size: 10, mtimeMs: 2000 })).toBe(false);
+    expect(unchangedSinceSync({ path: "a.pdf", bytes: 10 }, { size: 10, mtimeMs: 1000.5 })).toBe(false);
   });
 
   it("finds a path's owner case-insensitively", async () => {
