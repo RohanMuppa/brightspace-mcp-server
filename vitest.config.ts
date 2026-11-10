@@ -3,6 +3,8 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   test: {
     globals: true,
+    // No test may put a real notification on screen; notify tests pass their own env.
+    env: { D2L_NOTIFY: "0" },
     environment: "node",
     include: ["tests/**/*.test.ts"],
     coverage: {
