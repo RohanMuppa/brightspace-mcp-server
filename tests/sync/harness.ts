@@ -115,6 +115,8 @@ export async function listTree(dir: string): Promise<string[]> {
   const out: string[] = [];
   async function walk(current: string, prefix: string) {
     for (const entry of await fs.readdir(current, { withFileTypes: true })) {
+      // The sync's own bookkeeping, covered by its own tests.
+      if (!prefix && (entry.name === ".brightspace-sync.json" || entry.name === ".brightspace-sync.lock")) continue;
       const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
       if (entry.isDirectory()) {
         out.push(`${rel}/`);

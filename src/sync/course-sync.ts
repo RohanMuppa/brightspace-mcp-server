@@ -11,34 +11,44 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { ApiError, NetworkError, RateLimitError } from "../api/errors.js";
-import { retryAfterMsFrom } from "../api/retry.js";
 import type { D2LApiClient } from "../api/index.js";
 import { openContentTopic, parseContentDispositionFilename } from "../tools/download-file.js";
 import { isAuthUnavailable, sanitizeError } from "../tools/tool-helpers.js";
 import { DownloadError } from "../utils/download-errors.js";
 import { expectedLength, secureStreamDownload } from "../utils/download-helpers.js";
 import { DISK_MAX_FILE_SIZE } from "../utils/file-validator.js";
+import { sensitiveDestination, sensitiveDestinationMessage } from "../utils/sensitive-paths.js";
 import { log } from "../utils/logger.js";
+import { SyncInputError } from "./errors.js";
+import { acquireSyncLock } from "./lock.js";
+import { SyncManifest } from "./manifest.js";
 import { NameSet, fileNameFromTopic, sanitizeComponent, splitExtension } from "./names.js";
+
+export { SyncInputError } from "./errors.js";
 
 export type ExistingMode = "skip" | "replace" | "keep_both";
 
 export const DEFAULT_MAX_FILES = 300;
-
-/** A bad argument to the sync (unknown module, unusable destination, bad cap), as opposed to a failed request. */
-export class SyncInputError extends Error {}
-/** Pauses before the second and third attempt at a file. */
+export const DEFAULT_MAX_TOTAL_BYTES = 5 * 1024 * 1024 * 1024;
+/**
+ * Pauses before the second and third attempt at a file. The API client already
+ * retries 429, 5xx and network errors on the request itself; the sync retries
+ * only what it does not: a body that ends early or drops mid-stream, and 408/425.
+ */
 const RETRY_DELAYS_MS = [1500, 4000];
-/** A longer Retry-After is not waited out: the run would sit idle far past any client timeout. */
-const MAX_RETRY_AFTER_MS = 30_000;
-const TRANSIENT_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504]);
-const MAX_DEPTH = 64;
+const RETRYABLE_STATUSES = new Set([408, 425]);
+const MAX_DEPTH = 32;
+/** More modules and topics than any real course has: a table of contents past this is cut off. */
+const MAX_TOC_NODES = 50_000;
+/** Longest full path, in characters, kept on Windows (its classic limit is 260). */
+const WINDOWS_PATH_BUDGET = 250;
+const MIN_NAME_CHARS = 16;
 
 export interface SyncOptions {
   courseId: number;
   /** An existing directory. Module folders are created inside it. */
   destination: string;
-  /** What to do with a file already on disk. Default "skip". */
+  /** What to do with a file already on disk. Default "skip". Only files this sync wrote are ever replaced. */
   existing?: ExistingMode;
   /** Sync only this module and the modules inside it. */
   moduleId?: number;
@@ -46,10 +56,18 @@ export interface SyncOptions {
   dryRun?: boolean;
   /** Most files to download in one run. Default 300. */
   maxFiles?: number;
+  /** Most bytes to download in one run. Default 5 GB. */
+  maxTotalBytes?: number;
+  /** Stop cleanly when this aborts; the files not reached are reported as not attempted. */
+  signal?: AbortSignal;
+  /** Stop cleanly after this many milliseconds of wall-clock time. No limit when unset. */
+  deadlineMs?: number;
   /** Pauses between attempts at one file. Default 1.5 s, then 4 s. */
   retryDelaysMs?: number[];
   /** Replaced in tests so backoff costs no time. */
   sleep?: (ms: number) => Promise<void>;
+  /** Longest full path kept, shortening names to fit. Default 250 on Windows, unlimited elsewhere. */
+  pathBudget?: number;
   onProgress?: (event: SyncProgress) => void;
 }
 
@@ -58,7 +76,12 @@ export interface SyncProgress {
   path: string;
   bytes?: number;
   error?: string;
+  /** Files dealt with so far, and files in the plan. */
+  done: number;
+  total: number;
 }
+
+export type StopReason = "auth" | "cancelled" | "deadline" | "max_total_bytes";
 
 export interface NonFileCounts {
   link: number;
@@ -81,11 +104,15 @@ export interface SyncResult {
   planned?: string[];
   skippedExisting: number;
   failed: Array<{ path: string; error: string }>;
-  /** Files left alone because of the cap or a sign-in that stopped the run. */
+  /** Files left alone because of a cap, a deadline, a cancel or a sign-in that stopped the run. */
   notAttempted: number;
   nonFiles: NonFileCounts;
+  /** Why the run ended before the end of the plan, when it did (not set for the file cap). */
+  stopped?: StopReason;
   /** Set when the run stopped because the session is gone: the sign-in guidance. */
   authError?: string;
+  /** The table of contents was larger than the sync reads; the rest of it was ignored. */
+  tocTruncated?: boolean;
 }
 
 interface PlannedFile {
@@ -115,14 +142,26 @@ const topicIdOf = (topic: Record<string, unknown>): number | null => {
   return Number.isInteger(id) && id > 0 ? id : null;
 };
 
-/** The table of contents as folders and files, with every name made safe and unique. */
-function planFiles(toc: unknown, moduleId: number | undefined): { files: PlannedFile[]; nonFiles: NonFileCounts } {
+interface Plan {
+  files: PlannedFile[];
+  nonFiles: NonFileCounts;
+  truncated: boolean;
+}
+
+/** The table of contents as folders and files, every name made safe and unique, none longer than `cap` characters. */
+function planFiles(toc: unknown, moduleId: number | undefined, cap: number): Plan {
   const files: PlannedFile[] = [];
   const nonFiles: NonFileCounts = { link: 0, media: 0, broken: 0, other: 0, unavailable: 0 };
+  let nodes = 0;
+  let truncated = false;
 
   const addTopics = (topics: unknown, segments: string[], names: NameSet): void => {
     if (!Array.isArray(topics)) return;
     for (const raw of topics) {
+      if (++nodes > MAX_TOC_NODES) {
+        truncated = true;
+        return;
+      }
       const topic = record(raw);
       if (!topic) continue;
       const kind = classify(topic);
@@ -132,23 +171,31 @@ function planFiles(toc: unknown, moduleId: number | undefined): { files: Planned
         continue;
       }
       const title = typeof topic.Title === "string" ? topic.Title : "";
-      const name = names.add(fileNameFromTopic(topic.Url as string, title, `File ${topicId}`));
+      const name = names.add(sanitizeComponent(fileNameFromTopic(topic.Url as string, title, `File ${topicId}`), `File ${topicId}`, cap));
       files.push({ segments, name, topicId });
     }
   };
 
   const walk = (container: Record<string, unknown>, segments: string[], depth: number): void => {
-    const names = new NameSet();
+    const names = new NameSet(cap);
     const children: Array<{ module: Record<string, unknown>; segments: string[] }> = [];
-    if (Array.isArray(container.Modules) && depth <= MAX_DEPTH) {
-      for (const raw of container.Modules) {
-        const module = record(raw);
-        if (!module) continue;
-        const title = typeof module.Title === "string" ? module.Title : "";
-        const folder = names.add(sanitizeComponent(title, `Module ${module.ModuleId ?? module.Id ?? ""}`.trim()), true);
-        children.push({ module, segments: [...segments, folder] });
+    if (Array.isArray(container.Modules)) {
+      if (depth >= MAX_DEPTH) truncated = true;
+      else {
+        for (const raw of container.Modules) {
+          if (++nodes > MAX_TOC_NODES) {
+            truncated = true;
+            break;
+          }
+          const module = record(raw);
+          if (!module) continue;
+          const title = typeof module.Title === "string" ? module.Title : "";
+          const folder = names.add(sanitizeComponent(title, `Module ${module.ModuleId ?? module.Id ?? ""}`.trim(), cap), true);
+          children.push({ module, segments: [...segments, folder] });
+        }
       }
     }
+    // Folder names are taken before file names, so a file can never claim a module's name.
     addTopics(container.Topics, segments, names);
     for (const child of children) walk(child.module, child.segments, depth + 1);
   };
@@ -161,7 +208,20 @@ function planFiles(toc: unknown, moduleId: number | undefined): { files: Planned
     if (!found) throw new SyncInputError(`Module ${moduleId} is not in this course's table of contents.`);
     walk({ Modules: [found] }, [], 0);
   }
-  return { files, nonFiles };
+  return { files, nonFiles, truncated };
+}
+
+/** Plan, shortening names until the longest full path fits `budget` (when there is one). */
+function planWithinBudget(toc: unknown, moduleId: number | undefined, rootLength: number, budget: number): Plan {
+  let cap = 150;
+  let plan = planFiles(toc, moduleId, cap);
+  for (let round = 0; round < 6 && Number.isFinite(budget) && cap > MIN_NAME_CHARS; round++) {
+    const longest = Math.max(0, ...plan.files.map((f) => rootLength + 1 + [...f.segments, f.name].join("/").length));
+    if (longest <= budget) break;
+    cap = Math.max(MIN_NAME_CHARS, Math.floor((cap * (budget - rootLength)) / (longest - rootLength)));
+    plan = planFiles(toc, moduleId, cap);
+  }
+  return plan;
 }
 
 function findModule(container: Record<string, unknown>, moduleId: number, depth: number): Record<string, unknown> | null {
@@ -184,20 +244,32 @@ class RefusedFolder extends Error {}
  * destination cannot send a download somewhere else. Returns null for a folder
  * that does not exist yet, unless `create` is set.
  */
-async function locateFolder(root: string, segments: string[], create: boolean): Promise<string | null> {
+export async function locateFolder(root: string, segments: string[], create: boolean): Promise<string | null> {
   let current = root;
   for (const segment of segments) {
+    // One folder name at a time: a separator would make it several.
+    if (/[/\\\u0000]/.test(segment)) throw new RefusedFolder(`Folder "${segment}" would be outside the destination.`);
     const next = path.join(current, segment);
-    if (path.dirname(path.resolve(next)) !== path.resolve(current) || !path.resolve(next).startsWith(path.resolve(root) + path.sep)) {
+    // Containment by path.relative, so a destination that is a drive root or "/" works.
+    const rel = path.relative(root, next);
+    if (rel === "" || rel.split(path.sep)[0] === ".." || path.isAbsolute(rel)) {
       throw new RefusedFolder(`Folder "${segment}" would be outside the destination.`);
     }
     let stat;
     try {
       stat = await fs.lstat(next);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      const statCode = (error as NodeJS.ErrnoException).code;
+      if (statCode === "ENAMETOOLONG") throw new RefusedFolder("The path is too long for this filesystem.");
+      if (statCode !== "ENOENT") throw error;
       if (!create) return null;
-      await fs.mkdir(next);
+      try {
+        await fs.mkdir(next);
+      } catch (mkdirError) {
+        const code = (mkdirError as NodeJS.ErrnoException).code;
+        if (code === "ENAMETOOLONG" || code === "ENOENT") throw new RefusedFolder("The path is too long for this filesystem.");
+        throw mkdirError;
+      }
       current = next;
       continue;
     }
@@ -219,10 +291,10 @@ const lstatOrNull = async (target: string) => {
 
 const escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-/** The first "name (1).ext", "name (2).ext", ... that is not taken in `dir`. */
-async function freeCopyName(dir: string, name: string): Promise<string> {
+/** The first "name (n).ext" from `from` up that is not taken in `dir`. */
+async function freeNumberedName(dir: string, name: string, from: number): Promise<string> {
   const { stem, ext } = splitExtension(name);
-  for (let n = 1; ; n++) {
+  for (let n = from; ; n++) {
     const candidate = `${stem} (${n})${ext}`;
     if (!(await lstatOrNull(path.join(dir, candidate)))) return candidate;
   }
@@ -241,29 +313,32 @@ async function copySizes(dir: string, name: string): Promise<number[]> {
   return sizes;
 }
 
+/**
+ * Worth another attempt after a pause: what the API client does not retry
+ * itself. It already retries 429, 5xx and network errors on a request, so
+ * those are not repeated here (that would multiply the attempts).
+ */
 function isTransient(error: unknown): boolean {
   if (isAuthUnavailable(error)) return false;
-  if (error instanceof RateLimitError || error instanceof NetworkError) return true;
-  if (error instanceof ApiError) return TRANSIENT_STATUSES.has(error.status);
   if (error instanceof DownloadError) return error.kind === "incomplete";
+  if (error instanceof ApiError) return RETRYABLE_STATUSES.has(error.status);
+  if (error instanceof NetworkError) return false;
   if (error instanceof Error) {
     // What fetch throws when a body is cut or stalls mid-stream.
     const code = String((error.cause as { code?: unknown } | undefined)?.code ?? "");
-    return error.message === "terminated" || error.name === "TimeoutError" || error.name === "AbortError" || /^(ECONN|ETIMEDOUT|EPIPE|UND_ERR)/.test(code);
+    return error.message === "terminated" || error.name === "TimeoutError" || /^(ECONN|ETIMEDOUT|EPIPE|UND_ERR)/.test(code);
   }
   return false;
 }
 
 /** Run `attempt`, retrying a transient failure after each pause in `delays`. */
-async function withBackoff<T>(attempt: () => Promise<T>, delays: number[], sleep: (ms: number) => Promise<void>): Promise<T> {
+async function withBackoff<T>(attempt: () => Promise<T>, delays: number[], sleep: (ms: number) => Promise<void>, signal: AbortSignal): Promise<T> {
   for (let tried = 0; ; tried++) {
     try {
       return await attempt();
     } catch (error) {
-      if (tried >= delays.length || !isTransient(error)) throw error;
-      const asked = retryAfterMsFrom(error);
-      if (asked !== undefined && asked > MAX_RETRY_AFTER_MS) throw error;
-      await sleep(asked ?? delays[tried]);
+      if (signal.aborted || tried >= delays.length || !isTransient(error)) throw error;
+      await sleep(delays[tried]);
     }
   }
 }
@@ -280,6 +355,7 @@ function describeFailure(error: unknown): string {
     const first = sanitizeError(error).content[0];
     return first.type === "text" ? first.text : "Could not save the file";
   }
+  if ((error as NodeJS.ErrnoException | undefined)?.code === "ENAMETOOLONG") return "The path is too long for this filesystem";
   if (isTransient(error)) return "The connection to Brightspace dropped";
   return "Unexpected error";
 }
@@ -287,28 +363,39 @@ function describeFailure(error: unknown): string {
 type Outcome =
   | { kind: "saved"; savedName: string; bytes: number }
   | { kind: "duplicate" }
-  | { kind: "unavailable" };
+  | { kind: "unavailable" }
+  | { kind: "overBudget" };
 
 const sleepFor = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+const textOf = (error: unknown): string => {
+  const first = sanitizeError(error).content[0];
+  return first.type === "text" ? first.text : "Sign in to Brightspace and try again.";
+};
 
 /**
  * Download every File topic of a course into `destination`, folders named
  * after the modules. Files already on disk are left alone unless `existing`
- * says otherwise, so a rerun is a sync.
+ * says otherwise, so a rerun is a sync. A manifest in the destination records
+ * what the sync wrote: only those files are ever replaced, and a rerun finds
+ * them again whatever they ended up named.
  *
- * @throws Error for a bad destination or an unknown moduleId; the table of
- *   contents failing for any reason but a lost session is thrown too.
+ * @throws SyncInputError for a bad destination or cap, an unknown moduleId, or
+ *   a sync already running into the same destination; the table of contents
+ *   failing for any reason but a lost session is thrown too.
  */
 export async function syncCourse(apiClient: D2LApiClient, options: SyncOptions): Promise<SyncResult> {
-  const { courseId, moduleId, onProgress } = options;
   const existing = options.existing ?? "skip";
   const dryRun = options.dryRun === true;
   const maxFiles = options.maxFiles ?? DEFAULT_MAX_FILES;
-  const delays = options.retryDelaysMs ?? RETRY_DELAYS_MS;
-  const sleep = options.sleep ?? sleepFor;
+  const maxTotalBytes = options.maxTotalBytes ?? DEFAULT_MAX_TOTAL_BYTES;
   if (!Number.isInteger(maxFiles) || maxFiles < 1) throw new SyncInputError("maxFiles must be a whole number of at least 1.");
+  if (!Number.isFinite(maxTotalBytes) || maxTotalBytes < 1) throw new SyncInputError("maxTotalBytes must be a positive number.");
 
   const destination = path.resolve(options.destination);
+  // Names inside come from the course, so never into the home folder or a credential or system folder.
+  const protectedReason = await sensitiveDestination(destination);
+  if (protectedReason) throw new SyncInputError(sensitiveDestinationMessage(destination, protectedReason));
   let root: string;
   try {
     if (!(await fs.stat(destination)).isDirectory()) throw new SyncInputError(`Destination is not a directory: ${destination}`);
@@ -322,123 +409,224 @@ export async function syncCourse(apiClient: D2LApiClient, options: SyncOptions):
     } else throw error;
   }
 
-  const result: SyncResult = {
-    courseId,
-    destination,
-    existing,
-    dryRun,
-    downloaded: [],
-    ...(dryRun ? { planned: [] } : {}),
-    skippedExisting: 0,
-    failed: [],
-    notAttempted: 0,
-    nonFiles: { link: 0, media: 0, broken: 0, other: 0, unavailable: 0 },
-  };
-
-  // Read once, and fresh: a cached copy would hide what the instructor added since the last run.
-  let toc: unknown;
+  const release = dryRun ? undefined : await acquireSyncLock(root);
   try {
-    toc = await apiClient.get<unknown>(apiClient.le(courseId, "/content/toc"));
-  } catch (error) {
-    if (!isAuthUnavailable(error)) throw error;
-    result.authError = textOf(error);
-    return result;
+    return await runSync(apiClient, options, { existing, dryRun, maxFiles, maxTotalBytes, destination, root });
+  } finally {
+    await release?.();
   }
-  const plan = planFiles(toc, moduleId);
-  result.nonFiles = plan.nonFiles;
-
-  const fail = (rel: string, error: string): void => {
-    result.failed.push({ path: rel, error });
-    onProgress?.({ type: "failed", path: rel, error });
-  };
-
-  let attempted = 0;
-  for (const file of plan.files) {
-    const rel = [...file.segments, file.name].join("/");
-    if (result.authError) {
-      result.notAttempted++;
-      continue;
-    }
-
-    let dir: string | null;
-    try {
-      dir = await locateFolder(root, file.segments, false);
-    } catch (error) {
-      fail(rel, error instanceof RefusedFolder ? error.message : "Could not open the destination folder");
-      continue;
-    }
-    const present = dir === null ? null : await lstatOrNull(path.join(dir, file.name));
-    if (present?.isDirectory()) {
-      fail(rel, "A folder with this name is in the way");
-      continue;
-    }
-    if (present && existing === "skip") {
-      result.skippedExisting++;
-      onProgress?.({ type: "skipped", path: rel });
-      continue;
-    }
-    if (attempted >= maxFiles) {
-      result.notAttempted++;
-      continue;
-    }
-
-    // keep_both saves beside the existing file; replace and a new file use the planned name.
-    const saveAs = present && existing === "keep_both" ? await freeCopyName(dir!, file.name) : file.name;
-    if (dryRun) {
-      attempted++;
-      const plannedPath = [...file.segments, saveAs].join("/");
-      result.planned!.push(plannedPath);
-      onProgress?.({ type: "planned", path: plannedPath });
-      continue;
-    }
-    attempted++;
-
-    try {
-      const outcome = await withBackoff(
-        () => downloadOne(apiClient, courseId, file, { root, dir, saveAs, mode: existing, present: present !== null }),
-        delays,
-        sleep,
-      );
-      if (outcome.kind === "saved") {
-        const saved = [...file.segments, outcome.savedName].join("/");
-        result.downloaded.push({ path: saved, bytes: outcome.bytes });
-        onProgress?.({ type: "downloaded", path: saved, bytes: outcome.bytes });
-      } else if (outcome.kind === "duplicate") {
-        result.skippedExisting++;
-        onProgress?.({ type: "skipped", path: rel });
-      } else {
-        result.nonFiles.unavailable++;
-        onProgress?.({ type: "unavailable", path: rel });
-      }
-    } catch (error) {
-      if (isAuthUnavailable(error)) {
-        result.authError = textOf(error);
-        result.notAttempted++;
-      } else if (error instanceof RefusedFolder) {
-        fail(rel, error.message);
-      } else {
-        log("WARN", `Course sync: ${rel} failed`, error);
-        fail(rel, describeFailure(error));
-      }
-    }
-  }
-  log("INFO", `Course sync ${courseId}: ${result.downloaded.length} downloaded, ${result.skippedExisting} already present, ${result.failed.length} failed, ${result.notAttempted} not attempted`);
-  return result;
 }
 
-const textOf = (error: unknown): string => {
-  const first = sanitizeError(error).content[0];
-  return first.type === "text" ? first.text : "Sign in to Brightspace and try again.";
-};
+async function runSync(
+  apiClient: D2LApiClient,
+  options: SyncOptions,
+  settings: { existing: ExistingMode; dryRun: boolean; maxFiles: number; maxTotalBytes: number; destination: string; root: string },
+): Promise<SyncResult> {
+  const { courseId, moduleId, onProgress } = options;
+  const { existing, dryRun, maxFiles, maxTotalBytes, destination, root } = settings;
+  const delays = options.retryDelaysMs ?? RETRY_DELAYS_MS;
+  const sleep = options.sleep ?? sleepFor;
+  const budget = options.pathBudget ?? (process.platform === "win32" ? WINDOWS_PATH_BUDGET : Infinity);
+
+  // One signal for the caller's cancel and the deadline, told apart by the reason.
+  const stop = new AbortController();
+  const onCallerAbort = () => stop.abort("cancelled");
+  if (options.signal?.aborted) onCallerAbort();
+  else options.signal?.addEventListener("abort", onCallerAbort, { once: true });
+  const timer = options.deadlineMs === undefined ? undefined : setTimeout(() => stop.abort("deadline"), options.deadlineMs);
+  timer?.unref();
+
+  try {
+    const result: SyncResult = {
+      courseId,
+      destination,
+      existing,
+      dryRun,
+      downloaded: [],
+      ...(dryRun ? { planned: [] } : {}),
+      skippedExisting: 0,
+      failed: [],
+      notAttempted: 0,
+      nonFiles: { link: 0, media: 0, broken: 0, other: 0, unavailable: 0 },
+    };
+
+    // Read once, and fresh: a cached copy would hide what the instructor added since the last run.
+    let toc: unknown;
+    try {
+      toc = await apiClient.get<unknown>(apiClient.le(courseId, "/content/toc"));
+    } catch (error) {
+      if (!isAuthUnavailable(error)) throw error;
+      result.stopped = "auth";
+      result.authError = textOf(error);
+      return result;
+    }
+    const plan = planWithinBudget(toc, moduleId, root.length, budget);
+    result.nonFiles = plan.nonFiles;
+    if (plan.truncated) result.tocTruncated = true;
+    const manifest = await SyncManifest.load(root);
+
+    const total = plan.files.length;
+    let done = 0;
+    const emit = (event: Omit<SyncProgress, "done" | "total">): void => onProgress?.({ ...event, done, total });
+    const fail = (rel: string, error: string): void => {
+      result.failed.push({ path: rel, error });
+      emit({ type: "failed", path: rel, error });
+    };
+    const stopWith = (reason: StopReason): void => {
+      result.stopped ??= reason;
+    };
+    const abortedReason = (): StopReason => (stop.signal.reason === "deadline" ? "deadline" : "cancelled");
+
+    let attempted = 0;
+    let totalBytes = 0;
+    for (const file of plan.files) {
+      done++;
+      if (!result.stopped && stop.signal.aborted) stopWith(abortedReason());
+      if (result.stopped) {
+        result.notAttempted++;
+        continue;
+      }
+
+      let segments = file.segments;
+      let name = file.name;
+      let dir: string | null = null;
+      let present = false;
+      let owned = false;
+      try {
+        // A file this sync wrote is found by its topic, wherever it ended up and whatever it was named.
+        const entry = manifest.get(courseId, file.topicId);
+        if (entry) {
+          const parts = entry.path.split("/");
+          const entryName = parts.pop()!;
+          const entryDir = await locateFolder(root, parts, false);
+          if (entryDir && (await lstatOrNull(path.join(entryDir, entryName)))?.isFile()) {
+            segments = parts;
+            name = entryName;
+            dir = entryDir;
+            present = owned = true;
+          }
+        }
+        if (!owned) {
+          dir = await locateFolder(root, segments, false);
+          const found = dir === null ? null : await lstatOrNull(path.join(dir, name));
+          if (found?.isDirectory()) {
+            fail([...segments, name].join("/"), "A folder with this name is in the way");
+            continue;
+          }
+          if (found) {
+            const owner = manifest.ownerOf(courseId, [...segments, name].join("/"));
+            if (owner !== undefined && owner !== file.topicId) {
+              // The planned name is another topic's file (a topic added ahead of it shifted the numbering).
+              name = await freeNumberedName(dir!, name, 2);
+            } else {
+              present = true;
+            }
+          }
+        }
+      } catch (error) {
+        fail([...segments, name].join("/"), error instanceof RefusedFolder ? error.message : "Could not open the destination folder");
+        continue;
+      }
+
+      const rel = [...segments, name].join("/");
+      if (Number.isFinite(budget) && root.length + 1 + rel.length > budget) {
+        fail(rel, `The path is too long (over ${budget} characters)`);
+        continue;
+      }
+      // Present but not written by this sync, or a replace of something this sync did not write: the user's own file.
+      if (present && (existing === "skip" || (existing === "replace" && !owned))) {
+        result.skippedExisting++;
+        emit({ type: "skipped", path: rel });
+        continue;
+      }
+      if (attempted >= maxFiles) {
+        result.notAttempted++;
+        continue;
+      }
+
+      // keep_both saves beside the existing file; replace overwrites only what this sync wrote.
+      const saveAs = present && existing === "keep_both" ? await freeNumberedName(dir!, name, 1) : name;
+      attempted++;
+      if (dryRun) {
+        const plannedPath = [...segments, saveAs].join("/");
+        result.planned!.push(plannedPath);
+        emit({ type: "planned", path: plannedPath });
+        continue;
+      }
+
+      try {
+        const outcome = await withBackoff(
+          () => downloadOne(apiClient, courseId, file.topicId, {
+            root, dir, segments, name, saveAs,
+            replace: present && owned && existing === "replace",
+            compare: present && existing === "keep_both",
+            remainingBytes: maxTotalBytes - totalBytes,
+            signal: stop.signal,
+          }),
+          delays,
+          sleep,
+          stop.signal,
+        );
+        if (outcome.kind === "saved") {
+          const saved = [...segments, outcome.savedName].join("/");
+          result.downloaded.push({ path: saved, bytes: outcome.bytes });
+          totalBytes += outcome.bytes;
+          manifest.set(courseId, file.topicId, { path: saved, bytes: outcome.bytes });
+          await manifest.save();
+          emit({ type: "downloaded", path: saved, bytes: outcome.bytes });
+          if (totalBytes >= maxTotalBytes) stopWith("max_total_bytes");
+        } else if (outcome.kind === "duplicate") {
+          result.skippedExisting++;
+          emit({ type: "skipped", path: rel });
+        } else if (outcome.kind === "overBudget") {
+          stopWith("max_total_bytes");
+          result.notAttempted++;
+        } else {
+          result.nonFiles.unavailable++;
+          emit({ type: "unavailable", path: rel });
+        }
+      } catch (error) {
+        if (stop.signal.aborted) {
+          stopWith(abortedReason());
+          result.notAttempted++;
+        } else if (isAuthUnavailable(error)) {
+          stopWith("auth");
+          result.authError = textOf(error);
+          result.notAttempted++;
+        } else if (error instanceof RefusedFolder) {
+          fail(rel, error.message);
+        } else {
+          log("WARN", `Course sync: ${rel} failed`, error);
+          fail(rel, describeFailure(error));
+        }
+      }
+    }
+    log("INFO", `Course sync ${courseId}: ${result.downloaded.length} downloaded, ${result.skippedExisting} already present, ${result.failed.length} failed, ${result.notAttempted} not attempted`);
+    return result;
+  } finally {
+    clearTimeout(timer);
+    options.signal?.removeEventListener("abort", onCallerAbort);
+  }
+}
 
 /** One attempt at one file: the same topic download `download_file` makes, streamed into the folder. */
 async function downloadOne(
   apiClient: D2LApiClient,
   courseId: number,
-  file: PlannedFile,
-  where: { root: string; dir: string | null; saveAs: string; mode: ExistingMode; present: boolean },
+  topicId: number,
+  where: {
+    root: string;
+    dir: string | null;
+    segments: string[];
+    name: string;
+    saveAs: string;
+    replace: boolean;
+    compare: boolean;
+    remainingBytes: number;
+    signal: AbortSignal;
+  },
 ): Promise<Outcome> {
-  const opened = await openContentTopic(apiClient, courseId, file.topicId);
+  const opened = await openContentTopic(apiClient, courseId, topicId);
   if ("unavailable" in opened) return { kind: "unavailable" };
   const { response } = opened;
 
@@ -448,17 +636,20 @@ async function downloadOne(
     await response.body.cancel();
     throw new DownloadError("tooLarge", `File exceeds ${DISK_MAX_FILE_SIZE} bytes`);
   }
+  // Counted before a byte is written when the server says how big the file is.
+  if (expected !== undefined && expected > where.remainingBytes) {
+    await response.body.cancel();
+    return { kind: "overBudget" };
+  }
 
   // Under keep_both an existing copy of the same size is the same file.
-  const sameSize = where.mode === "keep_both" && where.present && where.dir !== null
-    ? await copySizes(where.dir, file.name)
-    : [];
+  const sameSize = where.compare && where.dir !== null ? await copySizes(where.dir, where.name) : [];
   if (expected !== undefined && sameSize.includes(expected)) {
     await response.body.cancel();
     return { kind: "duplicate" };
   }
 
-  const dir = await locateFolder(where.root, file.segments, true);
+  const dir = await locateFolder(where.root, where.segments, true);
   const result = await secureStreamDownload({
     targetDir: dir!,
     filename: where.saveAs,
@@ -466,7 +657,8 @@ async function downloadOne(
     body: response.body,
     maxBytes: DISK_MAX_FILE_SIZE,
     expectedBytes: expected,
-    replaceExisting: where.mode === "replace",
+    replaceExisting: where.replace,
+    signal: where.signal,
   });
   if (expected === undefined && sameSize.includes(result.size)) {
     await fs.rm(result.path, { force: true });

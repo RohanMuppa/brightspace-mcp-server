@@ -268,8 +268,14 @@ describe("syncCourse: existing files", () => {
     expect(await listTree(root)).toEqual(before);
   });
 
-  it("replaces an existing file with existing: replace", async () => {
-    await seed(pdf("old"));
+  /** A first run leaves the file, and the manifest entry that says the sync wrote it. */
+  const firstRun = async (body = pdf("old")) => {
+    await run(toc, { 10: { body } });
+    await fake!.close();
+  };
+
+  it("replaces a file this sync wrote with existing: replace", async () => {
+    await firstRun();
     const fresh = pdf("new", 200);
     const result = await run(toc, { 10: { body: fresh } }, { existing: "replace" });
     expect(result.downloaded).toEqual([{ path: "M/A.pdf", bytes: fresh.length }]);
@@ -277,12 +283,22 @@ describe("syncCourse: existing files", () => {
     expect(await listTree(root)).toEqual(["M/", "M/A.pdf"]);
   });
 
-  it("keeps the existing file when a replace download fails", async () => {
-    const mine = pdf("old");
+  it("never replaces the user's own file, which the manifest does not list", async () => {
+    const mine = pdf("my own copy");
     await seed(mine);
+    const result = await run(toc, { 10: { body: pdf("new", 200) } }, { existing: "replace" });
+    expect(result.skippedExisting).toBe(1);
+    expect(result.downloaded).toEqual([]);
+    expect(await fs.readFile(target())).toEqual(mine);
+    expect(fake!.requests.has(10)).toBe(false);
+  });
+
+  it("keeps the file when a replace download fails", async () => {
+    await firstRun();
+    const before = await fs.readFile(target());
     const result = await run(toc, { 10: { status: 403 } }, { existing: "replace" });
     expect(result.failed).toHaveLength(1);
-    expect(await fs.readFile(target())).toEqual(mine);
+    expect(await fs.readFile(target())).toEqual(before);
   });
 
   it("saves a differing copy as 'name (1).ext' with existing: keep_both", async () => {
@@ -322,7 +338,7 @@ describe("syncCourse: existing files", () => {
 describe("syncCourse: failures and retries", () => {
   const toc = { Modules: [module_(1, "M", [fileTopic(10, url("A.pdf")), fileTopic(11, url("B.pdf"))])] };
 
-  it.each([408, 425, 429, 500, 502, 503, 504])("retries a transient %i with the 1.5 s then 4 s backoff", async (status) => {
+  it.each([408, 425])("retries a transient %i with the 1.5 s then 4 s backoff", async (status) => {
     const result = await run(toc, { 10: [{ status }, { status }, ok("a")], 11: ok("b") });
     expect(result.downloaded).toHaveLength(2);
     expect(result.failed).toEqual([]);
@@ -331,29 +347,32 @@ describe("syncCourse: failures and retries", () => {
   });
 
   it("gives up after the delays are used and reports the file as failed", async () => {
-    const result = await run(toc, { 10: { status: 503 }, 11: ok("b") });
-    expect(result.failed).toEqual([{ path: "M/A.pdf", error: expect.stringMatching(/503/) }]);
+    const result = await run(toc, { 10: { status: 408 }, 11: ok("b") });
+    expect(result.failed).toEqual([{ path: "M/A.pdf", error: expect.stringMatching(/408/) }]);
     expect(result.downloaded.map((f) => f.path)).toEqual(["M/B.pdf"]);
     expect(fake!.requests.get(10)).toBe(3);
     expect(await listTree(root)).toEqual(["M/", "M/B.pdf"]);
   });
 
-  it("waits the server's Retry-After on a 429", async () => {
-    const result = await run(toc, { 10: [{ status: 429, retryAfter: 7 }, ok("a")], 11: ok("b") });
-    expect(result.downloaded).toHaveLength(2);
-    expect(sleeps).toEqual([7000]);
-  });
-
-  it("does not wait out an unreasonably long Retry-After", async () => {
-    const result = await run(toc, { 10: { status: 429, retryAfter: 600 }, 11: ok("b") });
+  it.each([429, 500, 502, 503, 504])("does not retry a %i itself: the API client already did", async (status) => {
+    const result = await run(toc, { 10: { status }, 11: ok("b") });
     expect(result.failed).toHaveLength(1);
+    expect(fake!.requests.get(10)).toBe(1);
     expect(sleeps).toEqual([]);
   });
 
-  it("retries a network error", async () => {
-    const result = await run(toc, { 10: [{ error: new NetworkError("socket hang up") }, ok("a")], 11: ok("b") });
-    expect(result.downloaded).toHaveLength(2);
-    expect(sleeps).toEqual([1500]);
+  it("does not retry a network error itself either", async () => {
+    const result = await run(toc, { 10: { error: new NetworkError("socket hang up") }, 11: ok("b") });
+    expect(result.failed).toEqual([{ path: "M/A.pdf", error: "Could not connect to Brightspace" }]);
+    expect(fake!.requests.get(10)).toBe(1);
+  });
+
+  it("makes at most three requests for one file however it fails", async () => {
+    for (const step of [{ status: 408 }, { short: true, body: pdf("cut", 1000) }] as Step[]) {
+      await run(toc, { 10: step, 11: ok("b") });
+      expect(fake!.requests.get(10)).toBe(3);
+      await fake!.close();
+    }
   });
 
   it("does not retry a 404 or 403", async () => {
