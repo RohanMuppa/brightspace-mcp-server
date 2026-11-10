@@ -618,3 +618,28 @@ describe("manifest writes are batched", () => {
     expect(Object.keys(manifest.courses["42"])).toHaveLength(3);
   });
 });
+
+describe("a killed earlier run", () => {
+  it("has its stale partial download removed when the next sync starts, and a fresh one left", async () => {
+    const uuid = "123e4567-e89b-12d3-a456-426614174000";
+    await fs.mkdir(path.join(root, "M"));
+    const stale = path.join(root, "M", `.download-${uuid}.part`);
+    const fresh = path.join(root, "M", `.download-${uuid.replace("123e", "ffff")}.part`);
+    await fs.writeFile(stale, "x");
+    await fs.writeFile(fresh, "y");
+    const old = new Date(Date.now() - 3 * 3600_000);
+    await fs.utimes(stale, old, old);
+    await run({ Modules: [module_(1, "M", [fileTopic(10, url("A.pdf"))])] }, { 10: ok() });
+    await expect(fs.access(stale)).rejects.toThrow();
+    await fs.access(fresh);
+  });
+
+  it("does not clean up in a dry run", async () => {
+    const stale = path.join(root, `.download-123e4567-e89b-12d3-a456-426614174000.part`);
+    await fs.writeFile(stale, "x");
+    const old = new Date(Date.now() - 3 * 3600_000);
+    await fs.utimes(stale, old, old);
+    await run({ Modules: [] }, {}, { dryRun: true });
+    await fs.access(stale);
+  });
+});

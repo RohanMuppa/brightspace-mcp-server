@@ -20,6 +20,7 @@ import { DISK_MAX_FILE_SIZE } from "../utils/file-validator.js";
 import { sensitiveDestination, sensitiveDestinationMessage } from "../utils/sensitive-paths.js";
 import { log } from "../utils/logger.js";
 import { SyncInputError } from "./errors.js";
+import { removeStalePartials } from "./cleanup.js";
 import { acquireSyncLock } from "./lock.js";
 import { SyncManifest, unchangedSinceSync, type ManifestEntry } from "./manifest.js";
 import { NameSet, fileNameFromTopic, sanitizeComponent, splitExtension } from "./names.js";
@@ -425,6 +426,8 @@ export async function syncCourse(apiClient: D2LApiClient, options: SyncOptions):
 
   const release = dryRun ? undefined : await acquireSyncLock(root);
   try {
+    // What a killed earlier run (kill -9) left behind, while no other sync holds this folder.
+    if (!dryRun) await removeStalePartials(root);
     return await runSync(apiClient, options, { existing, dryRun, maxFiles, maxTotalBytes, destination, root });
   } finally {
     await release?.();

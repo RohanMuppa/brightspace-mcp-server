@@ -143,6 +143,30 @@ describe("runSync", () => {
     expect(fake.tocReads()).toBe(0);
   });
 
+  it("says a destination that is an existing file is not a directory, exit 2, before mkdir", async () => {
+    const file = path.join(parent, "afile");
+    await fs.writeFile(file, "x");
+    const code = await go(["--course", "42", "--dest", file, "--json"], {});
+    expect(code).toBe(2);
+    expect(JSON.parse(out).error).toMatch(/not a directory/);
+    expect(await fs.readFile(file, "utf8")).toBe("x");
+  });
+
+  it("stops cleanly on an interrupt: exit 130, JSON still printed, no lock or partial file left", async () => {
+    const controller = new AbortController();
+    fake = await fakeBrightspace(toc, { 10: { body: pdf("a") }, 11: { body: pdf("b") } });
+    const serve = fake.client.getRaw.getMockImplementation()!;
+    fake.client.getRaw.mockImplementation(async (p: string, o: unknown) => {
+      controller.abort("cancelled");
+      return serve(p, o);
+    });
+    const code = await runSync(["--course", "42", "--dest", dest, "--json"], io(), { createClient: async () => fake.client, signal: controller.signal });
+    expect(code).toBe(130);
+    expect(JSON.parse(out).stopped).toBe("cancelled");
+    expect(err).toMatch(/Interrupted/);
+    expect((await fs.readdir(dest)).filter((n) => n.startsWith(".download-") || n.endsWith(".lock"))).toEqual([]);
+  });
+
   it("creates a missing destination for a real run", async () => {
     const fresh = path.join(parent, "fresh", "nested");
     const code = await go(["--course", "42", "--dest", fresh], { 10: { body: pdf("a") }, 11: { body: pdf("b") } });
@@ -160,7 +184,7 @@ describe("runSync", () => {
     expect(code).toBe(2);
     expect(create).not.toHaveBeenCalled();
     expect(err).toContain("Usage:");
-    expect(out).toBe("");
+    expect(argv.includes("--json") ? JSON.parse(out) : out).toEqual(argv.includes("--json") ? { error: "Unknown option: --bogus" } : "");
   });
 
   it("exits 2 for an unknown module and says so as JSON under --json", async () => {

@@ -111,6 +111,8 @@ export interface SyncCliIO {
 export interface SyncCliDeps {
   /** The API client on the saved sign-in. */
   createClient: () => Promise<D2LApiClient>;
+  /** Aborts the run (Ctrl-C, SIGTERM): it stops cleanly and the exit status is 130. */
+  signal?: AbortSignal;
   sleep?: (ms: number) => Promise<void>;
 }
 
@@ -131,6 +133,8 @@ export async function runSync(argv: string[], io: SyncCliIO, deps: SyncCliDeps):
     return 0;
   }
   if ("error" in args) {
+    // Under --json stdout carries the error as JSON as well, so a script parses one thing.
+    if (argv.includes("--json")) io.stdout(`${JSON.stringify({ error: cleanLine(args.error) })}\n`);
     io.stderr(`${args.error}\n\n${SYNC_USAGE}`);
     return 2;
   }
@@ -145,6 +149,9 @@ export async function runSync(argv: string[], io: SyncCliIO, deps: SyncCliDeps):
     // Checked before anything is created: a refused destination must leave no folder behind.
     const protectedReason = await sensitiveDestination(args.destination);
     if (protectedReason) return report(cleanLine(sensitiveDestinationMessage(args.destination, protectedReason)), 2);
+    // An existing file is not a destination: say so rather than failing inside mkdir.
+    const existing = await fs.stat(args.destination).catch(() => null);
+    if (existing && !existing.isDirectory()) return report(cleanLine(`Destination is not a directory: ${args.destination}`), 2);
     // A real run may create the destination; a dry run creates nothing.
     if (!args.dryRun) await fs.mkdir(args.destination, { recursive: true });
     const client = await deps.createClient();
@@ -156,6 +163,7 @@ export async function runSync(argv: string[], io: SyncCliIO, deps: SyncCliDeps):
       dryRun: args.dryRun,
       maxFiles: args.maxFiles,
       sleep: deps.sleep,
+      signal: deps.signal,
       onProgress: (event) => {
         const detail = event.type === "failed" ? `: ${event.error}` : event.bytes !== undefined ? ` (${event.bytes} bytes)` : "";
         io.stderr(`${cleanLine(`${event.type} ${event.path}${detail}`)}\n`);
@@ -166,6 +174,10 @@ export async function runSync(argv: string[], io: SyncCliIO, deps: SyncCliDeps):
       io.stderr(`${summarizeSync(result)}\n`);
     } else {
       io.stdout(`${summarizeSync(result)}\n`);
+    }
+    if (deps.signal?.aborted) {
+      io.stderr("Interrupted. Files already saved are kept; run it again to continue.\n");
+      return 130;
     }
     return exitCodeFor(result);
   } catch (error) {
@@ -180,11 +192,20 @@ export async function runSync(argv: string[], io: SyncCliIO, deps: SyncCliDeps):
 export async function main(version: string): Promise<void> {
   const { loadConfig } = await import("./../utils/config.js");
   const { createRuntime } = await import("../server.js");
+  // Ctrl-C and SIGTERM stop the run cleanly (no partial file, no lock left); a second one stops at once.
+  const interrupt = new AbortController();
+  const onSignal = (): void => {
+    if (interrupt.signal.aborted) process.exit(130);
+    interrupt.abort("cancelled");
+  };
+  process.on("SIGINT", onSignal);
+  process.on("SIGTERM", onSignal);
   const code = await runSync(process.argv.slice(3), {
     stdout: (text) => void process.stdout.write(text),
     stderr: (text) => void process.stderr.write(text),
   }, {
     createClient: async () => createRuntime(await loadConfig({ credentials: true }), version).apiClient,
+    signal: interrupt.signal,
   });
   process.exitCode = code;
 }
