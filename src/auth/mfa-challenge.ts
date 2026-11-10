@@ -18,6 +18,24 @@ import { statSync } from "node:fs";
 import * as path from "node:path";
 import { CHALLENGE_FILE } from "./auth-lock.js";
 
+/**
+ * How long one Microsoft number-match request stays approvable: a person has
+ * to find their phone, unlock it and read a prompt, and Microsoft expires the
+ * request itself at about this mark.
+ */
+export const MFA_APPROVAL_WINDOW_MS = 5 * 60 * 1000;
+
+/** Times a sign-in may ask Microsoft for a fresh number after one expires or is denied. */
+export const MFA_MAX_RESENDS = 2;
+
+/**
+ * The longest a sign-in waits on MFA: the first number's window plus a full
+ * window for each resent number (each resend restarts the clock, see
+ * purdue-sso.ts handleMFA). 15 minutes. Anything that bounds the sign-in
+ * from outside has to outlast this.
+ */
+export const MFA_MAX_WAIT_MS = MFA_APPROVAL_WINDOW_MS * (1 + MFA_MAX_RESENDS);
+
 export interface PendingChallenge {
   /**
    * "automatic" when the owner is answering a verification-code challenge
