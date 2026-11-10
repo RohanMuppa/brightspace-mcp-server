@@ -303,6 +303,68 @@ describe("Purdue MFA loop ported from Brightspace Bar", () => {
     expect(resendClick).toHaveBeenCalledTimes(2);
   });
 
+  describe("resent number gets its own approval window", () => {
+    // makeMfaPage advances the fake clock 2 s per poll, so poll N is at 2N s.
+    const poll = (seconds: number) => seconds / 2;
+    const repeat = (state: PollState, from: number, to: number): PollState[] =>
+      Array.from({ length: to - from }, () => state);
+    const HOME: PollState = { url: `${BASE_URL}/d2l/home`, cookie: true, d2l: true };
+
+    it("accepts an approval 2 minutes after a resend made at the 5-minute mark", async () => {
+      // 02:38 number 57; Microsoft expires it at ~4:58; the resend shows 29;
+      // the user approves 2 minutes later, past the old fixed 5-minute deadline.
+      const lines = captureWarnings();
+      const onMfaChallenge = vi.fn();
+      const { page, resendClick } = makeMfaPage([
+        ...repeat({ number: "57", challenge: true }, 0, poll(298)),
+        { resend: true },
+        ...repeat({ number: "29", challenge: true }, poll(300), poll(300 + 120)),
+        HOME,
+      ]);
+      await handleMFA(page, undefined, onMfaChallenge);
+      expect(resendClick).toHaveBeenCalledOnce();
+      expect(onMfaChallenge).toHaveBeenNthCalledWith(1, "57");
+      expect(onMfaChallenge).toHaveBeenNthCalledWith(2, "29");
+      expect(lines.some(line => line.includes("Number match: 29."))).toBe(true);
+      expect(lines.some(line => line.includes("own 5 minutes"))).toBe(true);
+    });
+
+    it("still times out at 5 minutes when no resend happens", async () => {
+      captureWarnings();
+      const start = Date.now();
+      const { page, resendClick } = makeMfaPage([{ number: "57", challenge: true }]);
+      await expect(handleMFA(page)).rejects.toBeInstanceOf(MfaApprovalError);
+      expect(resendClick).not.toHaveBeenCalled();
+      const elapsed = Date.now() - start;
+      expect(elapsed).toBeGreaterThanOrEqual(5 * 60_000);
+      expect(elapsed).toBeLessThan(5 * 60_000 + 10_000);
+    });
+
+    it("ends at the bounded 15-minute total after MAX_RESENDS resends made at each deadline", async () => {
+      captureWarnings();
+      const start = Date.now();
+      const { page, resendClick } = makeMfaPage([
+        ...repeat({ number: "57", challenge: true }, 0, poll(298)),
+        { resend: true },                       // t=298s, window now ends at 598s
+        ...repeat({ number: "29", challenge: true }, poll(300), poll(596)),
+        ...repeat({ resend: true }, poll(596), poll(596) + 1),  // t=596s, window now ends at 896s
+        { number: "88", challenge: true },
+        { resend: true },                       // stays on screen: a third resend must not happen
+      ]);
+      await expect(handleMFA(page)).rejects.toMatchObject({ name: "MfaApprovalError" });
+      expect(resendClick).toHaveBeenCalledTimes(2);
+      const elapsed = Date.now() - start;
+      expect(elapsed).toBeGreaterThanOrEqual(14 * 60_000);
+      expect(elapsed).toBeLessThanOrEqual(15 * 60_000);
+    });
+
+    it("says the timeout is measured from the last number, not 5 minutes in total", () => {
+      const message = new MfaApprovalError().message;
+      expect(message).toContain("within 5 minutes of the last number");
+      expect(message).not.toContain("after 5 minutes");
+    });
+  });
+
   it("clicks Yes only on a proven stay-signed-in page", async () => {
     const { page, yes } = makeMfaPage([
       { kmsi: true, url: "https://login.microsoftonline.com/common/kmsi" },

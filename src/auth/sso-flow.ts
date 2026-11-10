@@ -53,7 +53,7 @@ export class MfaApprovalError extends BrowserAuthError {
    */
   readonly numberMatch?: string;
   constructor(cause?: Error, numberMatch?: string) {
-    super(`MFA approval failed or timed out after 5 minutes. Run ${AUTH_COMMAND} to retry.`, "mfa_approval", cause);
+    super(`MFA approval failed or timed out: no approval within 5 minutes of the last number shown. Run ${AUTH_COMMAND} to retry.`, "mfa_approval", cause);
     this.name = "MfaApprovalError";
     this.numberMatch = numberMatch;
   }

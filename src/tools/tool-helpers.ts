@@ -131,7 +131,8 @@ const MFA_SAME_PROMPT =
 /** Entra number match only: purdue-sso.ts asks for another request when one expires or is denied. */
 const MFA_NEW_NUMBER =
   "If Microsoft's number expires or is denied, the sign-in asks Microsoft for a new one by itself " +
-  "and the next answer shows it; always give the user the latest number.";
+  "and the next answer shows it, with its own 5 minutes to approve (at most twice, so a sign-in can run up " +
+  "to 15 minutes in all); always give the user the latest number.";
 
 /**
  * Why a missed prompt cannot be skipped. Microsoft keeps a prompt open for up
