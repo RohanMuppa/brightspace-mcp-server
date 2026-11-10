@@ -41,7 +41,8 @@ function judge(content: string, now: number): { stale: boolean; pid?: unknown } 
     // Unreadable or half-written: judged like a dead owner's.
   }
   const age = typeof held.startedAt === "number" ? now - held.startedAt : Infinity;
-  return { stale: !(alive(held.pid) && age < STALE_LOCK_MS), pid: held.pid };
+  // A start time in the future is a damaged or planted lock, not a fresh one: never stale-proof.
+  return { stale: !(alive(held.pid) && age >= 0 && age < STALE_LOCK_MS), pid: held.pid };
 }
 
 const pause = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));

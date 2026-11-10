@@ -72,7 +72,7 @@ const hidden = (components: string[]): boolean => components.some((c) => c.start
 
 const WINDOWS_SYSTEM_FOLDERS = new Set(["windows", "program files", "program files (x86)", "programdata", "system volume information", "$recycle.bin"]);
 
-const SYSTEM_FOLDERS_POSIX = ["/etc", "/usr", "/bin", "/sbin", "/lib", "/lib64", "/boot", "/dev", "/proc", "/sys", "/root", "/System", "/Library", "/Applications", "/private/etc"];
+const SYSTEM_FOLDERS_POSIX = ["/etc", "/usr", "/bin", "/sbin", "/lib", "/lib64", "/boot", "/dev", "/proc", "/sys", "/root", "/System", "/Library", "/Applications", "/private/etc", "/tmp", "/var", "/private", "/opt"];
 
 /** Why an entry of D2L_DOWNLOAD_ROOTS cannot be used as an allowed root, or null when it can. */
 async function unusableRoot(entry: string, real: string, realHome: string): Promise<string | null> {

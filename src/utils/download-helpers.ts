@@ -176,10 +176,17 @@ export async function secureStreamDownload(options: {
    * is written exclusively, so an unrelated file beside it is never replaced.
    */
   replaceExisting?: boolean;
+  /**
+   * Asked immediately before an existing file would be overwritten, with its
+   * path. Returning false writes the new file exclusively instead (beside the
+   * old one, never over it): the file changed after the caller decided to
+   * replace it.
+   */
+  replaceGuard?: (existingPath: string) => Promise<boolean>;
   /** Abort the download; nothing is left behind. */
   signal?: AbortSignal;
 }): Promise<{ path: string; size: number; mime: string }> {
-  const { targetDir, filename, originalFilename, body, maxBytes, expectedBytes, replaceExisting, signal } = options;
+  const { targetDir, filename, originalFilename, body, maxBytes, expectedBytes, replaceExisting, replaceGuard, signal } = options;
 
   await assertAllowedDestination(targetDir);
   const safeFilename = path.basename(validateDownloadPath(targetDir, filename));
@@ -220,8 +227,9 @@ export async function secureStreamDownload(options: {
     const { mime } = type;
     const finalName = nameForType(safeFilename, type);
     let finalPath: string;
-    if (replaceExisting && finalName === safeFilename) {
-      finalPath = path.join(targetDir, finalName);
+    const replaceTarget = path.join(targetDir, finalName);
+    if (replaceExisting && finalName === safeFilename && (!replaceGuard || (await replaceGuard(replaceTarget)))) {
+      finalPath = replaceTarget;
       await fs.rename(partialPath, finalPath);
     } else {
       finalPath = await publishExclusively(partialPath, targetDir, finalName);

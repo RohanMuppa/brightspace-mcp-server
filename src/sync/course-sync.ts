@@ -21,7 +21,7 @@ import { sensitiveDestination, sensitiveDestinationMessage } from "../utils/sens
 import { log } from "../utils/logger.js";
 import { SyncInputError } from "./errors.js";
 import { acquireSyncLock } from "./lock.js";
-import { SyncManifest, unchangedSinceSync } from "./manifest.js";
+import { SyncManifest, unchangedSinceSync, type ManifestEntry } from "./manifest.js";
 import { NameSet, fileNameFromTopic, sanitizeComponent, splitExtension } from "./names.js";
 
 export { SyncInputError } from "./errors.js";
@@ -504,6 +504,7 @@ async function runSync(
       let owned = false;
       // The file is still exactly what the sync wrote: only then may replace overwrite it.
       let untouched = false;
+      let ownedEntry: ManifestEntry | undefined;
       try {
         // A file this sync wrote is found by its topic, wherever it ended up and whatever it was named.
         const entry = manifest.get(courseId, file.topicId);
@@ -518,6 +519,7 @@ async function runSync(
             dir = entryDir;
             present = owned = true;
             untouched = unchangedSinceSync(entry, onDisk);
+            ownedEntry = entry;
           }
         }
         if (!owned) {
@@ -573,6 +575,7 @@ async function runSync(
           () => downloadOne(apiClient, courseId, file.topicId, {
             root, dir, segments, name, saveAs,
             replace: present && untouched && existing === "replace",
+            replaceEntry: ownedEntry,
             compare: present && existing === "keep_both",
             remainingBytes: maxTotalBytes - totalBytes,
             signal: stop.signal,
@@ -637,6 +640,8 @@ async function downloadOne(
     name: string;
     saveAs: string;
     replace: boolean;
+    /** The manifest entry the file was judged unchanged against; checked again just before the overwrite. */
+    replaceEntry?: ManifestEntry;
     compare: boolean;
     remainingBytes: number;
     signal: AbortSignal;
@@ -674,6 +679,13 @@ async function downloadOne(
     maxBytes: DISK_MAX_FILE_SIZE,
     expectedBytes: expected,
     replaceExisting: where.replace,
+    // Minutes can pass between planning and the rename: an edit made meanwhile turns the replace into a copy beside the file.
+    replaceGuard: where.replace && where.replaceEntry
+      ? async (existingPath) => {
+          const now = await lstatOrNull(existingPath);
+          return now === null || (now.isFile() && unchangedSinceSync(where.replaceEntry!, now));
+        }
+      : undefined,
     signal: where.signal,
   });
   if (expected === undefined && sameSize.includes(result.size)) {

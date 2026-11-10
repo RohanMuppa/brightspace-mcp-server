@@ -91,6 +91,11 @@ describe("acquireSyncLock", () => {
     await (await acquireSyncLock(dir))();
   });
 
+  it("treats a lock that claims to start in the future as stale, even for a live pid", async () => {
+    await fs.writeFile(path.join(dir, LOCK_NAME), JSON.stringify({ pid: process.pid, startedAt: Date.now() + 10 * 24 * 3600_000 }));
+    await (await acquireSyncLock(dir))();
+  });
+
   it("takes over an unreadable lock file", async () => {
     await fs.writeFile(path.join(dir, LOCK_NAME), "garbage");
     await (await acquireSyncLock(dir))();

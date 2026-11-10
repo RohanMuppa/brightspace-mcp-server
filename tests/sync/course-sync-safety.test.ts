@@ -389,6 +389,25 @@ describe("replace never overwrites a synced file the user has since changed", ()
     expect(await fs.readFile(target())).toEqual(fresh);
   });
 
+  it("saves a copy instead when the file is edited between the decision and the overwrite", async () => {
+    await synced();
+    fake = await fakeBrightspace(toc, { 10: ok("v2", 300) });
+    const annotated = Buffer.concat([pdf("v1"), Buffer.from("ANNOTATED WHILE DOWNLOADING")]);
+    const serve = fake.client.getRaw.getMockImplementation()!;
+    // The user saves their annotations after the sync planned the replace and before it renames.
+    fake.client.getRaw.mockImplementation(async (p: string, o: unknown) => {
+      const response = await serve(p, o);
+      await fs.writeFile(target(), annotated);
+      return response;
+    });
+    const result = await syncCourse(fake.client, { courseId: 42, destination: root, existing: "replace", sleep: async () => {} });
+    expect(await fs.readFile(target())).toEqual(annotated);
+    expect(result.downloaded).toHaveLength(1);
+    expect(result.downloaded[0].path).not.toBe("M/A.pdf");
+    expect(await fs.readFile(path.join(root, result.downloaded[0].path))).toEqual(pdf("v2", 300));
+    expect(result.failed).toEqual([]);
+  });
+
   it("skips a file whose size changed (annotations added)", async () => {
     await synced();
     const annotated = Buffer.concat([pdf("v1"), Buffer.from("MY ANNOTATIONS")]);
