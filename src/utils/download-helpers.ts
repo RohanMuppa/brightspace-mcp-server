@@ -157,8 +157,10 @@ export async function secureStreamDownload(options: {
   maxBytes: number;
   /** Bytes the server said it would send; fewer arriving is a failed download. */
   expectedBytes?: number;
+  /** Replace a file already at the final name (rename over it) instead of picking "name(1).ext". */
+  replaceExisting?: boolean;
 }): Promise<{ path: string; size: number; mime: string }> {
-  const { targetDir, filename, originalFilename, body, maxBytes, expectedBytes } = options;
+  const { targetDir, filename, originalFilename, body, maxBytes, expectedBytes, replaceExisting } = options;
 
   const safeFilename = path.basename(validateDownloadPath(targetDir, filename));
   const partialPath = path.join(targetDir, `.download-${randomUUID()}.part`);
@@ -195,7 +197,14 @@ export async function secureStreamDownload(options: {
     if (expectedBytes !== undefined && size < expectedBytes) throw incomplete();
     const type = await validateFileTypeOfFile(partialPath, undefined, safeFilename, originalFilename);
     const { mime } = type;
-    const finalPath = await publishExclusively(partialPath, targetDir, nameForType(safeFilename, type));
+    const finalName = nameForType(safeFilename, type);
+    let finalPath: string;
+    if (replaceExisting) {
+      finalPath = path.join(targetDir, finalName);
+      await fs.rename(partialPath, finalPath);
+    } else {
+      finalPath = await publishExclusively(partialPath, targetDir, finalName);
+    }
     log("INFO", `Downloaded file to ${finalPath} (${size} bytes, ${mime})`);
     return { path: finalPath, size, mime };
   } finally {
