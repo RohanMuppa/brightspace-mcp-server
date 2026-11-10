@@ -31,9 +31,29 @@ describe("sanitizeComponent", () => {
     expect(sanitizeComponent(".", "fallback")).toBe("fallback");
     expect(sanitizeComponent("", "fallback")).toBe("fallback");
     expect(sanitizeComponent("   ", "fallback")).toBe("fallback");
-    expect(sanitizeComponent("../../x", "fallback")).toBe(".._.._x");
+    expect(sanitizeComponent("../../x", "fallback")).toBe("_.._.._x");
     expect(sanitizeComponent("/etc/passwd", "fallback")).not.toContain("/");
     expect(sanitizeComponent("C:\\Windows\\x", "fallback")).not.toMatch(/[\\:]/);
+  });
+
+  it.each([
+    [".ssh", "_.ssh"],
+    [".zshrc", "_.zshrc"],
+    ["..hidden", "_..hidden"],
+    [".config.d", "_.config.d"],
+    [" .bashrc", "_.bashrc"],
+  ])("prefixes the dot name %j so it cannot be a dot-file or dot-folder", (raw, expected) => {
+    expect(sanitizeComponent(raw, "x")).toBe(expected);
+  });
+
+  it("leaves a dot inside a name alone", () => {
+    expect(sanitizeComponent("notes.v2.pdf", "x")).toBe("notes.v2.pdf");
+  });
+
+  it("honours a smaller cap and keeps the extension", () => {
+    const out = sanitizeComponent(`${"a".repeat(80)}.pdf`, "x", 20);
+    expect(out.length).toBeLessThanOrEqual(20);
+    expect(out.endsWith(".pdf")).toBe(true);
   });
 
   it("caps a long name at 150 characters and keeps the extension", () => {
@@ -87,6 +107,10 @@ describe("fileNameFromTopic", () => {
     expect(fileNameFromTopic("/d2l/x/viewContent/9/View.pdf", "", "File 9")).toBe("View.pdf");
   });
 
+  it("does not let a Url name a dot-file", () => {
+    expect(fileNameFromTopic("/content/enforced/1-x/.zshrc", "T", "x")).toBe("_.zshrc");
+  });
+
   it("keeps a traversal-looking Url name inside one path component", () => {
     const name = fileNameFromTopic("/content/enforced/1-x/..%2F..%2Fevil.pdf", "T", "x");
     expect(name).not.toMatch(/[\\/]/);
@@ -105,6 +129,12 @@ describe("NameSet", () => {
     const names = new NameSet();
     expect(names.add("v1.2", true)).toBe("v1.2");
     expect(names.add("V1.2", true)).toBe("V1.2 (2)");
+  });
+
+  it("keeps numbered names under a smaller cap", () => {
+    const names = new NameSet(20);
+    names.add("abcdefghijklmnop.pdf");
+    expect(names.add("abcdefghijklmnop.pdf").length).toBeLessThanOrEqual(20);
   });
 
   it("keeps a numbered name under the length cap", () => {

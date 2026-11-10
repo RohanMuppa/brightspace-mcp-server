@@ -46,20 +46,23 @@ export function splitExtension(name: string): { stem: string; ext: string } {
 /**
  * Reduce a remote name to one safe path component: Windows-invalid characters
  * replaced, trailing dots and spaces removed, reserved device names prefixed,
- * at most 150 characters (the extension kept), NFC-normalised. Never empty,
+ * at most `maxChars` (150) characters (the extension kept), NFC-normalised.
+ * A leading dot is prefixed with "_", so a course can never create a
+ * dot-folder or dot-file (".ssh", ".zshrc") in the destination. Never empty,
  * never "." or "..", never containing a separator: `fallback` stands in.
  */
-export function sanitizeComponent(raw: string, fallback: string): string {
+export function sanitizeComponent(raw: string, fallback: string, maxChars: number = MAX_NAME_CHARS): string {
   let name = String(raw).normalize("NFC").replace(INVISIBLE, "").replace(WINDOWS_INVALID, "_");
   name = trimEnds(name);
   if (name === "") return fallback;
+  if (name.startsWith(".")) name = `_${name}`;
 
   // Windows reserves the part before the first dot, so "NUL.tar.gz" is as bad as "NUL".
   if (WINDOWS_RESERVED.test(name.split(".")[0].trimEnd())) name = `_${name}`;
 
-  if (Array.from(name).length > MAX_NAME_CHARS || Buffer.byteLength(name) > MAX_NAME_BYTES) {
+  if (Array.from(name).length > maxChars || Buffer.byteLength(name) > MAX_NAME_BYTES) {
     const { stem, ext } = splitExtension(name);
-    const room = Math.max(1, MAX_NAME_CHARS - Array.from(ext).length);
+    const room = Math.max(1, maxChars - Array.from(ext).length);
     const roomBytes = Math.max(1, MAX_NAME_BYTES - Buffer.byteLength(ext));
     name = trimEnds(clip(stem, room, roomBytes)) + ext;
   }
@@ -105,6 +108,8 @@ export function fileNameFromTopic(url: string | null | undefined, title: string,
 export class NameSet {
   private readonly taken = new Set<string>();
 
+  constructor(private readonly maxChars: number = MAX_NAME_CHARS) {}
+
   add(name: string, isFolder = false): string {
     const key = (n: string) => n.normalize("NFC").toLowerCase();
     if (!this.taken.has(key(name))) {
@@ -114,7 +119,7 @@ export class NameSet {
     const { stem, ext } = isFolder ? { stem: name, ext: "" } : splitExtension(name);
     for (let n = 2; ; n++) {
       const suffix = ` (${n})${ext}`;
-      const room = Math.max(1, MAX_NAME_CHARS - Array.from(suffix).length);
+      const room = Math.max(1, this.maxChars - Array.from(suffix).length);
       const roomBytes = Math.max(1, MAX_NAME_BYTES - Buffer.byteLength(suffix));
       const candidate = `${trimEnds(clip(stem, room, roomBytes))}${suffix}`;
       if (!this.taken.has(key(candidate))) {

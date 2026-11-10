@@ -157,10 +157,17 @@ export async function secureStreamDownload(options: {
   maxBytes: number;
   /** Bytes the server said it would send; fewer arriving is a failed download. */
   expectedBytes?: number;
-  /** Replace a file already at the final name (rename over it) instead of picking "name(1).ext". */
+  /**
+   * Replace a file already at `filename` (rename over it) instead of picking
+   * "name(1).ext". Only that exact name is ever overwritten: when the saved
+   * name differs (an extension corrected from the file's real type) the file
+   * is written exclusively, so an unrelated file beside it is never replaced.
+   */
   replaceExisting?: boolean;
+  /** Abort the download; nothing is left behind. */
+  signal?: AbortSignal;
 }): Promise<{ path: string; size: number; mime: string }> {
-  const { targetDir, filename, originalFilename, body, maxBytes, expectedBytes, replaceExisting } = options;
+  const { targetDir, filename, originalFilename, body, maxBytes, expectedBytes, replaceExisting, signal } = options;
 
   const safeFilename = path.basename(validateDownloadPath(targetDir, filename));
   const partialPath = path.join(targetDir, `.download-${randomUUID()}.part`);
@@ -185,7 +192,8 @@ export async function secureStreamDownload(options: {
       await pipeline(
         Readable.fromWeb(body as WebReadableStream<Uint8Array>),
         limit,
-        createWriteStream(partialPath, { flags: "wx" })
+        createWriteStream(partialPath, { flags: "wx" }),
+        ...(signal ? [{ signal }] : [])
       );
     } catch (error) {
       // fetch reports a connection cut mid-body as a bare "terminated".
@@ -199,7 +207,7 @@ export async function secureStreamDownload(options: {
     const { mime } = type;
     const finalName = nameForType(safeFilename, type);
     let finalPath: string;
-    if (replaceExisting) {
+    if (replaceExisting && finalName === safeFilename) {
       finalPath = path.join(targetDir, finalName);
       await fs.rename(partialPath, finalPath);
     } else {
