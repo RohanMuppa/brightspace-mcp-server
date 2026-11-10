@@ -43,6 +43,7 @@ export interface LaunchctlResult { code: number; stderr: string }
 
 export interface ScheduleFs {
   mkdir: (dir: string, options: { recursive: true; mode?: number }) => Promise<unknown>;
+  chmod: (dir: string, mode: number) => Promise<unknown>;
   readdir: (dir: string) => Promise<string[]>;
   readFile: (file: string) => Promise<string>;
   writeFileAtomic: (file: string, data: string, options: { mode: number }) => Promise<void>;
@@ -59,6 +60,13 @@ export interface ScheduleDeps {
   logDir: string;
   nodePath: string;
   scriptPath: string;
+  /** The environment to take D2L_* settings from. Default: none. */
+  env?: NodeJS.ProcessEnv;
+  /** Resolves symlinks; defaults to fs.realpath. */
+  realpath?: (file: string) => Promise<string>;
+  /** Stable node locations to prefer over a versioned install path. */
+  nodeCandidates?: string[];
+  sleep?: (ms: number) => Promise<void>;
   launchctl: (args: string[]) => Promise<LaunchctlResult>;
   fs: ScheduleFs;
   /** The destination rule `sync` uses: a reason when refused, else null. */
@@ -136,6 +144,55 @@ const xmlUnescape = (text: string): string =>
 
 export const labelFor = (courseId: number): string => `${LABEL_PREFIX}${courseId}`;
 
+/**
+ * Settings a scheduled run needs to behave like the user's own runs. An
+ * explicit allowlist of NON-secret names: anything else (tokens, cookies,
+ * passwords, TOTP and HTTP secrets, and any name added later) is never written
+ * into a plist, which is readable by the user's other processes.
+ */
+export const SCHEDULE_ENV_ALLOWLIST = [
+  "D2L_BASE_URL", "D2L_SESSION_DIR", "D2L_USERNAME", "D2L_INCLUDE_COURSES", "D2L_EXCLUDE_COURSES",
+  "D2L_DOWNLOAD_ROOTS", "D2L_NOTIFY", "D2L_HEADLESS", "D2L_REMEMBER_MFA", "D2L_PASSWORDLESS",
+  "D2L_NO_UPDATE_CHECK", "D2L_CURRENT_ONLY", "D2L_ACTIVE_ONLY", "D2L_CAMPUS",
+] as const;
+
+/** The allowlisted settings that are set (non-empty, one line), plus a minimal PATH that finds node. */
+export function scheduleEnvironment(env: NodeJS.ProcessEnv, nodePath: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const name of SCHEDULE_ENV_ALLOWLIST) {
+    const value = env[name];
+    if (typeof value === "string" && value.trim() !== "" && !CONTROL.test(value)) out[name] = value;
+  }
+  out.PATH = [path.dirname(nodePath), "/usr/bin", "/bin", "/usr/sbin", "/sbin"].filter((dir, i, all) => all.indexOf(dir) === i).join(":");
+  return out;
+}
+
+const STABLE_NODE = ["/opt/homebrew/bin/node", "/usr/local/bin/node"];
+const VERSIONED_NODE = /\/(Cellar|\.nvm|nvm|\.fnm|fnm|\.volta|\.asdf|nodenv|\.nodenv|mise)\//;
+
+/**
+ * The node to put in the plist. An install under a versioned directory
+ * (Homebrew Cellar, nvm, fnm...) vanishes on upgrade, so a stable symlink
+ * that resolves to the same binary is preferred; with none, the versioned
+ * path is used and a warning says it may break.
+ */
+export async function chooseNodePath(
+  execPath: string,
+  realpath: (file: string) => Promise<string> = (f) => fs.realpath(f),
+  candidates: string[] = STABLE_NODE,
+): Promise<{ path: string; warning?: string }> {
+  if (candidates.includes(execPath)) return { path: execPath };
+  const target = await realpath(execPath).catch(() => execPath);
+  for (const candidate of candidates) {
+    if ((await realpath(candidate).catch(() => null)) === target) return { path: candidate };
+  }
+  if (!VERSIONED_NODE.test(execPath)) return { path: execPath };
+  return {
+    path: execPath,
+    warning: `Warning: node is at a versioned path (${execPath}) that disappears when node is upgraded, and no stable link (${candidates.join(", ")}) points to it. The schedule will stop working after an upgrade; run schedule again then.`,
+  };
+}
+
 export interface PlistInput {
   courseId: number;
   destination: string;
@@ -145,6 +202,18 @@ export interface PlistInput {
   nodePath: string;
   scriptPath: string;
   logFile: string;
+  /** Environment variables for the run (already filtered by scheduleEnvironment). */
+  env?: Record<string, string>;
+}
+
+function envBlock(env: Record<string, string> | undefined): string {
+  const names = Object.keys(env ?? {}).sort();
+  if (!env || names.length === 0) return "";
+  return `  <key>EnvironmentVariables</key>
+  <dict>
+${names.map((name) => `    <key>${xmlEscape(name)}</key>\n    <string>${xmlEscape(env[name])}</string>`).join("\n")}
+  </dict>
+`;
 }
 
 export function buildPlist(input: PlistInput): string {
@@ -166,7 +235,7 @@ ${args.map((arg) => `    <string>${xmlEscape(arg)}</string>`).join("\n")}
     <key>Minute</key>
     <integer>${input.minute}</integer>
   </dict>
-  <key>StandardOutPath</key>
+${envBlock(input.env)}  <key>StandardOutPath</key>
   <string>${xmlEscape(input.logFile)}</string>
   <key>StandardErrorPath</key>
   <string>${xmlEscape(input.logFile)}</string>
@@ -187,6 +256,12 @@ export function parsePlist(text: string, courseId: number): ListedSchedule | nul
   const dest = args[args.indexOf("--dest") + 1];
   if (args.indexOf("--dest") < 0 || dest === undefined) return null;
   return { courseId, time: `${hour.padStart(2, "0")}:${minute.padStart(2, "0")}`, destination: dest };
+}
+
+/** The plist's own Label, or null when it has none. */
+export function plistLabel(text: string): string | null {
+  const raw = /<key>Label<\/key>\s*<string>([\s\S]*?)<\/string>/.exec(text)?.[1];
+  return raw === undefined ? null : xmlUnescape(raw);
 }
 
 const OUR_PLIST = new RegExp(`^${LABEL_PREFIX.replace(/\./g, "\\.")}([1-9]\\d*)\\.plist$`);
@@ -210,9 +285,24 @@ export async function runSchedule(argv: string[], io: ScheduleIO, deps: Schedule
   const domain = `gui/${deps.uid}`;
   const plistFor = (courseId: number): string => path.join(deps.agentsDir, `${labelFor(courseId)}.plist`);
   /** Stop a loaded agent: bootout, then the old `unload` when bootout is not available. */
+  const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  /** Whether the file at `file` is really our plist for this course (its Label says so). */
+  const isOurs = async (courseId: number, file: string): Promise<boolean> =>
+    plistLabel(await deps.fs.readFile(file).catch(() => "")) === labelFor(courseId);
+  /**
+   * Stop a loaded agent: bootout by label, then the old `unload` through the
+   * file when bootout is not available, but only when the file is ours. Then
+   * wait for the label to disappear, or a quick bootstrap fails with EIO.
+   */
   const unload = async (courseId: number): Promise<void> => {
-    const result = await deps.launchctl(["bootout", `${domain}/${labelFor(courseId)}`]).catch(() => ({ code: 1, stderr: "" }));
-    if (result.code !== 0) await deps.launchctl(["unload", plistFor(courseId)]).catch(() => undefined);
+    const label = `${domain}/${labelFor(courseId)}`;
+    const result = await deps.launchctl(["bootout", label]).catch(() => ({ code: 1, stderr: "" }));
+    if (result.code !== 0 && (await isOurs(courseId, plistFor(courseId)))) await deps.launchctl(["unload", plistFor(courseId)]).catch(() => undefined);
+    for (let i = 0; i < 10; i++) {
+      const state = await deps.launchctl(["print", label]).catch(() => ({ code: 1, stderr: "" }));
+      if (state.code !== 0) return;
+      await sleep(100);
+    }
   };
 
   try {
@@ -223,7 +313,12 @@ export async function runSchedule(argv: string[], io: ScheduleIO, deps: Schedule
         const match = OUR_PLIST.exec(name);
         if (!match) continue;
         const courseId = Number(match[1]);
-        const parsed = parsePlist(await deps.fs.readFile(path.join(deps.agentsDir, name)).catch(() => ""), courseId);
+        const text = await deps.fs.readFile(path.join(deps.agentsDir, name)).catch(() => "");
+        if (text !== "" && plistLabel(text) !== labelFor(courseId)) {
+          io.stderr(`${cleanLine(`Skipping ${name}: its Label is not ${labelFor(courseId)}, so it is not a schedule this tool made.`)}\n`);
+          continue;
+        }
+        const parsed = parsePlist(text, courseId);
         rows.push(parsed ?? { courseId, time: "?", destination: "(unreadable)" });
       }
       if (rows.length === 0) io.stdout("No scheduled syncs.\n");
@@ -235,6 +330,10 @@ export async function runSchedule(argv: string[], io: ScheduleIO, deps: Schedule
       const file = plistFor(args.courseId);
       if (!(await deps.fs.exists(file))) {
         io.stderr(`No schedule for course ${args.courseId}.\n`);
+        return 1;
+      }
+      if (!(await isOurs(args.courseId, file))) {
+        io.stderr(`${cleanLine(`Not removing ${file}: its Label is not ${labelFor(args.courseId)}, so it is not a schedule this tool made.`)}\n`);
         return 1;
       }
       await unload(args.courseId);
@@ -253,17 +352,27 @@ export async function runSchedule(argv: string[], io: ScheduleIO, deps: Schedule
     const file = plistFor(args.courseId);
     await deps.fs.mkdir(deps.agentsDir, { recursive: true });
     await deps.fs.mkdir(deps.logDir, { recursive: true, mode: 0o700 });
-    if (await deps.fs.exists(file)) await unload(args.courseId);
+    // mkdir leaves an existing directory's mode alone: the log holds file names, so tighten it.
+    await deps.fs.chmod(deps.logDir, 0o700).catch(() => undefined);
+    const node = await chooseNodePath(deps.nodePath, deps.realpath, deps.nodeCandidates);
+    const replacing = await deps.fs.exists(file);
+    if (replacing) await unload(args.courseId);
     await deps.fs.writeFileAtomic(file, buildPlist({
       courseId: args.courseId, destination: args.destination, existing: args.existing,
-      hour: args.hour, minute: args.minute, nodePath: deps.nodePath, scriptPath: deps.scriptPath, logFile,
+      hour: args.hour, minute: args.minute, nodePath: node.path, scriptPath: deps.scriptPath, logFile, env: scheduleEnvironment(deps.env ?? {}, node.path),
     }), { mode: 0o644 });
     let loaded = await deps.launchctl(["bootstrap", domain, file]);
+    if (loaded.code !== 0 && replacing) {
+      // The old job can linger a moment after bootout; one retry rides it out.
+      await sleep(500);
+      loaded = await deps.launchctl(["bootstrap", domain, file]);
+    }
     if (loaded.code !== 0) loaded = await deps.launchctl(["load", file]);
     if (loaded.code !== 0) {
       io.stderr(`${cleanLine(`The schedule was written to ${file} but launchctl could not load it: ${loaded.stderr || `exit ${loaded.code}`}`)}\n`);
       return 1;
     }
+    if (node.warning) io.stderr(`${cleanLine(node.warning)}\n`);
     if (deps.scriptPath.includes(`${path.sep}_npx${path.sep}`)) {
       io.stderr("Warning: this copy runs from the npx cache, which can be cleaned. Install it globally (npm install -g brightspace-mcp-server) and run schedule again for a lasting schedule.\n");
     }
@@ -277,6 +386,7 @@ export async function runSchedule(argv: string[], io: ScheduleIO, deps: Schedule
 
 const realFs: ScheduleFs = {
   mkdir: (dir, options) => fs.mkdir(dir, options),
+  chmod: (dir, mode) => fs.chmod(dir, mode),
   readdir: (dir) => fs.readdir(dir),
   readFile: (file) => fs.readFile(file, "utf8"),
   writeFileAtomic: (file, data, options) => writeFileAtomic(file, data, options),
@@ -304,6 +414,7 @@ export async function main(): Promise<void> {
     uid: process.getuid?.() ?? 0,
     agentsDir: path.join(os.homedir(), "Library", "LaunchAgents"),
     logDir: path.join(resolveSessionLocation().sessionRoot, "logs"),
+    env: process.env,
     nodePath: process.execPath,
     scriptPath: entry,
     launchctl: runLaunchctl,
