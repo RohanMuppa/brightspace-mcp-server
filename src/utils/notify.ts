@@ -84,19 +84,48 @@ export async function notify(options: NotifyOptions, deps: NotifyDeps = {}): Pro
   }
 }
 
-const approvalsShown = new Set<string>();
+/** The same number is not shown again for this long: it is the same sign-in attempt. */
+export const APPROVAL_REPEAT_MS = 2 * 60 * 1000;
+
+/** number -> when it was last shown successfully. */
+const approvalsShown = new Map<string, number>();
+/** Numbers whose first send has not finished yet. */
+const approvalsInFlight = new Set<string>();
+let approvalsSuppressed = false;
 
 /**
- * Tell the user which number to approve in their authenticator, once per
- * distinct number in this process. Only the 1-3 digit number is ever used.
+ * Turn the approval-number notification off for this process, for a command
+ * (sync --notify) that abandons an expired sign-in instead of waiting for it:
+ * a number nobody will use would only mislead.
  */
-export function notifyApprovalNumber(numberMatch: string | undefined, deps: NotifyDeps = {}): Promise<boolean> {
-  if (typeof numberMatch !== "string" || !/^\d{1,3}$/.test(numberMatch) || approvalsShown.has(numberMatch)) return Promise.resolve(false);
-  approvalsShown.add(numberMatch);
-  return notify({ title: "Brightspace sign-in", message: `Approve ${numberMatch} in Microsoft Authenticator` }, deps);
+export function setApprovalNotificationsSuppressed(suppressed: boolean): void {
+  approvalsSuppressed = suppressed;
 }
 
-/** For tests. */
+/**
+ * Tell the user which number to approve in their authenticator. A repeat of
+ * the same number within APPROVAL_REPEAT_MS is the same attempt and stays
+ * quiet; a later one (numbers repeat) is shown again. A number is recorded
+ * only once its notification was shown, so a failed send is retried. Only the
+ * 1-3 digit number is ever used.
+ */
+export async function notifyApprovalNumber(numberMatch: string | undefined, deps: NotifyDeps & { now?: () => number } = {}): Promise<boolean> {
+  if (approvalsSuppressed || typeof numberMatch !== "string" || !/^\d{1,3}$/.test(numberMatch)) return false;
+  const now = (deps.now ?? Date.now)();
+  const last = approvalsShown.get(numberMatch);
+  if (approvalsInFlight.has(numberMatch) || (last !== undefined && now - last < APPROVAL_REPEAT_MS)) return false;
+  approvalsInFlight.add(numberMatch);
+  try {
+    const shown = await notify({ title: "Brightspace sign-in", message: `Approve ${numberMatch} in Microsoft Authenticator` }, deps);
+    if (shown) approvalsShown.set(numberMatch, now);
+    return shown;
+  } finally {
+    approvalsInFlight.delete(numberMatch);
+  }
+}
+
+/** Forget what was shown (a sign-in attempt ended). Also for tests. */
 export function resetApprovalNotifications(): void {
   approvalsShown.clear();
+  approvalsInFlight.clear();
 }

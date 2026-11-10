@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { NOTIFY_SCRIPT, OSASCRIPT, cleanNotificationText, notificationsEnabled, notify, notifyApprovalNumber, osascriptArgs, resetApprovalNotifications } from "../../src/utils/notify.js";
+import { APPROVAL_REPEAT_MS, setApprovalNotificationsSuppressed, NOTIFY_SCRIPT, OSASCRIPT, cleanNotificationText, notificationsEnabled, notify, notifyApprovalNumber, osascriptArgs, resetApprovalNotifications } from "../../src/utils/notify.js";
 
 const mac = (run = vi.fn(async () => {}), env: NodeJS.ProcessEnv = {}) => ({ platform: "darwin" as const, env, run });
 
@@ -84,6 +84,49 @@ describe("notify", () => {
 
 describe("notifyApprovalNumber", () => {
   beforeEach(() => resetApprovalNotifications());
+
+  it("suppresses a repeat of the same number within the window, then shows it again", async () => {
+    let now = 1_000_000;
+    const deps = { ...mac(), now: () => now };
+    expect(await notifyApprovalNumber("42", deps)).toBe(true);
+    now += APPROVAL_REPEAT_MS - 1;
+    expect(await notifyApprovalNumber("42", deps)).toBe(false);
+    now += 2;
+    expect(await notifyApprovalNumber("42", deps)).toBe(true);
+    expect(deps.run).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not record a number whose send failed, so the next attempt retries", async () => {
+    const run = vi.fn().mockRejectedValueOnce(new Error("osascript down")).mockResolvedValue(undefined);
+    const deps = mac(run as never);
+    expect(await notifyApprovalNumber("17", deps)).toBe(false);
+    expect(await notifyApprovalNumber("17", deps)).toBe(true);
+    expect(await notifyApprovalNumber("17", deps)).toBe(false);
+    expect(run).toHaveBeenCalledTimes(2);
+  });
+
+  it("sends once when the same number is reported twice while the first send is in flight", async () => {
+    let release!: () => void;
+    const run = vi.fn(() => new Promise<void>((resolve) => { release = resolve; }));
+    const deps = mac(run as never);
+    const first = notifyApprovalNumber("63", deps);
+    expect(await notifyApprovalNumber("63", deps)).toBe(false);
+    release();
+    expect(await first).toBe(true);
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("stays silent while approval notifications are suppressed", async () => {
+    const deps = mac();
+    setApprovalNotificationsSuppressed(true);
+    try {
+      expect(await notifyApprovalNumber("88", deps)).toBe(false);
+    } finally {
+      setApprovalNotificationsSuppressed(false);
+    }
+    expect(deps.run).not.toHaveBeenCalled();
+    expect(await notifyApprovalNumber("88", deps)).toBe(true);
+  });
 
   it("notifies once per distinct number", async () => {
     const deps = mac();
