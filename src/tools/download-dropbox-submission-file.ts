@@ -16,6 +16,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { D2LApiClient, ApiError } from "../api/index.js";
 import { DownloadDropboxSubmissionFileSchema } from "./schemas.js";
 import { toolResponse, sanitizeError, errorResponse } from "./tool-helpers.js";
+import { sensitiveDestination, sensitiveDestinationMessage } from "../utils/sensitive-paths.js";
 import { log } from "../utils/logger.js";
 import { validateContentId, DISK_MAX_FILE_SIZE } from "../utils/file-validator.js";
 import { secureStreamDownload, expectedLength } from "../utils/download-helpers.js";
@@ -90,6 +91,10 @@ export function registerDownloadDropboxSubmissionFile(
             return errorResponse(`Download directory does not exist: ${downloadPath}. Create it, then retry, or choose an existing directory.`, "destination");
           }
           throw error;
+        }
+        const protectedReason = await sensitiveDestination(downloadPath);
+        if (protectedReason) {
+          return errorResponse(sensitiveDestinationMessage(downloadPath, protectedReason), "destination");
         }
 
         // Fetch submission metadata to get the file list and validate fileId.

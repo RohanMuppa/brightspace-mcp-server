@@ -285,6 +285,9 @@ const DOWNLOAD_FAILURE_GUIDANCE: Record<DownloadFailureKind, string> = {
   incomplete:
     "Download incomplete: the connection closed before the whole file arrived, so nothing was saved. " +
     "Try again.",
+  forbiddenDestination:
+    "That folder is not an allowed place to save files: it is outside your home folder, or it is a hidden, system or application folder. " +
+    "Choose a folder of your own, such as ~/Documents/Brightspace.",
 };
 
 /**

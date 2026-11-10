@@ -20,6 +20,17 @@ import {
 } from "./file-validator.js";
 import { DownloadError } from "./download-errors.js";
 import { log } from "./logger.js";
+import { sensitiveDestination } from "./sensitive-paths.js";
+
+/**
+ * Every write to disk starts here, so the protected-destination rule is
+ * enforced once for all tools (see sensitiveDestination).
+ */
+async function assertAllowedDestination(targetDir: string): Promise<void> {
+  if (await sensitiveDestination(targetDir)) {
+    throw new DownloadError("forbiddenDestination", "Destination folder is not allowed");
+  }
+}
 
 /**
  * Resolve filename conflicts by appending (1), (2), etc.
@@ -79,6 +90,7 @@ export async function secureDownload(options: {
   const { targetDir, filename, data, allowedTypes } = options;
 
   log("DEBUG", `secureDownload: starting download of ${filename} to ${targetDir}`);
+  await assertAllowedDestination(targetDir);
 
   // Validate target directory exists and is a directory
   try {
@@ -169,6 +181,7 @@ export async function secureStreamDownload(options: {
 }): Promise<{ path: string; size: number; mime: string }> {
   const { targetDir, filename, originalFilename, body, maxBytes, expectedBytes, replaceExisting, signal } = options;
 
+  await assertAllowedDestination(targetDir);
   const safeFilename = path.basename(validateDownloadPath(targetDir, filename));
   const partialPath = path.join(targetDir, `.download-${randomUUID()}.part`);
 
