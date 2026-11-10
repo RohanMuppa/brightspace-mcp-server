@@ -10,7 +10,7 @@ import { DownloadCourseFilesSchema } from "./schemas.js";
 import { errorResponse, sanitizeError, withUpdateNotice } from "./tool-helpers.js";
 import { log } from "../utils/logger.js";
 import { validateContentId } from "../utils/file-validator.js";
-import { syncCourse } from "../sync/course-sync.js";
+import { SyncInputError, syncCourse } from "../sync/course-sync.js";
 import { summarizeSync } from "../sync/summary.js";
 import path from "node:path";
 import fs from "node:fs/promises";
@@ -56,7 +56,7 @@ export function registerDownloadCourseFiles(server: McpServer, apiClient: D2LApi
         try {
           result = await syncCourse(apiClient, { courseId, destination: downloadPath, existing, moduleId, dryRun, maxFiles });
         } catch (error) {
-          if (error instanceof Error && /^Module \d+ is not in/.test(error.message)) return errorResponse(error.message, "notFound");
+          if (error instanceof SyncInputError) return errorResponse(error.message, "invalidInput");
           throw error;
         }
 

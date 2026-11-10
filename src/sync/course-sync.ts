@@ -24,6 +24,9 @@ import { NameSet, fileNameFromTopic, sanitizeComponent, splitExtension } from ".
 export type ExistingMode = "skip" | "replace" | "keep_both";
 
 export const DEFAULT_MAX_FILES = 300;
+
+/** A bad argument to the sync (unknown module, unusable destination, bad cap), as opposed to a failed request. */
+export class SyncInputError extends Error {}
 /** Pauses before the second and third attempt at a file. */
 const RETRY_DELAYS_MS = [1500, 4000];
 /** A longer Retry-After is not waited out: the run would sit idle far past any client timeout. */
@@ -155,7 +158,7 @@ function planFiles(toc: unknown, moduleId: number | undefined): { files: Planned
     walk(root, [], 0);
   } else if (root) {
     const found = findModule(root, moduleId!, 0);
-    if (!found) throw new Error(`Module ${moduleId} is not in this course's table of contents.`);
+    if (!found) throw new SyncInputError(`Module ${moduleId} is not in this course's table of contents.`);
     walk({ Modules: [found] }, [], 0);
   }
   return { files, nonFiles };
@@ -303,18 +306,20 @@ export async function syncCourse(apiClient: D2LApiClient, options: SyncOptions):
   const maxFiles = options.maxFiles ?? DEFAULT_MAX_FILES;
   const delays = options.retryDelaysMs ?? RETRY_DELAYS_MS;
   const sleep = options.sleep ?? sleepFor;
-  if (!Number.isInteger(maxFiles) || maxFiles < 1) throw new Error("maxFiles must be a whole number of at least 1.");
+  if (!Number.isInteger(maxFiles) || maxFiles < 1) throw new SyncInputError("maxFiles must be a whole number of at least 1.");
 
   const destination = path.resolve(options.destination);
   let root: string;
   try {
-    if (!(await fs.stat(destination)).isDirectory()) throw new Error(`Destination is not a directory: ${destination}`);
+    if (!(await fs.stat(destination)).isDirectory()) throw new SyncInputError(`Destination is not a directory: ${destination}`);
     root = await fs.realpath(destination);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      throw new Error(`Destination directory does not exist: ${destination}. Create it, then retry, or choose an existing directory.`);
-    }
-    throw error;
+      // A dry run creates nothing, so it can preview a destination that is not there yet.
+      if (dryRun) {
+        root = destination;
+      } else throw new SyncInputError(`Destination directory does not exist: ${destination}. Create it, then retry, or choose an existing directory.`);
+    } else throw error;
   }
 
   const result: SyncResult = {

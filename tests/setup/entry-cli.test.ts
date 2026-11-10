@@ -37,6 +37,19 @@ describe.skipIf(!existsSync(indexJs))("entry point subcommand routing", () => {
     expect(result.stderr).toContain("setup");
   });
 
+  it("routes `sync` to its own usage check, exits 2 without a course and starts no server", () => {
+    const result = run("sync");
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("--course");
+    expect(result.stderr).toContain("Usage: brightspace-mcp-server sync");
+    expect(result.stderr).not.toContain("Unknown command");
+    expect(result.homeEntries).toEqual([]);
+  });
+
+  it("lists sync in the usage for an unknown command", () => {
+    expect(run("htp").stderr).toContain("sync");
+  });
+
   it("starts nothing for an unknown command", () => {
     const result = run("htp");
     expect(result.stderr).not.toContain("running on stdio");
