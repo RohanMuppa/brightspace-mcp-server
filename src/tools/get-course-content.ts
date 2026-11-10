@@ -32,6 +32,7 @@ export interface ContentObject {
   // Topic-specific
   TopicType?: number; // 1=File, 2=Link/URL, 3=ExternalLink, etc.
   Url?: string;
+  TypeIdentifier?: string;
   StartDateTime?: string | null;
   EndDateTime?: string | null;
   StartDate?: string | null;
@@ -265,6 +266,13 @@ export async function buildContentTree(
       } else if (item.TopicType === 2 || item.TopicType === 3) {
         // Link topic — include URL
         topic.url = item.Url ?? null;
+      }
+
+      // An embedded video (D2L's ContentService type) has no file behind it.
+      // Said outright so it is not taken for a file that is missing.
+      if (typeof item.TypeIdentifier === 'string' && item.TypeIdentifier.toLowerCase() === 'contentservice') {
+        topic.embeddedMedia = true;
+        topic.note = 'Embedded media: download_file cannot fetch it. Open it in Brightspace, or use get_video_transcript for its transcript.';
       }
 
       // HTML content — include body converted to markdown
