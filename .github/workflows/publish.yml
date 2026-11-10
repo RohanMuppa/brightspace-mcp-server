@@ -4,6 +4,12 @@ on:
   push:
     branches: [main]
 
+# Publishing is serialized: two merges in a row once ran publish at the same
+# time, and the older version finished last and took npm's `latest`.
+concurrency:
+  group: publish-npm
+  cancel-in-progress: false
+
 jobs:
   verify:
     uses: ./.github/workflows/ci.yml
@@ -35,12 +41,23 @@ jobs:
           CURRENT=$(node -p "require('./package.json').version")
           echo "version=$CURRENT" >> "$GITHUB_OUTPUT"
           PUBLISHED=$(npm view brightspace-mcp-server version 2>/dev/null || echo "0.0.0")
-          if [ "$CURRENT" != "$PUBLISHED" ]; then
+          # Only a version newer than npm's: a run for an older commit that
+          # finishes late must not publish over a newer release.
+          IS_NEWER=$(node -e '
+            const n = (v) => v.split("-")[0].split(".").map(Number);
+            const [a, b] = [n(process.argv[1]), n(process.argv[2])];
+            let newer = false;
+            for (let i = 0; i < 3; i++) {
+              if ((a[i] || 0) !== (b[i] || 0)) { newer = (a[i] || 0) > (b[i] || 0); break; }
+            }
+            console.log(newer);
+          ' "$CURRENT" "$PUBLISHED")
+          if [ "$IS_NEWER" = "true" ]; then
             npm publish --provenance --access public
             echo "Published v$CURRENT"
             echo "published=true" >> "$GITHUB_OUTPUT"
           else
-            echo "Version $CURRENT already published, skipping"
+            echo "Version $CURRENT is not newer than npm's $PUBLISHED, skipping"
             echo "published=false" >> "$GITHUB_OUTPUT"
           fi
         env:
