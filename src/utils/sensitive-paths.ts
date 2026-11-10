@@ -66,8 +66,10 @@ async function resolveReal(target: string, depth = 0): Promise<string> {
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
       if (code === "ELOOP") throw new LinkLoopError();
-      // Any failure but "not there yet" is not guessed past: the caller gets the error and refuses.
-      if (code !== "ENOENT") throw error;
+      // "Not there yet" and "a folder above it that this user may not look into" (/root for a normal user)
+      // are judged by the nearest part that can be resolved, plus the rest of the path as written.
+      // Anything else is not guessed past: the caller gets the error and refuses.
+      if (code !== "ENOENT" && code !== "EACCES" && code !== "EPERM" && code !== "ENOTDIR") throw error;
     }
     const link = await lstatAsync(current).then((stat) => (stat.isSymbolicLink() ? stat : null), () => null);
     if (link) {
@@ -102,6 +104,16 @@ const REFUSED_DEVICE = "it is a Windows device path (\\\\?\\ or \\\\.\\)";
 const REFUSED_ROOT = "it is the root of a drive";
 const REFUSED_HOME = "it is your home directory itself";
 
+/**
+ * True when any AppData folder in the path is not just the way to its own
+ * Local\Temp. AppData holds applications' data and the Startup folder; only
+ * Temp is allowed, and an AppData that appears again below a Temp folder (a
+ * fake home kept in Temp) is judged on its own.
+ */
+function appDataOutsideTemp(names: string[]): boolean {
+  return names.some((name, i) => name === "appdata" && !(names[i + 1] === "local" && names[i + 2] === "temp"));
+}
+
 /** Why a real path is refused by the built-in rules, or null. `home` is a real path. */
 async function refusedByRules(real: string, home: string): Promise<string | null> {
   const parts = components(real);
@@ -127,16 +139,14 @@ async function refusedByRules(real: string, home: string): Promise<string | null
   if (process.platform === "win32") {
     const names = parts.map(lower);
     if (WINDOWS_SYSTEM_FOLDERS.has(names[0] ?? "")) return `it is inside ${parts[0]}, a Windows system folder`;
-    const appData = names.indexOf("appdata");
-    // AppData holds applications' data and the Startup folder; only its Temp folder is allowed.
-    if (appData >= 0 && !(names[appData + 1] === "local" && names[appData + 2] === "temp")) return "it is inside AppData, where applications keep their data and the Startup folder";
+    if (appDataOutsideTemp(names)) return "it is inside AppData, where applications keep their data and the Startup folder";
   } else {
     // Windows drives seen from WSL: /mnt/c/Windows, /mnt/c/Users/<name>/AppData.
     const wsl = /^\/mnt\/[a-z]\/(.+)$/i.exec(real.split(path.sep).join("/"));
     if (wsl) {
       const names = wsl[1].split("/").map(lower);
       if (WINDOWS_SYSTEM_FOLDERS.has(names[0])) return `it is inside a Windows system folder (${wsl[1].split("/")[0]})`;
-      if (names[0] === "users" && names[2] === "appdata" && !(names[3] === "local" && names[4] === "temp")) return "it is inside a Windows AppData folder";
+      if (appDataOutsideTemp(names)) return "it is inside a Windows AppData folder";
     }
   }
   return null;

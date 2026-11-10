@@ -98,6 +98,20 @@ describe("what is refused", () => {
     expect(await sensitiveDestination("/root/courses", { home: "/root", allowRoots: [] })).toBeNull();
   });
 
+  it.runIf(posix)("judges an AppData folder below a Temp folder on its own, so a fake home in Temp cannot open the Startup folder", async () => {
+    expect(await check("/mnt/c/Users/me/AppData/Local/Temp/x")).toBeNull();
+    expect(await check("/mnt/c/Users/me/AppData/Local/Temp/x/AppData/Roaming/Microsoft/Windows/Start Menu/Programs/Startup")).toMatch(/AppData/);
+    expect(await check("/mnt/d/AppData/Roaming/x")).toMatch(/AppData/);
+  });
+
+  it.runIf(process.platform === "linux" && typeof process.getuid === "function" && process.getuid() !== 0)(
+    "refuses a folder inside one this user may not read, with the rule rather than a raw error",
+    async () => {
+      expect(await check("/root/courses")).toMatch(/administrator/);
+      expect(await check("/root")).toMatch(/administrator/);
+    },
+  );
+
   it.runIf(posix)("refuses Windows folders seen from WSL", async () => {
     for (const dir of ["/mnt/c/Windows/System32", "/mnt/c/Program Files/x", "/mnt/d/Program Files (x86)", "/mnt/c/ProgramData", "/mnt/c/Users/me/AppData/Roaming/x", "/mnt/c/Users/me/AppData/Roaming/Microsoft/Windows/Start Menu/Programs/Startup"]) {
       expect(await check(dir), dir).not.toBeNull();
