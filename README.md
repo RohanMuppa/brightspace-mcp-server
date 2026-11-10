@@ -99,6 +99,7 @@ Every file in the course's Content area is saved into folders named after its mo
 | `--dry-run` | List what would be downloaded and download nothing |
 | `--max-files <n>` | Most files in one run (default 300); run it again to continue |
 | `--json` | Print the result as JSON on stdout (progress goes to stderr), for scripts and schedulers |
+| `--notify` | Show a system notification (macOS) when new files arrive ("ECE 362: 3 new files") or the sign-in has expired; quiet when nothing changed |
 
 How it keeps your own files safe:
 
@@ -112,6 +113,25 @@ How it keeps your own files safe:
 - **Names match the filesystem.** Duplicates are numbered by what the filesystem treats as the same name (full case folding: `ß` and `SS`, `ﬁ` and `fi`), invisible and unsupported characters are cleaned, a name is used exactly as planned (never decoded again), and an empty file (0 bytes on Brightspace) is reported as such, not as a failure.
 
 It exits 0 when everything was done, 1 if a file failed or was not attempted (including a sign-in that expired partway; files already saved are kept), and 2 for a usage error. Web links, embedded videos, quizzes and locked items are not files; the result counts them so they are not mistaken for missing downloads.
+
+### Notifications and a daily schedule (macOS)
+
+On a Mac, the server shows ordinary system notifications, with nothing to install:
+
+- **Sign-in numbers.** When a sign-in is waiting on your phone, a notification says "Approve 91 in Microsoft Authenticator" right away, so you do not have to be watching the chat.
+- **New course files.** `sync --notify` says how many new files arrived and which course, and says "Brightspace sign-in needed" when the saved sign-in has expired. It stays quiet when nothing changed.
+
+The first time, macOS may ask you to allow notifications for Script Editor (System Settings, Notifications). Turn them all off with `D2L_NOTIFY=0`. Notifications never contain a password, cookie, token or code, and a notification cannot open the folder when clicked, so it names the folder instead.
+
+To run a sync every day:
+
+```bash
+brightspace-mcp-server schedule --course 123456 --dest ~/Courses/ECE-264 --at 08:00
+brightspace-mcp-server schedule --list
+brightspace-mcp-server schedule --remove --course 123456
+```
+
+This adds a per-user launchd agent (`~/Library/LaunchAgents/com.brightspace-mcp-server.sync.123456.plist`) that runs `sync --notify`, using the same folder rules as `sync`; its log is in `~/.d2l-session/logs/`. It runs the copy of the server you ran `schedule` with, so install it globally (`npm install -g brightspace-mcp-server`) rather than running it through `npx`. Your Mac must be awake and signed in at that time. On other systems `schedule` says it is not supported yet.
 
 ## Prompts
 
