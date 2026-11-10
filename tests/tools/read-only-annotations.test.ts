@@ -14,7 +14,7 @@ import { registerGetAnnouncements } from "../../src/tools/get-announcements.js";
  * only reads says so. A tool that can save a file to disk (downloadPath) does
  * not: clients also use the hint to skip permission prompts.
  */
-const WRITES_TO_DISK = new Set(["download_file", "download_dropbox_submission_file", "get_syllabus"]);
+const WRITES_TO_DISK = new Set(["download_file", "download_course_files", "download_dropbox_submission_file", "get_syllabus"]);
 /**
  * The one tool that destroys state: it deletes the saved session. It is
  * neither read-only nor a file writer, and it says so with destructiveHint so
@@ -45,7 +45,7 @@ function registrations(): Array<{ name: string; config: string }> {
 
 describe("read-only tool annotations", () => {
   it("finds every tool the server registers", () => {
-    expect(registrations().length).toBe(28);
+    expect(registrations().length).toBe(29);
   });
 
   it.each(registrations().filter(({ name }) => !WRITES_TO_DISK.has(name) && !DESTRUCTIVE.has(name) && !SIGNS_IN.has(name)))("marks $name read-only", ({ config }) => {

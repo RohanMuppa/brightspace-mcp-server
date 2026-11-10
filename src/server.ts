@@ -24,6 +24,7 @@ import {
   registerGetCourseContent,
   registerDownloadFile,
   COURSE_FILE_NEEDS_COOKIE,
+  registerDownloadCourseFiles,
   registerGetClasslistEmails,
   registerGetRoster,
   registerGetMyGroups,
@@ -151,6 +152,7 @@ export function createMcpServer(runtime: ServerRuntime): McpServer {
     apiClient,
     config.envSessionCookie ? ENV_COOKIE_REJECTED : config.envAccessToken ? COURSE_FILE_NEEDS_COOKIE : undefined,
   );
+  registerDownloadCourseFiles(server, apiClient);
   registerGetClasslistEmails(server, apiClient);
   registerGetRoster(server, apiClient);
   registerGetMyGroups(server, apiClient);
@@ -169,7 +171,7 @@ export function createMcpServer(runtime: ServerRuntime): McpServer {
   registerGetDropboxFeedback(server, apiClient);
   registerGetRubricsForObject(server, apiClient);
   registerDownloadDropboxSubmissionFile(server, apiClient);
-  log("DEBUG", "MCP tools registered (28 tools)");
+  log("DEBUG", "MCP tools registered (29 tools)");
 
   // Register MCP prompts — surfaced in clients (e.g. Claude Desktop) as a
   // picker, distinct from tools. Each one is a canned user message that
