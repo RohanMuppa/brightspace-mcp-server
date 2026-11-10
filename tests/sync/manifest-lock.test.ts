@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -99,5 +99,69 @@ describe("acquireSyncLock", () => {
   it("does not take over a fresh lock held by a live process", async () => {
     await fs.writeFile(path.join(dir, LOCK_NAME), JSON.stringify({ pid: process.pid, startedAt: Date.now() }));
     await expect(acquireSyncLock(dir)).rejects.toThrow(/already running/);
+  });
+
+  it("leaves nothing behind after taking over a stale lock", async () => {
+    await fs.writeFile(path.join(dir, LOCK_NAME), JSON.stringify({ pid: 2 ** 31 - 2, startedAt: Date.now() }));
+    const release = await acquireSyncLock(dir);
+    expect((await fs.readdir(dir)).sort()).toEqual([LOCK_NAME]);
+    await release();
+    expect(await fs.readdir(dir)).toEqual([]);
+  });
+
+  it("lets exactly one of several processes take over a stale lock", async () => {
+    await fs.writeFile(path.join(dir, LOCK_NAME), JSON.stringify({ pid: 2 ** 31 - 2, startedAt: Date.now() }));
+    const outcomes = await Promise.allSettled(Array.from({ length: 8 }, () => acquireSyncLock(dir)));
+    expect(outcomes.filter((o) => o.status === "fulfilled")).toHaveLength(1);
+    for (const o of outcomes) if (o.status === "rejected") expect(o.reason).toBeInstanceOf(SyncInputError);
+    expect((await fs.readdir(dir)).sort()).toEqual([LOCK_NAME]);
+  });
+
+  it("release removes only a lock that still holds its own token", async () => {
+    const release = await acquireSyncLock(dir);
+    // Another sync took the file over (after judging ours stale): its lock must survive our late release.
+    await fs.writeFile(path.join(dir, LOCK_NAME), JSON.stringify({ pid: process.pid, startedAt: Date.now(), token: "someone-else" }));
+    await release();
+    expect(JSON.parse(await fs.readFile(path.join(dir, LOCK_NAME), "utf8")).token).toBe("someone-else");
+  });
+
+  it("release is harmless when the lock is already gone", async () => {
+    const release = await acquireSyncLock(dir);
+    await fs.rm(path.join(dir, LOCK_NAME));
+    await expect(release()).resolves.toBeUndefined();
+  });
+
+  it("re-reads before removing: a lock that turned live after it was judged stale is left alone", async () => {
+    const file = path.join(dir, LOCK_NAME);
+    const live = JSON.stringify({ pid: process.pid, startedAt: Date.now(), token: "live" });
+    await fs.writeFile(file, live);
+    // The first read (the judgement) sees a stale lock; the file itself is live by the re-read.
+    const staleView = JSON.stringify({ pid: 2 ** 31 - 2, startedAt: Date.now() });
+    const real = fs.readFile;
+    let first = true;
+    const spy = vi.spyOn(fs, "readFile").mockImplementation((async (target: any, ...rest: any[]) => {
+      if (first && String(target) === file) {
+        first = false;
+        return staleView;
+      }
+      return (real as any)(target, ...rest);
+    }) as any);
+    try {
+      await expect(acquireSyncLock(dir)).rejects.toThrow(/already running/);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(await fs.readFile(file, "utf8")).toBe(live);
+    expect((await fs.readdir(dir)).sort()).toEqual([LOCK_NAME]);
+  });
+
+  it("takes over a takeover guard left by a process that died inside it", async () => {
+    await fs.writeFile(path.join(dir, LOCK_NAME), JSON.stringify({ pid: 2 ** 31 - 2, startedAt: Date.now() }));
+    const guard = path.join(dir, `${LOCK_NAME}.takeover`);
+    await fs.writeFile(guard, "dead");
+    const old = new Date(Date.now() - 120_000);
+    await fs.utimes(guard, old, old);
+    await (await acquireSyncLock(dir))();
+    expect(await fs.readdir(dir)).toEqual([]);
   });
 });
