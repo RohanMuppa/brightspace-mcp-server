@@ -1,5 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import fs from "node:fs/promises";
 import os from "node:os";
+import path from "node:path";
 import { secureDownload, secureStreamDownload } from "../../src/utils/download-helpers.js";
 import { DownloadError } from "../../src/utils/download-errors.js";
 import { registerDownloadDropboxSubmissionFile } from "../../src/tools/download-dropbox-submission-file.js";
@@ -12,9 +14,18 @@ import { sanitizeError } from "../../src/tools/tool-helpers.js";
  */
 const pdf = Buffer.concat([Buffer.from("%PDF-1.4\n"), Buffer.alloc(64)]);
 const stream = () => new ReadableStream<Uint8Array>({ start(c) { c.enqueue(new Uint8Array(pdf)); c.close(); } });
+// The hidden folder is made here, so the result does not depend on what exists on this machine.
+let scratch: string;
+beforeAll(async () => {
+  scratch = await fs.mkdtemp(path.join(os.tmpdir(), "destination-policy-"));
+  await fs.mkdir(path.join(scratch, ".hidden-folder"));
+});
+afterAll(async () => {
+  await fs.rm(scratch, { recursive: true, force: true });
+});
 const places: Array<[string, () => string]> = [
   ["the home directory", () => os.homedir()],
-  ["a hidden folder in home", () => `${os.homedir()}/.kube`],
+  ["an existing hidden folder", () => path.join(scratch, ".hidden-folder")],
   ["a system folder", () => (process.platform === "win32" ? "C:\\Windows" : "/etc")],
 ];
 
