@@ -100,6 +100,7 @@ Every file in the course's Content area is saved into folders named after its mo
 | `--dry-run` | List what would be downloaded, and download nothing |
 | `--max-files <n>` | Most files per run (default 300). Run it again to continue |
 | `--json` | Print the result as JSON on stdout, for scripts |
+| `--notify` | macOS notification when new files arrive or the sign-in has expired; quiet when nothing changed |
 
 - The sync keeps a `.brightspace-sync.json` manifest in the folder, which is how it knows which files are its own. Only one sync runs in a folder at a time. If a crashed run left its `.brightspace-sync.lock` behind, the next run takes it over.
 - Course names are made safe for your computer, and a course can't create dotfiles such as `.zshrc` in your folder.
@@ -107,6 +108,8 @@ Every file in the course's Content area is saved into folders named after its mo
 - Exit codes: 0 when everything was done, 1 if a file failed or wasn't attempted (including a sign-in that expired partway; saved files are kept), 2 for a usage error. Links and embedded videos aren't files, so the result counts them separately rather than as missing downloads.
 
 **Some folders are refused.** Downloads can't go to your home folder itself, a drive root, a hidden (dot) folder such as `~/.ssh`, `~/Library` (except cloud-drive and iCloud folders), system folders such as `/etc` or `/System`, or on Windows `Windows`, `Program Files`, `ProgramData` and `AppData`. Anything else is fine, including `/tmp`, external drives and `~/Documents`. Choose a folder like `~/Documents/Brightspace`; the refusal names the rule. The same rule applies to `download_file`, `get_syllabus` and every other tool that saves to disk. The person running the server can allow a folder anyway with `D2L_DOWNLOAD_ROOTS` (see [Settings](#settings-you-might-want)). Full rules: [LLMs.md](LLMs.md).
+
+**Notifications and a daily schedule (macOS).** Sign-in approval numbers ("Approve 91 in Microsoft Authenticator") and `sync --notify` results show as system notifications; `D2L_NOTIFY=0` turns them off. To sync every day: `brightspace-mcp-server schedule --course 123456 --dest ~/Courses/ECE-264 --at 08:00` (also `schedule --list` and `schedule --remove --course 123456`). Details: [LLMs.md](LLMs.md).
 
 ## Prompts
 

@@ -28,7 +28,7 @@ const PKG_VERSION = (() => {
 
 // ── Subcommand routing (before any MCP initialization) ──────────────
 const subcommand = process.argv[2];
-const COMMANDS = ['setup', 'auth', 'doctor', 'repair', 'sync', 'http', 'runtime'];
+const COMMANDS = ['setup', 'auth', 'doctor', 'repair', 'sync', 'schedule', 'http', 'runtime'];
 
 // A mistyped command (`htp`) must not quietly start a stdio server that sits
 // waiting on stdin. Flags alone still mean the default stdio server.
@@ -43,6 +43,7 @@ if (subcommand !== undefined && !subcommand.startsWith('-') && !COMMANDS.include
     '  auth     sign in to Brightspace now\n' +
     '  doctor   check the install and configuration\n' +
     '  sync     download every file of a course (sync --help for options)\n' +
+    '  schedule run sync every day at a set time (macOS; schedule --help)\n' +
     '  repair   restore and verify this installation\'s Chromium\n',
   );
   process.exit(2);
@@ -56,6 +57,8 @@ if (subcommand === 'setup') {
   await import('./doctor.js');
 } else if (subcommand === 'sync') {
   await (await import('./sync/sync-cli.js')).main(PKG_VERSION);
+} else if (subcommand === 'schedule') {
+  await (await import('./sync/schedule-cli.js')).main();
 } else if (subcommand === 'repair') {
   await (await import('./repair.js')).main();
 } else {

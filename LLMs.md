@@ -309,7 +309,8 @@ src/
     errors.ts               `SyncInputError`: a bad argument, as opposed to a failed request
     names.ts                Cross-platform name sanitising (Windows-invalid characters, reserved names, 150-character cap, NFC) and case-insensitive `name (2).ext` dedupe
     summary.ts              Compact plain-text summary of a sync result
-    sync-cli.ts             `sync` argument parsing, JSON/human output and exit codes
+    sync-cli.ts             `sync` argument parsing, JSON/human output, exit codes and `--notify`
+    schedule-cli.ts         `schedule` (macOS): per-user launchd agent that runs `sync --notify` daily; `--list`, `--remove`; launchctl and the filesystem are injected for tests
   tools/
     index.ts                Tool registry
     schemas.ts              Zod input schemas for every tool
@@ -359,6 +360,7 @@ src/
   utils/
     config-store.ts         ~/.brightspace-mcp/config.json reader/writer
     config.ts               Resolved config (store + env fallback)
+    notify.ts               `notify()`: macOS notification via /usr/bin/osascript (execFile, text passed as argv, never in the script; control characters stripped, length capped, 5 s timeout, never throws); `notifyApprovalNumber()` is once per distinct number; `D2L_NOTIFY=0` turns it off
     course-filter.ts        Filter enrolled vs archived courses, and (currentOnly) vs out-of-term courses
     course-files.ts         Course-file path rules shared by download_file (`coursePath`) and get_course_content (`courseFiles`)
     download-helpers.ts     Stream-to-disk with validation; fails a body shorter than its Content-Length ("download incomplete", nothing left behind); `replaceExisting` renames over the old file
@@ -394,6 +396,8 @@ src/
 | `npx -y brightspace-mcp-server@latest auth` | Manual reauth |
 | `npx -y brightspace-mcp-server@latest auth --logout` | Delete this computer's saved session so the next call does a full sign-in. Keeps the password, `config.json`, and credential-store entries. Local only |
 | `npx -y brightspace-mcp-server@latest sync --course <id> --dest <dir> [--existing skip\|replace\|keep_both] [--module <id>] [--dry-run] [--json] [--max-files N]` | Download a whole course into folders named after its modules, using the saved sign-in. A rerun fetches only what is new. `--json` prints only the result object on stdout (progress and the summary go to stderr). Exit 0 all done, 1 something failed or was not attempted (a lost session included), 2 usage error (an unknown module, a refused destination or a sync already running into the same folder included). No time limit on the CLI. `sync --help` lists the flags |
+| `npx -y brightspace-mcp-server@latest schedule --course <id> --dest <dir> --at HH:MM [--existing skip\|replace\|keep_both]` | macOS only (others print "not supported yet", exit 2). Writes `~/Library/LaunchAgents/com.brightspace-mcp-server.sync.<course>.plist` (daily `StartCalendarInterval`; absolute node and entry-script paths, not npx; runs `sync --course … --dest … --notify`; stdout and stderr to `<session root>/logs/sync-<course>.log`), checks `--dest` with the sync's destination rule before writing anything, loads it with `launchctl bootstrap gui/<uid>` (falls back to `load`), and replaces an existing schedule for that course. The course id must be a positive integer. Values are XML-escaped; the plist is written atomically, mode 0644 |
+| `npx -y brightspace-mcp-server@latest schedule --list` / `schedule --remove --course <id>` | List the schedules this tool created / stop one and delete its plist. Only files named `com.brightspace-mcp-server.sync.<id>.plist` are ever read or removed |
 | `npx -y brightspace-mcp-server@latest doctor` | Diagnose a broken setup — Node version, Chromium, saved config, credential store, Brightspace reachability, saved sign-in, a real course-list call, and installed version, each as a ✓/✗ line with one plain-English next step, then one informational line on the 2FA shortcuts (remember this device, saved authenticator key). `--json` prints `{checks, allOk, notes}` instead |
 | `npx -y brightspace-mcp-server@latest repair` | Restore and verify this installation's Chromium: a full browser executable plus a real headless launch. Signs in nothing and changes no client config. `--json` for automation (`brightspace-mcp-server repair` for a global install) |
 | `npx -y brightspace-mcp-server@latest` | Run the MCP server (registered in AI client config) |
@@ -428,6 +432,7 @@ Every setting the server reads from the environment. All are optional; `setup` w
 | `D2L_ACTIVE_ONLY` | `true` | Hide inactive enrollments and courses D2L reports as closed (`CanAccess: false`) |
 | `D2L_CURRENT_ONLY` | `false` | Keep only courses whose `Access.StartDate`–`Access.EndDate` window contains now, like Brightspace's "Current Courses" widget. Courses with neither date are dropped |
 | `D2L_DOWNLOAD_ROOTS` | none | Extra allowed download roots, a `path.delimiter`-separated list (`:` on macOS/Linux, `;` on Windows), for a server or container that saves outside the home folder (`/data`, `/srv/courses`). Each entry is realpath'd; a destination inside one is allowed even where the built-in refusals would say no (a hidden or `~/Library` folder inside home too). Read from the server's own environment, which a tool argument cannot set. A relative entry, a device path, a drive root, the home folder itself or a folder that holds the home folder is ignored with a `[config]` warning. The refusal text names it (`src/utils/sensitive-paths.ts`) |
+| `D2L_NOTIFY` | on (macOS) | `0`, `false`, `no` or `off` turns off system notifications: the sign-in approval number and `sync --notify`. Notification text never holds a password, cookie, token or code; only a 1-3 digit approval number, a course name and a file count. Other platforms do nothing |
 | `D2L_NO_UPDATE_CHECK` | unset | Any non-empty value turns off the npm new-version notice and the auth CLI's self-update re-exec |
 | `D2L_DEV_MODE` | unset | Exactly `true` writes a local, content-free activity log ([docs/dev-mode.md](docs/dev-mode.md)) |
 | `D2L_HTTP_TOKEN` | none | `http` only, and required there: the bearer token every request to the shared server must carry. At least 32 characters; never logged ([docs/shared-server.md](docs/shared-server.md)) |
