@@ -128,4 +128,4 @@ If this is a Docker or other headless setup with no `~/.brightspace-mcp/config.j
 
 ## What's stored where
 
-Your password is saved in your operating system's native credential store (macOS Keychain, Windows Credential Manager, or Linux Secret Service) — never in a plaintext file. Session state on disk is encrypted with AES-256-GCM. None of the server's tools submit, edit, or delete anything in your courses; they only read. The second factor itself (an approval tap, a number match, or a TOTP code) stays on your phone or authenticator app — the server never sees or stores it.
+Your password is saved in your operating system's native credential store (macOS Keychain, Windows Credential Manager, or Linux Secret Service) — never in a plaintext file. Session state on disk is encrypted with AES-256-GCM. None of the server's tools submit, edit, or delete anything in your courses; they only read. An approval tap or number match stays on your phone, and the server never sees it. A code you type, or one generated from a saved authenticator key, goes only to the sign-in page.
