@@ -544,13 +544,14 @@ export function parseContentDispositionFilename(
 export async function openContentTopic(
   apiClient: D2LApiClient,
   courseId: number,
-  topicId: number
+  topicId: number,
+  signal?: AbortSignal
 ): Promise<{ response: Response } | { unavailable: UnavailableTopic }> {
   // Build download URL using D2L API path helper
   const apiPath = apiClient.le(courseId, `/content/topics/${topicId}/file`);
 
   try {
-    return { response: await apiClient.getRaw(apiPath) };
+    return { response: await apiClient.getRaw(apiPath, signal ? { signal } : undefined) };
   } catch (error) {
     if (error instanceof ApiError && (error.status === 403 || error.status === 404)) {
       const unavailable = await checkTopicAvailability(apiClient, courseId, topicId, error.status);

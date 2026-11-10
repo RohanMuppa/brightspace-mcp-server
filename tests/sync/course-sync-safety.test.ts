@@ -219,6 +219,57 @@ describe("cancel, deadline and progress", () => {
   });
 });
 
+describe("an abort interrupts a request that is hung", () => {
+  const toc = { Modules: [module_(1, "M", [fileTopic(10, url("A.pdf")), fileTopic(11, url("B.pdf"))])] };
+  /** A request that never answers but ends when its signal aborts, as fetch does. */
+  const hangs = (signal?: AbortSignal) => new Promise<never>((_resolve, reject) => {
+    signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+  });
+
+  it("ends a hung file download at the deadline and reports the rest as not attempted", async () => {
+    fake = await fakeBrightspace(toc, { 10: ok("a"), 11: ok("b") });
+    fake.client.getRaw.mockImplementation((_p: string, options?: { signal?: AbortSignal }) => hangs(options?.signal));
+    const started = Date.now();
+    const result = await syncCourse(fake.client, { courseId: 42, destination: root, deadlineMs: 60 });
+    expect(Date.now() - started).toBeLessThan(3000);
+    expect(result.stopped).toBe("deadline");
+    expect(result.downloaded).toEqual([]);
+    expect(result.failed).toEqual([]);
+    expect(result.notAttempted).toBe(2);
+  });
+
+  it("ends a hung table-of-contents read at the deadline", async () => {
+    fake = await fakeBrightspace(toc, {});
+    fake.client.get.mockImplementation((_p: string, options?: { signal?: AbortSignal }) => hangs(options?.signal));
+    const result = await syncCourse(fake.client, { courseId: 42, destination: root, deadlineMs: 60 });
+    expect(result.stopped).toBe("deadline");
+    expect(result.downloaded).toEqual([]);
+    expect(await fs.readdir(root)).toEqual([]);
+  });
+
+  it("passes the signal to the client for both requests", async () => {
+    fake = await fakeBrightspace(toc, { 10: ok("a"), 11: ok("b") });
+    await syncCourse(fake.client, { courseId: 42, destination: root });
+    expect(fake.client.get.mock.calls[0][1].signal).toBeInstanceOf(AbortSignal);
+    expect(fake.client.getRaw.mock.calls[0][1].signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("ends a backoff wait at once when the caller cancels", async () => {
+    fake = await fakeBrightspace(toc, { 10: { status: 408 }, 11: ok("b") });
+    const controller = new AbortController();
+    const result = await syncCourse(fake.client, {
+      courseId: 42,
+      destination: root,
+      signal: controller.signal,
+      // A pause that would never end on its own; the cancel arrives while it is waiting.
+      sleep: () => { setTimeout(() => controller.abort(), 10); return new Promise<void>(() => {}); },
+    });
+    expect(result.stopped).toBe("cancelled");
+    expect(result.failed).toEqual([]);
+    expect(result.notAttempted).toBe(2);
+  });
+});
+
 describe("bounds", () => {
   it("stops at maxTotalBytes using Content-Length before writing the file that would pass it", async () => {
     const toc = { Modules: [module_(1, "M", [fileTopic(10, url("A.pdf")), fileTopic(11, url("B.pdf")), fileTopic(12, url("C.pdf"))])] };

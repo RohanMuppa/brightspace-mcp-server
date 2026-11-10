@@ -338,7 +338,12 @@ async function withBackoff<T>(attempt: () => Promise<T>, delays: number[], sleep
       return await attempt();
     } catch (error) {
       if (signal.aborted || tried >= delays.length || !isTransient(error)) throw error;
-      await sleep(delays[tried]);
+      // A cancel or deadline ends the wait at once instead of sitting out the pause.
+      await new Promise<void>((resolve, reject) => {
+        const onAbort = () => reject(error);
+        signal.addEventListener("abort", onAbort, { once: true });
+        sleep(delays[tried]).then(resolve, reject).finally(() => signal.removeEventListener("abort", onAbort));
+      });
     }
   }
 }
@@ -453,8 +458,13 @@ async function runSync(
     // Read once, and fresh: a cached copy would hide what the instructor added since the last run.
     let toc: unknown;
     try {
-      toc = await apiClient.get<unknown>(apiClient.le(courseId, "/content/toc"));
+      toc = await apiClient.get<unknown>(apiClient.le(courseId, "/content/toc"), { signal: stop.signal });
     } catch (error) {
+      if (stop.signal.aborted) {
+        // Cancelled or out of time before the course was even read: nothing was attempted.
+        result.stopped = stop.signal.reason === "deadline" ? "deadline" : "cancelled";
+        return result;
+      }
       if (!isAuthUnavailable(error)) throw error;
       result.stopped = "auth";
       result.authError = textOf(error);
@@ -632,7 +642,7 @@ async function downloadOne(
     signal: AbortSignal;
   },
 ): Promise<Outcome> {
-  const opened = await openContentTopic(apiClient, courseId, topicId);
+  const opened = await openContentTopic(apiClient, courseId, topicId, where.signal);
   if ("unavailable" in opened) return { kind: "unavailable" };
   const { response } = opened;
 
