@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { notifyApprovalNumber, resetApprovalNotifications } from "../../src/utils/notify.js";
 import { AuthError } from "../../src/utils/errors.js";
 import { parseSyncArgs, runSync, SYNC_USAGE } from "../../src/sync/sync-cli.js";
 import { fakeBrightspace, fileTopic, module_, pdf, tempRoot, type Fake } from "./harness.js";
@@ -90,5 +91,33 @@ describe("sync --notify", () => {
   it("a notifier that rejects does not change the exit code", async () => {
     notify.mockRejectedValueOnce(new Error("no"));
     expect(await go(["--notify"], files)).toBe(0);
+  });
+
+  it("keeps the file count in the message when the course name is very long", async () => {
+    const lp = (p: string) => `/d2l/api/lp/1.50${p}`;
+    fake = await fakeBrightspace(toc, files);
+    fake.client.lp = lp;
+    fake.client.get.mockImplementation(async (p: string) => {
+      if (p === lp("/courses/42")) return { Name: "N".repeat(500) };
+      if (p.endsWith("/content/toc")) return toc;
+      throw new Error("unexpected");
+    });
+    await runSync(["--course", "42", "--dest", dest, "--notify"], { stdout: () => {}, stderr: () => {} }, { createClient: async () => fake.client, sleep: async () => {}, notify });
+    const message = (notify.mock.calls[0] as unknown as [{ message: string }])[0].message;
+    expect(Array.from(message.split(":")[0]).length).toBeLessThanOrEqual(120);
+    expect(message.endsWith("2 new files")).toBe(true);
+  });
+
+  it("does not show an approval number for a sign-in it abandons, and lifts that when it is done", async () => {
+    resetApprovalNotifications();
+    const run = vi.fn(async () => {});
+    const deps = { platform: "darwin" as const, env: {}, run };
+    let during: boolean | undefined;
+    await runSync(["--course", "42", "--dest", dest, "--notify"], { stdout: () => {}, stderr: () => {} }, {
+      createClient: async () => { during = await notifyApprovalNumber("55", deps); throw new AuthError("expired"); }, notify,
+    });
+    expect(during).toBe(false);
+    expect(run).not.toHaveBeenCalled();
+    expect(await notifyApprovalNumber("55", deps)).toBe(true);
   });
 });

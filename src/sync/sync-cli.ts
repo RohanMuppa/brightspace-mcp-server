@@ -14,7 +14,7 @@ import { SyncInputError, syncCourse, type ExistingMode, type SyncResult } from "
 import { sensitiveDestination, sensitiveDestinationMessage } from "../utils/sensitive-paths.js";
 import { sanitizeError } from "../tools/tool-helpers.js";
 import { summarizeSync } from "./summary.js";
-import { notify, type NotifyOptions } from "../utils/notify.js";
+import { notify, setApprovalNotificationsSuppressed, type NotifyOptions } from "../utils/notify.js";
 import { AuthError } from "../utils/errors.js";
 
 export const SYNC_USAGE = `Usage: brightspace-mcp-server sync --course <id> --dest <dir> [options]
@@ -134,12 +134,16 @@ export function cleanLine(text: string): string {
 const exitCodeFor = (result: SyncResult): number =>
   result.failed.length === 0 && result.notAttempted === 0 && !result.authError ? 0 : 1;
 
+const MAX_LABEL = 120;
+
 /** The course's name for a notification, or its id when the lookup fails or returns nothing usable. */
 async function courseLabel(client: D2LApiClient, courseId: number): Promise<string> {
   try {
     const course = await client.get<{ Name?: unknown }>(client.lp(`/courses/${courseId}`));
     const name = typeof course?.Name === "string" ? cleanLine(course.Name) : "";
-    return name || String(courseId);
+    // Capped so the file count after it always fits in the notification.
+    const chars = Array.from(name);
+    return (chars.length > MAX_LABEL ? `${chars.slice(0, MAX_LABEL - 1).join("")}\u2026` : name) || String(courseId);
   } catch {
     return String(courseId);
   }
@@ -170,6 +174,10 @@ export async function runSync(argv: string[], io: SyncCliIO, deps: SyncCliDeps):
     await tell?.({ title: "Brightspace", message: "Brightspace sign-in needed" }).catch(() => {});
   };
 
+  // sync does not wait for a sign-in: it reports "sign-in needed" and stops, so an
+  // "Approve NN" notification for the attempt it abandons would only mislead.
+  const quietApprovals = args.notify;
+  if (quietApprovals) setApprovalNotificationsSuppressed(true);
   try {
     // Checked before anything is created: a refused destination must leave no folder behind.
     const protectedReason = await sensitiveDestination(args.destination);
@@ -220,6 +228,8 @@ export async function runSync(argv: string[], io: SyncCliIO, deps: SyncCliDeps):
     // The tools' own wording for each kind of failure; the raw message may carry a response body or URL.
     const first = sanitizeError(error).content[0];
     return report(cleanLine(`Could not sync the course: ${first.type === "text" ? first.text : "unexpected error"}`), 1);
+  } finally {
+    if (quietApprovals) setApprovalNotificationsSuppressed(false);
   }
 }
 
