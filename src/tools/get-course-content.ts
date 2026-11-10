@@ -165,7 +165,7 @@ export async function buildContentTree(
   apiClient: D2LApiClient,
   courseId: number,
   modules: ContentObject[],
-  progressMap: Map<number, ContentProgress>,
+  progressMap: Map<number, ContentProgress> | null,
   typeFilter: string,
   maxDepth?: number,
   currentDepth: number = 0,
@@ -242,7 +242,9 @@ export async function buildContentTree(
         continue;
       }
 
-      const topicProgress = progressMap.get(item.Id);
+      // A null map means progress couldn't be read: completion is unknown,
+      // not false, so a failed read can't pass for "nothing completed".
+      const topicProgress = progressMap?.get(item.Id);
 
       const topic: any = {
         type: 'topic',
@@ -254,7 +256,7 @@ export async function buildContentTree(
         ...availabilityFields(availability),
         ...(item.DueDate ? { dueDate: item.DueDate } : {}),
         lastModified: item.LastModifiedDate ?? null,
-        isCompleted: topicProgress?.IsRead ?? false,
+        isCompleted: progressMap === null ? null : topicProgress?.IsRead ?? false,
         ...(topicProgress?.DateCompleted ? { completedDate: topicProgress.DateCompleted } : {}),
       };
 
@@ -398,24 +400,25 @@ export function registerGetCourseContent(
           );
         }
 
-        // Fetch user progress for the course (graceful degradation)
-        let progressArray: ContentProgress[] = [];
+        // Fetch user progress for the course (graceful degradation). 403/404
+        // means this course has no progress data for the user. Any other
+        // failure leaves completion unknown, so the map stays null and every
+        // topic reports isCompleted: null rather than false.
+        let progressMap: Map<number, ContentProgress> | null = new Map();
         try {
-          progressArray = await apiClient.get<ContentProgress[]>(
+          const progressArray = await apiClient.get<ContentProgress[]>(
             apiClient.le(courseId, '/content/userprogress/'),
             { ttl: DEFAULT_CACHE_TTLS.courseContent }
           );
+          for (const p of Array.isArray(progressArray) ? progressArray : []) {
+            progressMap.set(p.ContentObjectId, p);
+          }
         } catch (error: any) {
-          // 404/403 means no progress data available - not an error
+          if (isAuthUnavailable(error)) throw error;
           if (error?.status !== 404 && error?.status !== 403) {
             log('DEBUG', `Failed to fetch progress for course ${courseId}`, error);
+            progressMap = null;
           }
-        }
-
-        // Build progress map for O(1) lookups
-        const progressMap = new Map<number, ContentProgress>();
-        for (const p of progressArray) {
-          progressMap.set(p.ContentObjectId, p);
         }
 
         // Recursively build content tree
@@ -453,6 +456,13 @@ export function registerGetCourseContent(
           topicCount,
           moduleCount,
           ...(modifiedSince ? { modifiedSince, returned: topicCount, filteredOut } : {}),
+          ...(progressMap === null
+            ? {
+                progressUnavailable:
+                  "Couldn't read this user's completion progress, so every topic has isCompleted null. " +
+                  "Do not report topics as not completed; try again later.",
+              }
+            : {}),
           ...(unreadable > 0
             ? {
                 notice:
