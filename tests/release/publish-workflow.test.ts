@@ -81,6 +81,12 @@ describe("publish workflow", () => {
       expect(ask('echo "5.1.43"').out).toBe("5.1.43[rc=0]\n");
     });
 
+    it("keeps an npm warning on stderr out of the version it returns", () => {
+      const { out, err } = ask('echo "npm warn config something is deprecated" >&2; echo "5.1.43"');
+      expect(out).toBe("5.1.43[rc=0]\n");
+      expect(err).toBe("");
+    });
+
     it("treats E404 as never published: empty answer, success", () => {
       expect(ask('echo "npm error code E404" >&2; exit 1').out).toBe("[rc=0]\n");
     });

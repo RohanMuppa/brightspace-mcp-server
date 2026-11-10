@@ -44,13 +44,17 @@ jobs:
           # (never published), and fails on any other error: a registry hiccup
           # must not read as "never published".
           npm_version() {
-            local out
-            if out=$(npm view "$1" version 2>&1); then
+            local out err
+            err=$(mktemp)
+            # stdout and stderr apart: an `npm warn` line must not end up in the version.
+            if out=$(npm view "$1" version 2>"$err"); then
+              rm -f "$err"
               printf '%s' "$out"
-            elif printf '%s' "$out" | grep -q "E404"; then
-              :
+            elif grep -q "E404" "$err"; then
+              rm -f "$err"
             else
-              echo "::error::npm view $1 failed: $out" >&2
+              echo "::error::npm view $1 failed: $(cat "$err")" >&2
+              rm -f "$err"
               return 1
             fi
           }
