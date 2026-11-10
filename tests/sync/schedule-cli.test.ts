@@ -1,15 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import path from "node:path";
-import { LABEL_PREFIX, buildPlist, parsePlist, parseScheduleArgs, runSchedule, xmlEscape, SCHEDULE_USAGE, type ScheduleDeps } from "../../src/sync/schedule-cli.js";
+import { LABEL_PREFIX, buildPlist, chooseNodePath, scheduleEnvironment, parsePlist, parseScheduleArgs, runSchedule, xmlEscape, SCHEDULE_USAGE, type ScheduleDeps } from "../../src/sync/schedule-cli.js";
 
 const AGENTS = "/home/u/Library/LaunchAgents";
 
 function setup(overrides: Partial<ScheduleDeps> = {}, existing: Record<string, string> = {}) {
   const files = new Map<string, string>(Object.entries(existing));
   const modes = new Map<string, number>();
-  const launchctl = vi.fn(async (_args: string[]) => ({ code: 0, stderr: "" }));
+  // `print` says the label is gone (113) unless a test overrides it.
+  const launchctl = vi.fn(async (args: string[]) => ({ code: args[0] === "print" ? 113 : 0, stderr: "" }));
   const fs = {
     mkdir: vi.fn(async () => undefined),
+    chmod: vi.fn(async () => undefined),
     readdir: vi.fn(async () => [...files.keys()].map((f) => path.basename(f))),
     readFile: vi.fn(async (f: string) => { const v = files.get(f); if (v === undefined) throw new Error("ENOENT"); return v; }),
     writeFileAtomic: vi.fn(async (f: string, data: string, o: { mode: number }) => { files.set(f, data); modes.set(f, o.mode); }),
@@ -19,13 +21,14 @@ function setup(overrides: Partial<ScheduleDeps> = {}, existing: Record<string, s
   const deps: ScheduleDeps = {
     platform: "darwin", uid: 501, agentsDir: AGENTS, logDir: "/home/u/.d2l-session/logs",
     nodePath: "/opt/homebrew/bin/node", scriptPath: "/opt/homebrew/lib/node_modules/brightspace-mcp-server/dist/index.js",
-    launchctl, fs, checkDestination: vi.fn(async () => null), ...overrides,
+    launchctl, fs, checkDestination: vi.fn(async () => null), sleep: vi.fn(async () => {}), ...overrides,
   };
   let out = ""; let err = "";
   const io = { stdout: (s: string) => { out += s; }, stderr: (s: string) => { err += s; } };
   return { deps, io, files, modes, launchctl, fs, out: () => out, err: () => err };
 }
 const plistPath = (id: number) => `${AGENTS}/${LABEL_PREFIX}${id}.plist`;
+const ours = (id: number, dest = "/home/u/C") => buildPlist({ courseId: id, destination: dest, existing: "skip", hour: 9, minute: 0, nodePath: "/n", scriptPath: "/s", logFile: "/l" });
 const add = ["--course", "123456", "--dest", "/home/u/Courses/ECE", "--at", "08:05"];
 
 describe("parseScheduleArgs", () => {
@@ -91,6 +94,68 @@ describe("runSchedule add", () => {
     expect(t.fs.mkdir).toHaveBeenCalledWith("/home/u/.d2l-session/logs", { recursive: true, mode: 0o700 });
   });
 
+  it("tightens a log directory that already exists to 0700 (L6)", async () => {
+    expect(await runSchedule(add, t.io, t.deps)).toBe(0);
+    expect(t.fs.chmod).toHaveBeenCalledWith("/home/u/.d2l-session/logs", 0o700);
+  });
+
+  it("bakes the non-secret D2L_* settings into EnvironmentVariables and never a secret (M2)", async () => {
+    t = setup({ env: {
+      D2L_BASE_URL: "https://x.edu", D2L_SESSION_DIR: "/home/u/s", D2L_NOTIFY: "0", D2L_INCLUDE_COURSES: "1,2",
+      D2L_ACCESS_TOKEN: "tok-secret", D2L_SESSION_COOKIE: "cookie-secret", D2L_PASSWORD: "pw-secret",
+      D2L_TOTP_SECRET: "totp-secret", D2L_HTTP_TOKEN: "http-secret", D2L_FUTURE_THING: "unknown-secret", HOME: "/home/u",
+    } });
+    expect(await runSchedule(add, t.io, t.deps)).toBe(0);
+    const plist = t.files.get(plistPath(123456))!;
+    expect(plist).toContain("<key>EnvironmentVariables</key>");
+    expect(plist).toContain("<key>D2L_BASE_URL</key>\n    <string>https://x.edu</string>");
+    expect(plist).toContain("<key>D2L_NOTIFY</key>\n    <string>0</string>");
+    expect(plist).toContain("<key>D2L_SESSION_DIR</key>");
+    expect(plist).toContain("<key>D2L_INCLUDE_COURSES</key>");
+    for (const secret of ["secret", "D2L_ACCESS_TOKEN", "D2L_PASSWORD", "D2L_HTTP_TOKEN", "D2L_FUTURE_THING", "HOME"]) expect(plist).not.toContain(secret);
+  });
+
+  it("computes the log path from the same environment it bakes", async () => {
+    t = setup({ env: { D2L_SESSION_DIR: "/home/u/s" }, logDir: "/home/u/s/logs" });
+    await runSchedule(add, t.io, t.deps);
+    expect(t.files.get(plistPath(123456))).toContain("<string>/home/u/s/logs/sync-123456.log</string>");
+  });
+
+  it("waits for the old label to disappear before bootstrapping a replacement (L2)", async () => {
+    t = setup({}, { [plistPath(123456)]: ours(123456) });
+    let prints = 0;
+    t.launchctl.mockImplementation(async (a: string[]) => ({ code: a[0] === "print" ? (++prints < 3 ? 0 : 113) : 0, stderr: "" }));
+    expect(await runSchedule(add, t.io, t.deps)).toBe(0);
+    expect(t.launchctl.mock.calls.map((c) => c[0][0])).toEqual(["bootout", "print", "print", "print", "bootstrap"]);
+  });
+
+  it("retries bootstrap once after a pause when replacing a schedule (L2)", async () => {
+    t = setup({}, { [plistPath(123456)]: ours(123456) });
+    let bootstraps = 0;
+    t.launchctl.mockImplementation(async (a: string[]) => ({ code: a[0] === "print" ? 113 : a[0] === "bootstrap" && ++bootstraps === 1 ? 5 : 0, stderr: "Input/output error" }));
+    expect(await runSchedule(add, t.io, t.deps)).toBe(0);
+    expect(bootstraps).toBe(2);
+    expect(t.deps.sleep).toHaveBeenCalledWith(500);
+    expect(t.launchctl.mock.calls.some((c) => c[0][0] === "load")).toBe(false);
+  });
+
+  it("warns when node is a versioned path with no stable twin (L1), and uses a stable twin when it is the same binary", async () => {
+    t = setup({ nodePath: "/opt/homebrew/Cellar/node/22.1.0/bin/node", realpath: vi.fn(async (p: string) => p) });
+    await runSchedule(add, t.io, t.deps);
+    expect(t.err()).toMatch(/node.*(upgrade|disappear|versioned)/i);
+    const real = "/opt/homebrew/Cellar/node/22.1.0/bin/node";
+    expect(await chooseNodePath(real, async (p) => (p === "/opt/homebrew/bin/node" || p === real ? real : p), ["/opt/homebrew/bin/node", "/usr/local/bin/node"])).toEqual({ path: "/opt/homebrew/bin/node" });
+    expect(await chooseNodePath(real, async (p) => (p === "/usr/local/bin/node" ? "/other/node" : p === real ? real : p), ["/opt/homebrew/bin/node", "/usr/local/bin/node"])).toMatchObject({ path: real, warning: expect.any(String) });
+    expect(await chooseNodePath("/usr/local/bin/node", async (p) => p, ["/opt/homebrew/bin/node", "/usr/local/bin/node"])).toEqual({ path: "/usr/local/bin/node" });
+    expect(await chooseNodePath("/home/u/.nvm/versions/node/v22/bin/node", async () => { throw new Error("ENOENT"); }, ["/usr/local/bin/node"])).toMatchObject({ warning: expect.any(String) });
+  });
+
+  it("scheduleEnvironment keeps only allowlisted, single-line values", () => {
+    expect(scheduleEnvironment({ D2L_BASE_URL: "https://a", D2L_PASSWORD: "x", D2L_USERNAME: "a\nb", D2L_NOTIFY: "" }, "/opt/homebrew/bin/node")).toEqual({
+      D2L_BASE_URL: "https://a", PATH: "/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+    });
+  });
+
   it("falls back to launchctl load when bootstrap fails", async () => {
     t.launchctl.mockResolvedValueOnce({ code: 5, stderr: "nope" });
     expect(await runSchedule(add, t.io, t.deps)).toBe(0);
@@ -104,11 +169,11 @@ describe("runSchedule add", () => {
   });
 
   it("boots out an existing schedule for that course first", async () => {
-    t = setup({}, { [plistPath(123456)]: "old" });
+    t = setup({}, { [plistPath(123456)]: ours(123456, "old") });
     expect(await runSchedule(add, t.io, t.deps)).toBe(0);
-    expect(t.launchctl.mock.calls.map((c) => c[0][0])).toEqual(["bootout", "bootstrap"]);
+    expect(t.launchctl.mock.calls.map((c) => c[0][0])).toEqual(["bootout", "print", "bootstrap"]);
     expect(t.launchctl.mock.calls[0][0]).toEqual(["bootout", `gui/501/${LABEL_PREFIX}123456`]);
-    expect(t.files.get(plistPath(123456))).not.toBe("old");
+    expect(t.files.get(plistPath(123456))).not.toContain("old");
   });
 
   it("refuses a protected destination before writing or running anything", async () => {
@@ -163,7 +228,7 @@ describe("runSchedule list and remove", () => {
   });
 
   it("removes only its own plist after booting it out", async () => {
-    const t = setup({}, { [plistPath(7)]: "p", [`${AGENTS}/com.apple.something.plist`]: "x" });
+    const t = setup({}, { [plistPath(7)]: ours(7), [`${AGENTS}/com.apple.something.plist`]: "x" });
     expect(await runSchedule(["--remove", "--course", "7"], t.io, t.deps)).toBe(0);
     expect(t.launchctl.mock.calls[0][0]).toEqual(["bootout", `gui/501/${LABEL_PREFIX}7`]);
     expect(t.fs.rm).toHaveBeenCalledTimes(1);
@@ -171,8 +236,22 @@ describe("runSchedule list and remove", () => {
     expect(t.files.has(`${AGENTS}/com.apple.something.plist`)).toBe(true);
   });
 
+  it("skips a plist whose Label is not ours: list warns and omits it, remove leaves it alone (L7)", async () => {
+    const foreign = ours(7).replace(`${LABEL_PREFIX}7`, "com.evil.other");
+    const t = setup({}, { [plistPath(7)]: foreign, [plistPath(8)]: ours(8) });
+    expect(await runSchedule(["--list"], t.io, t.deps)).toBe(0);
+    expect(t.out()).toBe("course 8  daily at 09:00  /home/u/C\n");
+    expect(t.err()).toMatch(/course 7|Label/);
+    const r = setup({}, { [plistPath(7)]: foreign });
+    r.launchctl.mockResolvedValue({ code: 3, stderr: "" });
+    expect(await runSchedule(["--remove", "--course", "7"], r.io, r.deps)).toBe(1);
+    expect(r.err()).toMatch(/Label/);
+    expect(r.fs.rm).not.toHaveBeenCalled();
+    expect(r.launchctl.mock.calls.some((c) => c[0][0] === "unload")).toBe(false);
+  });
+
   it("falls back to unload, and reports a course with no schedule", async () => {
-    const t = setup({}, { [plistPath(7)]: "p" });
+    const t = setup({}, { [plistPath(7)]: ours(7) });
     t.launchctl.mockResolvedValueOnce({ code: 3, stderr: "" });
     await runSchedule(["--remove", "--course", "7"], t.io, t.deps);
     expect(t.launchctl.mock.calls[1][0]).toEqual(["unload", plistPath(7)]);
