@@ -63,6 +63,13 @@ export async function relaySharedRuntime(
   { dir, startRuntime, startTimeoutMs = DEFAULT_START_TIMEOUT_MS }: RelayOptions,
 ): Promise<void> {
   const disconnected = new AbortController();
+  /**
+   * Each request is its own POST, so the runtime cannot match a later
+   * notifications/cancelled to it. The relay can: it keeps the POST of every
+   * request in progress and aborts it when the client cancels that request.
+   * The runtime ends the tool's own signal when its HTTP request goes away.
+   */
+  const inProgress = new Map<RequestId, AbortController>();
   let current: RuntimeAddress | undefined;
   let locating: Promise<RuntimeAddress> | undefined;
 
@@ -100,6 +107,13 @@ export async function relaySharedRuntime(
 
   const forward = async (message: JSONRPCMessage): Promise<void> => {
     const id = "method" in message && "id" in message ? message.id : undefined;
+    if ("method" in message && message.method === "notifications/cancelled") {
+      const target = (message.params as { requestId?: RequestId } | undefined)?.requestId;
+      if (target !== undefined) inProgress.get(target)?.abort();
+    }
+    const cancelled = new AbortController();
+    if (id !== undefined) inProgress.set(id, cancelled);
+    const signal = AbortSignal.any([disconnected.signal, cancelled.signal]);
     let answered = false;
     const reply = (out: JSONRPCMessage) => {
       if (id !== undefined && "id" in out && out.id === id && !("method" in out)) answered = true;
@@ -110,7 +124,7 @@ export async function relaySharedRuntime(
       for (let attempt = 1; ; attempt += 1) {
         const address = await locate(failed);
         try {
-          await post(address, message, disconnected.signal, reply);
+          await post(address, message, signal, reply);
           if (id !== undefined && !answered) throw new Error("the runtime ended the call without answering it");
           return;
         } catch (error) {
@@ -121,8 +135,12 @@ export async function relaySharedRuntime(
       }
     } catch (error) {
       if (disconnected.signal.aborted) return;
+      // The client cancelled this request: it is no longer waiting for an answer.
+      if (cancelled.signal.aborted) return;
       log("ERROR", "Relaying to the shared runtime failed", error);
       if (id !== undefined && !answered) reply(failure(id, error));
+    } finally {
+      if (id !== undefined && inProgress.get(id) === cancelled) inProgress.delete(id);
     }
   };
 

@@ -4,6 +4,12 @@ on:
   push:
     branches: [main]
 
+# Publishing is serialized: two merges in a row once ran publish at the same
+# time, and the older version finished last and took npm's `latest`.
+concurrency:
+  group: publish-npm
+  cancel-in-progress: false
+
 jobs:
   verify:
     uses: ./.github/workflows/ci.yml
@@ -34,13 +40,66 @@ jobs:
         run: |
           CURRENT=$(node -p "require('./package.json').version")
           echo "version=$CURRENT" >> "$GITHUB_OUTPUT"
-          PUBLISHED=$(npm view brightspace-mcp-server version 2>/dev/null || echo "0.0.0")
-          if [ "$CURRENT" != "$PUBLISHED" ]; then
-            npm publish --provenance --access public
-            echo "Published v$CURRENT"
+          # Prints the version npm has for a spec, nothing when npm answers E404
+          # (never published), and fails on any other error: a registry hiccup
+          # must not read as "never published".
+          npm_version() {
+            local out err
+            err=$(mktemp)
+            # stdout and stderr apart: an `npm warn` line must not end up in the version.
+            if out=$(npm view "$1" version 2>"$err"); then
+              rm -f "$err"
+              printf '%s' "$out"
+            elif grep -q "E404" "$err"; then
+              rm -f "$err"
+            else
+              echo "::error::npm view $1 failed: $(cat "$err")" >&2
+              rm -f "$err"
+              return 1
+            fi
+          }
+          PUBLISHED=$(npm_version brightspace-mcp-server) || exit 1
+          ALREADY=$(npm_version "brightspace-mcp-server@$CURRENT") || exit 1
+          PUBLISHED=${PUBLISHED:-0.0.0}
+          # Only a version newer (full semver precedence) than npm's: a run for an
+          # older commit that finishes late must not publish over a newer release.
+          IS_NEWER=$(node -e '
+            const parse = (v) => {
+              const [core, pre] = v.split("+")[0].split(/-(.+)/);
+              return { n: core.split(".").map(Number), pre: pre ? pre.split(".") : [] };
+            };
+            const part = (x, y) => {
+              const xn = /^\d+$/.test(x), yn = /^\d+$/.test(y);
+              if (xn && yn) return Math.sign(Number(x) - Number(y));
+              if (xn) return -1;
+              if (yn) return 1;
+              return x < y ? -1 : x > y ? 1 : 0;
+            };
+            const compare = (a, b) => {
+              for (let i = 0; i < 3; i++) if (a.n[i] !== b.n[i]) return a.n[i] > b.n[i] ? 1 : -1;
+              if (!a.pre.length || !b.pre.length) return a.pre.length === b.pre.length ? 0 : a.pre.length ? -1 : 1;
+              for (let i = 0; i < Math.max(a.pre.length, b.pre.length); i++) {
+                if (i >= a.pre.length) return -1;
+                if (i >= b.pre.length) return 1;
+                const c = part(a.pre[i], b.pre[i]);
+                if (c) return c;
+              }
+              return 0;
+            };
+            console.log(compare(parse(process.argv[1]), parse(process.argv[2])) > 0);
+          ' "$CURRENT" "$PUBLISHED")
+          # A prerelease never becomes `latest`.
+          TAG=latest
+          case "$CURRENT" in *-*) TAG=next ;; esac
+          if [ -n "$ALREADY" ]; then
+            echo "Version $CURRENT is already on npm, skipping"
+            echo "published=false" >> "$GITHUB_OUTPUT"
+          elif [ "$IS_NEWER" = "true" ]; then
+            npm publish --provenance --access public --tag "$TAG"
+            echo "Published v$CURRENT as $TAG"
             echo "published=true" >> "$GITHUB_OUTPUT"
           else
-            echo "Version $CURRENT already published, skipping"
+            echo "Version $CURRENT is not newer than npm's $PUBLISHED, skipping"
             echo "published=false" >> "$GITHUB_OUTPUT"
           fi
         env:

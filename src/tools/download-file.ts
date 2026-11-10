@@ -10,7 +10,7 @@ import { D2LApiClient, ApiError } from "../api/index.js";
 import { DownloadFileSchema } from "./schemas.js";
 import { toolResponse, sanitizeError, errorResponse, withUpdateNotice } from "./tool-helpers.js";
 import { log } from "../utils/logger.js";
-import { checkTopicAvailability } from "./topic-availability.js";
+import { checkTopicAvailability, type UnavailableTopic } from "./topic-availability.js";
 // Path containment checks belong to secureStreamDownload, which disk-mode downloads
 // go through; importing it here only made it look as though this file
 // validated anything itself. Inline mode never writes to disk, so it calls
@@ -22,8 +22,9 @@ import {
   MAX_FILE_SIZE,
   DISK_MAX_FILE_SIZE,
 } from "../utils/file-validator.js";
-import { secureStreamDownload, readBodyCapped } from "../utils/download-helpers.js";
+import { secureStreamDownload, readBodyCapped, expectedLength } from "../utils/download-helpers.js";
 import { DownloadError } from "../utils/download-errors.js";
+import { sensitiveDestination, sensitiveDestinationMessage } from "../utils/sensitive-paths.js";
 import { AUTH_COMMAND } from "../utils/commands.js";
 import { parseCoursePath, QUICKLINK_PATH } from "../utils/course-files.js";
 import { extractPdfText } from "../utils/pdf-extractor.js";
@@ -272,6 +273,7 @@ async function finishDownload(
     originalFilename,
     body: response.body,
     maxBytes: DISK_MAX_FILE_SIZE,
+    expectedBytes: expectedLength(response),
   });
 
   log(
@@ -384,6 +386,10 @@ export function registerDownloadFile(
               );
             }
             throw error;
+          }
+          const protectedReason = await sensitiveDestination(downloadPath);
+          if (protectedReason) {
+            return errorResponse(sensitiveDestinationMessage(downloadPath, protectedReason), "destination");
           }
         }
 
@@ -530,6 +536,32 @@ export function parseContentDispositionFilename(
 }
 
 /**
+ * Request a content topic's file. Returns the response, or why the topic is
+ * not available: unreleased files can answer 403 or 404, and a release
+ * restriction is only explained when the metadata supports it, so every other
+ * failure is thrown intact. Shared with the course sync.
+ */
+export async function openContentTopic(
+  apiClient: D2LApiClient,
+  courseId: number,
+  topicId: number,
+  signal?: AbortSignal
+): Promise<{ response: Response } | { unavailable: UnavailableTopic }> {
+  // Build download URL using D2L API path helper
+  const apiPath = apiClient.le(courseId, `/content/topics/${topicId}/file`);
+
+  try {
+    return { response: await apiClient.getRaw(apiPath, signal ? { signal } : undefined) };
+  } catch (error) {
+    if (error instanceof ApiError && (error.status === 403 || error.status === 404)) {
+      const unavailable = await checkTopicAvailability(apiClient, courseId, topicId, error.status);
+      if (unavailable) return { unavailable };
+    }
+    throw error;
+  }
+}
+
+/**
  * Download a content file using topicId
  */
 async function downloadContentFile(
@@ -544,21 +576,9 @@ async function downloadContentFile(
     `Downloading content file: courseId=${courseId}, topicId=${topicId}`
   );
 
-  // Build download URL using D2L API path helper
-  const apiPath = apiClient.le(courseId, `/content/topics/${topicId}/file`);
-
-  // Unreleased files can return 404 as well as 403. Only explain a release
-  // restriction when the metadata supports it; keep other failures intact.
-  let response: Response;
-  try {
-    response = await apiClient.getRaw(apiPath);
-  } catch (error) {
-    if (error instanceof ApiError && (error.status === 403 || error.status === 404)) {
-      const unavailable = await checkTopicAvailability(apiClient, courseId, topicId, error.status);
-      if (unavailable) return toolResponse(unavailable);
-    }
-    throw error;
-  }
+  const opened = await openContentTopic(apiClient, courseId, topicId);
+  if ("unavailable" in opened) return toolResponse(opened.unavailable);
+  const { response } = opened;
 
   // Get filename from Content-Disposition header
   const disposition = response.headers.get("Content-Disposition") ?? "";

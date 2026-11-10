@@ -20,6 +20,17 @@ import {
 } from "./file-validator.js";
 import { DownloadError } from "./download-errors.js";
 import { log } from "./logger.js";
+import { sensitiveDestination } from "./sensitive-paths.js";
+
+/**
+ * Every write to disk starts here, so the protected-destination rule is
+ * enforced once for all tools (see sensitiveDestination).
+ */
+async function assertAllowedDestination(targetDir: string): Promise<void> {
+  if (await sensitiveDestination(targetDir)) {
+    throw new DownloadError("forbiddenDestination", "Destination folder is not allowed");
+  }
+}
 
 /**
  * Resolve filename conflicts by appending (1), (2), etc.
@@ -79,6 +90,7 @@ export async function secureDownload(options: {
   const { targetDir, filename, data, allowedTypes } = options;
 
   log("DEBUG", `secureDownload: starting download of ${filename} to ${targetDir}`);
+  await assertAllowedDestination(targetDir);
 
   // Validate target directory exists and is a directory
   try {
@@ -133,6 +145,15 @@ export async function secureDownload(options: {
   };
 }
 
+/** A planned name, checked to be exactly one safe path component and nothing else. */
+function verbatimComponent(targetDir: string, name: string): string {
+  const unsafe =
+    name === "" || name === "." || name === ".." || /[/\\\u0000]/.test(name) || path.basename(name) !== name || Buffer.byteLength(name) > 255;
+  const rel = path.relative(path.resolve(targetDir), path.resolve(targetDir, name));
+  if (unsafe || rel !== name) throw new DownloadError("badFilename", "Invalid filename");
+  return name;
+}
+
 /**
  * secureDownload for a response body that is streamed to disk rather than
  * held in memory, so a file's size is bounded by `maxBytes` instead of by
@@ -140,7 +161,13 @@ export async function secureDownload(options: {
  * type-checked there, and only then published under its final name; a refused or
  * failed download leaves nothing behind.
  *
+ * With `expectedBytes` (the response's Content-Length, see expectedLength), a
+ * body that ends short of it fails and leaves nothing behind: a dropped
+ * connection must not publish a truncated file that a later sync would take
+ * for the whole one.
+ *
  * @throws DownloadError("tooLarge") once the body passes maxBytes
+ * @throws DownloadError("incomplete") when fewer than expectedBytes arrive
  */
 export async function secureStreamDownload(options: {
   targetDir: string;
@@ -149,10 +176,36 @@ export async function secureStreamDownload(options: {
   originalFilename?: string;
   body: ReadableStream<Uint8Array>;
   maxBytes: number;
+  /** Bytes the server said it would send; fewer arriving is a failed download. */
+  expectedBytes?: number;
+  /**
+   * Replace a file already at `filename` (rename over it) instead of picking
+   * "name(1).ext". Only that exact name is ever overwritten: when the saved
+   * name differs (an extension corrected from the file's real type) the file
+   * is written exclusively, so an unrelated file beside it is never replaced.
+   */
+  replaceExisting?: boolean;
+  /**
+   * Asked immediately before an existing file would be overwritten, with its
+   * path. Returning false writes the new file exclusively instead (beside the
+   * old one, never over it): the file changed after the caller decided to
+   * replace it.
+   */
+  replaceGuard?: (existingPath: string) => Promise<boolean>;
+  /** Abort the download; nothing is left behind. */
+  signal?: AbortSignal;
+  /**
+   * `filename` is already a final single path component (the course sync
+   * planned it): use it exactly as given instead of decoding and sanitizing it
+   * again, which could turn "%2e%2ezshrc" into something else. A name that is
+   * not one safe component is refused.
+   */
+  verbatimName?: boolean;
 }): Promise<{ path: string; size: number; mime: string }> {
-  const { targetDir, filename, originalFilename, body, maxBytes } = options;
+  const { targetDir, filename, originalFilename, body, maxBytes, expectedBytes, replaceExisting, replaceGuard, signal, verbatimName } = options;
 
-  const safeFilename = path.basename(validateDownloadPath(targetDir, filename));
+  await assertAllowedDestination(targetDir);
+  const safeFilename = verbatimName ? verbatimComponent(targetDir, filename) : path.basename(validateDownloadPath(targetDir, filename));
   const partialPath = path.join(targetDir, `.download-${randomUUID()}.part`);
 
   let size = 0;
@@ -167,20 +220,55 @@ export async function secureStreamDownload(options: {
     },
   });
 
+  const incomplete = () =>
+    new DownloadError("incomplete", `Download incomplete: ${size} of ${expectedBytes} bytes arrived`);
+
   try {
-    await pipeline(
-      Readable.fromWeb(body as WebReadableStream<Uint8Array>),
-      limit,
-      createWriteStream(partialPath, { flags: "wx" })
-    );
+    try {
+      await pipeline(
+        Readable.fromWeb(body as WebReadableStream<Uint8Array>),
+        limit,
+        createWriteStream(partialPath, { flags: "wx" }),
+        ...(signal ? [{ signal }] : [])
+      );
+    } catch (error) {
+      // fetch reports a connection cut mid-body as a bare "terminated".
+      if (expectedBytes !== undefined && size < expectedBytes && !(error instanceof DownloadError)) {
+        throw incomplete();
+      }
+      throw error;
+    }
+    if (expectedBytes !== undefined && size < expectedBytes) throw incomplete();
+    if (size === 0) throw new DownloadError("empty", "File is empty (0 bytes)");
     const type = await validateFileTypeOfFile(partialPath, undefined, safeFilename, originalFilename);
     const { mime } = type;
-    const finalPath = await publishExclusively(partialPath, targetDir, nameForType(safeFilename, type));
+    const finalName = nameForType(safeFilename, type);
+    let finalPath: string;
+    const replaceTarget = path.join(targetDir, finalName);
+    if (replaceExisting && finalName === safeFilename && (!replaceGuard || (await replaceGuard(replaceTarget)))) {
+      finalPath = replaceTarget;
+      await fs.rename(partialPath, finalPath);
+    } else {
+      finalPath = await publishExclusively(partialPath, targetDir, finalName);
+    }
     log("INFO", `Downloaded file to ${finalPath} (${size} bytes, ${mime})`);
     return { path: finalPath, size, mime };
   } finally {
     await fs.rm(partialPath, { force: true });
   }
+}
+
+/**
+ * The byte count a response promises, or undefined when it promises none we
+ * can hold it to: no Content-Length, or a Content-Encoding, where fetch hands
+ * back the decoded body and the header counts the encoded one.
+ */
+export function expectedLength(response: Response): number | undefined {
+  const encoding = (response.headers.get("Content-Encoding") ?? "").trim().toLowerCase();
+  if (encoding && encoding !== "identity") return undefined;
+  const header = response.headers.get("Content-Length");
+  if (header === null || !/^\d+$/.test(header.trim())) return undefined;
+  return Number(header);
 }
 
 /**

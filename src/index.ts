@@ -28,7 +28,7 @@ const PKG_VERSION = (() => {
 
 // ── Subcommand routing (before any MCP initialization) ──────────────
 const subcommand = process.argv[2];
-const COMMANDS = ['setup', 'auth', 'doctor', 'repair', 'http', 'runtime'];
+const COMMANDS = ['setup', 'auth', 'doctor', 'repair', 'sync', 'http', 'runtime'];
 
 // A mistyped command (`htp`) must not quietly start a stdio server that sits
 // waiting on stdin. Flags alone still mean the default stdio server.
@@ -42,6 +42,7 @@ if (subcommand !== undefined && !subcommand.startsWith('-') && !COMMANDS.include
     '  setup    configure your school and sign-in\n' +
     '  auth     sign in to Brightspace now\n' +
     '  doctor   check the install and configuration\n' +
+    '  sync     download every file of a course (sync --help for options)\n' +
     '  repair   restore and verify this installation\'s Chromium\n',
   );
   process.exit(2);
@@ -53,6 +54,8 @@ if (subcommand === 'setup') {
   await import('./auth-cli.js');
 } else if (subcommand === 'doctor') {
   await import('./doctor.js');
+} else if (subcommand === 'sync') {
+  await (await import('./sync/sync-cli.js')).main(PKG_VERSION);
 } else if (subcommand === 'repair') {
   await (await import('./repair.js')).main();
 } else {
@@ -152,7 +155,7 @@ if (subcommand === 'setup') {
       const { resolveHttpPort, resolveHttpToken, startHttpServer } = await import("./http-server.js");
       const running = await startHttpServer({ runtime, token: resolveHttpToken(), port: resolveHttpPort() });
       stopServing = running.close;
-      log("INFO", `Brightspace MCP Server by Rohan Muppa — shared HTTP server listening on ${running.url} (28 tools, 4 prompts registered)`);
+      log("INFO", `Brightspace MCP Server by Rohan Muppa — shared HTTP server listening on ${running.url} (29 tools, 4 prompts registered)`);
       log("INFO", "Leave this running; every MCP client on this computer connects to that URL. Press Ctrl+C to stop.");
     } catch (error) {
       log("ERROR", "MCP Server failed to start", error);

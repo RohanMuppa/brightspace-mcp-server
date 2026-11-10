@@ -296,7 +296,7 @@ export class D2LApiClient {
    * @throws ApiError on HTTP errors (401, 403, 429, etc.)
    * @throws NetworkError on network/fetch failures
    */
-  async get<T>(path: string, options?: { ttl?: number }): Promise<T> {
+  async get<T>(path: string, options?: { ttl?: number; signal?: AbortSignal }): Promise<T> {
     // Checked before the path is resolved, and keyed by the path as the caller
     // wrote it, so a cached read needs neither version discovery nor a token.
     //
@@ -324,7 +324,9 @@ export class D2LApiClient {
     // Join an identical GET already in flight rather than issuing a second
     // one. Keyed on the same unresolved path the cache above uses, so the
     // join happens before version discovery or a token is even touched.
-    const pending = this.pendingGets.get(path) as Promise<T> | undefined;
+    // A caller with a signal is never joined to another's request (its abort
+    // must end only its own) and never joined by one.
+    const pending = options?.signal ? undefined : (this.pendingGets.get(path) as Promise<T> | undefined);
     if (pending) {
       this.statsData.coalescedJoins++;
       log("DEBUG", `Coalescing GET onto an in-flight request: ${path}`);
@@ -334,7 +336,7 @@ export class D2LApiClient {
     const generation = this.cacheGeneration;
     const inFlight = (async (): Promise<T> => {
       const resolved = await this.resolvePath(path);
-      const data = await this.withAuthentication(resolved, token => this.makeRequest<T>(resolved, token));
+      const data = await this.withAuthentication(resolved, token => this.makeRequest<T>(resolved, token, options?.signal), options?.signal);
 
       if (options?.ttl && generation === this.cacheGeneration) {
         this.cache.set(path, data, options.ttl);
@@ -345,7 +347,7 @@ export class D2LApiClient {
     })().finally(() => {
       if (this.pendingGets.get(path) === inFlight) this.pendingGets.delete(path);
     });
-    this.pendingGets.set(path, inFlight);
+    if (!options?.signal) this.pendingGets.set(path, inFlight);
     return inFlight;
   }
 
@@ -359,9 +361,10 @@ export class D2LApiClient {
    * @throws ApiError on HTTP errors (401, 403, 429, etc.)
    * @throws NetworkError on network/fetch failures
    */
-  async getRaw(path: string): Promise<Response> {
+  async getRaw(path: string, options?: { signal?: AbortSignal }): Promise<Response> {
+    options?.signal?.throwIfAborted();
     const resolved = await this.resolvePath(path);
-    return this.withAuthentication(resolved, token => this.makeRawRequest(resolved, token));
+    return this.withAuthentication(resolved, token => this.makeRawRequest(resolved, token, options?.signal), options?.signal);
   }
 
   /**
@@ -412,14 +415,14 @@ export class D2LApiClient {
   }
 
   /** One HTTP refresh and at most one browser login per caller. */
-  private async withAuthentication<T>(path: string, request: (token: TokenData) => Promise<T>): Promise<T> {
+  private async withAuthentication<T>(path: string, request: (token: TokenData) => Promise<T>, signal?: AbortSignal): Promise<T> {
     let token = await this.tokenManager.getToken();
     let authenticated = false;
     if (!token) {
       token = await this.tryAutoReauth(path);
       authenticated = true;
     }
-    const send = (current: TokenData) => this.retrying(() => this.throttled(() => request(current)));
+    const send = (current: TokenData) => this.retrying(() => this.throttled(() => request(current)), signal);
     try {
       return await send(token);
     } catch (error) {
@@ -471,9 +474,23 @@ export class D2LApiClient {
   }
 
   /** Retry 429, 5xx, and network failures. A 401 is never retried here. */
-  private retrying<T>(fn: () => Promise<T>): Promise<T> {
-    return withRetry(fn, {
+  private retrying<T>(fn: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+    if (!signal) {
+      return withRetry(fn, { ...this.retryConfig, shouldRetry: isRetryableFailure, retryAfterMs: retryAfterMsFrom });
+    }
+    // A caller that has given up gets no further attempt and does not sit out a backoff.
+    const sleep = this.retryConfig.sleep ?? ((ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)));
+    return withRetry(() => {
+      signal.throwIfAborted();
+      return fn();
+    }, {
       ...this.retryConfig,
+      sleep: ms => new Promise<void>((resolve, reject) => {
+        if (signal.aborted) return reject(signal.reason);
+        const onAbort = () => reject(signal.reason);
+        signal.addEventListener("abort", onAbort, { once: true });
+        sleep(ms).then(resolve, reject).finally(() => signal.removeEventListener("abort", onAbort));
+      }),
       shouldRetry: isRetryableFailure,
       retryAfterMs: retryAfterMsFrom,
     });
@@ -507,6 +524,7 @@ export class D2LApiClient {
   private async makeRequest<T>(
     path: string,
     token: TokenData,
+    signal?: AbortSignal,
   ): Promise<T> {
     const url = `${this.baseUrl}${path}`;
     const headers = this.buildAuthHeaders(token);
@@ -517,7 +535,7 @@ export class D2LApiClient {
       const response = await fetch(url, {
         method: "GET",
         headers,
-        signal: AbortSignal.timeout(this.timeoutMs),
+        signal: signal ? AbortSignal.any([AbortSignal.timeout(this.timeoutMs), signal]) : AbortSignal.timeout(this.timeoutMs),
       });
       this.recordStatus(response.status, path);
 
@@ -597,6 +615,7 @@ export class D2LApiClient {
   private async makeRawRequest(
     path: string,
     token: TokenData,
+    signal?: AbortSignal,
   ): Promise<Response> {
     const url = `${this.baseUrl}${path}`;
     const headers = this.buildAuthHeaders(token);
@@ -610,7 +629,7 @@ export class D2LApiClient {
       const response = await fetch(url, {
         method: "GET",
         headers,
-        signal: idle.signal,
+        signal: signal ? AbortSignal.any([idle.signal, signal]) : idle.signal,
       });
       this.recordStatus(response.status, path);
 

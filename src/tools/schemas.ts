@@ -96,6 +96,25 @@ export const DownloadFileSchema = z.object({
     .describe("Custom filename for the downloaded file (include extension). If not provided, uses the original filename from Brightspace."),
 });
 
+export const DownloadCourseFilesSchema = z.object({
+  courseId: z.coerce.number().int().positive()
+    .describe("Course ID to download every file from."),
+  downloadPath: z.string().min(1)
+    .describe("Absolute path to an existing directory on the HOST filesystem where the course is saved. The directory must already exist; it is not created for you, so create it first if needed. Folders named after the course's modules are created inside it. Ask the user where to save the course before calling this; never guess a directory."),
+  existing: z.enum(["skip", "replace", "keep_both"]).default("skip")
+    .describe("What to do with a file that is already on disk. skip (default): leave it alone, so running this again only fetches what is new and never overwrites the user's annotated copies. replace: download it again over the old one. keep_both: save the new copy as 'name (1).ext' beside it, unless a copy of the same size is already there."),
+  moduleId: z.coerce.number().int().positive().optional()
+    .describe("Only download this module and the modules inside it (a module id from get_course_content). Omit to download the whole course."),
+  dryRun: z.boolean().default(false)
+    .describe("List the files that would be downloaded without downloading anything or creating any folder. Use it first on a large course."),
+  maxFiles: z.coerce.number().int().min(1).max(5000).default(300)
+    .describe("Most files to download in one call (default 300). Files already on disk do not count. The rest are reported as not attempted: call again to continue, since existing files are skipped."),
+  maxMinutes: z.coerce.number().int().min(1).max(120).default(8)
+    .describe("Wall-clock limit for this call in minutes (default 8). When it passes, the call stops cleanly and reports the rest as not attempted; call it again to continue, since files already on disk are skipped. Raise it only if the client allows long tool calls."),
+  maxTotalMB: z.coerce.number().int().min(1).max(1048576).default(5120)
+    .describe("Most megabytes to download in one call (default 5120, i.e. 5 GB). The rest is reported as not attempted; call again to continue."),
+});
+
 export const GetSyllabusSchema = z.object({
   courseId: z.coerce.number().int().positive()
     .describe("Course ID to get syllabus for."),
