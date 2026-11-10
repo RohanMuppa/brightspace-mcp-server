@@ -11,7 +11,7 @@ describe("summarizeSync stop reasons", () => {
   it.each([
     ["deadline", /time limit.*call it again/s],
     ["cancelled", /Cancelled.*call it again/s],
-    ["max_total_bytes", /size limit.*call it again/s],
+    ["max_total_bytes", /size limit.*call it again/is],
   ] as const)("explains %s and says to call again", (stopped, pattern) => {
     expect(summarizeSync({ ...base, stopped })).toMatch(pattern);
   });
