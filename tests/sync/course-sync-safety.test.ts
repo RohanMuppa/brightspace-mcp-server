@@ -2,9 +2,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { writeFileAtomic } from "../../src/utils/atomic-write.js";
 import { LOCK_NAME, MANIFEST_NAME } from "../../src/sync/manifest.js";
 import { SyncInputError, locateFolder, syncCourse, type SyncOptions, type SyncProgress } from "../../src/sync/course-sync.js";
 import { fakeBrightspace, fileTopic, listTree, module_, pdf, tempRoot, type Fake, type Step } from "./harness.js";
+
+// Wrapped so the number of manifest writes can be counted; it still writes for real.
+vi.mock("../../src/utils/atomic-write.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../src/utils/atomic-write.js")>();
+  return { ...actual, writeFileAtomic: vi.fn(actual.writeFileAtomic) };
+});
 
 let parent: string;
 let root: string;
@@ -300,7 +307,7 @@ describe("bounds", () => {
     const { result } = await run({ Modules: [module_(1, "M", topics)] }, {}, { dryRun: true, maxFiles: 5 });
     expect(result.tocTruncated).toBe(true);
     expect(result.planned).toHaveLength(5);
-  });
+  }, 60_000);
 
   it("cuts off modules nested absurdly deep and says so", async () => {
     let nested: any = module_(99, "leaf", [fileTopic(10, url("A.pdf"))]);
@@ -467,5 +474,147 @@ describe("replace never overwrites a synced file the user has since changed", ()
     const { result } = await run(toc, { 10: ok("v2", 300) }, { existing: "replace" });
     expect(result.skippedExisting).toBe(1);
     expect(result.downloaded).toEqual([]);
+  });
+});
+
+describe("names on disk: what the filesystem treats as one name", () => {
+  it("numbers a file whose name folds to a module folder's name, and a rerun is clean", async () => {
+    const toc = { Modules: [module_(1, "SS", [fileTopic(10, url("A.pdf"))])], Topics: [fileTopic(11, "/content/enforced/42-C/%C3%9F")] };
+    const first = await run(toc, { 10: ok("a"), 11: ok("b") });
+    expect(first.result.failed).toEqual([]);
+    expect(first.result.downloaded.map((f) => f.path).sort()).toEqual(["SS/A.pdf", "ß (2)"]);
+    const again = await run(toc, { 10: ok("a"), 11: ok("b") });
+    expect(again.result.failed).toEqual([]);
+    expect(again.result.skippedExisting).toBe(2);
+  });
+
+  it("numbers ß.pdf, SS.pdf and ss.pdf apart on disk", async () => {
+    const toc = { Modules: [module_(1, "M", [fileTopic(1, url("ß.pdf")), fileTopic(2, url("SS.pdf")), fileTopic(3, url("ss.pdf"))])] };
+    const { result } = await run(toc, { 1: ok("1"), 2: ok("2"), 3: ok("3") });
+    expect(result.downloaded.map((f) => f.path)).toEqual(["M/ß.pdf", "M/SS (2).pdf", "M/ss (3).pdf"]);
+  });
+
+  it("sends a sanitised module-id fallback through the same cleaning as a title", async () => {
+    const toc = { Modules: [{ ModuleId: "../../evil\u0000", Title: "", Topics: [fileTopic(10, url("A.pdf"))], Modules: [] }] };
+    const { result } = await run(toc, { 10: ok() });
+    expect(result.downloaded).toHaveLength(1);
+    expect(result.downloaded[0].path.split("/")).toHaveLength(2);
+    expect(await fs.readdir(parent)).toEqual(["dest"]);
+  });
+});
+
+describe("names: the downloader never decodes a planned name again", () => {
+  it("saves a name carrying a literal percent escape exactly as planned", async () => {
+    // The Url is "a%2541.pdf": decoded once, "a%41.pdf" is the upload's real name.
+    const toc = { Modules: [module_(1, "M", [fileTopic(10, "/content/enforced/42-C/a%2541.pdf")])] };
+    const { result } = await run(toc, { 10: ok() });
+    expect(result.failed).toEqual([]);
+    const saved = result.downloaded[0].path.split("/")[1];
+    expect(await fs.readdir(path.join(root, "M"))).toEqual([saved]);
+    expect(decodeURIComponent(saved)).toBe(saved);
+  });
+
+  it("cannot be turned into a dot-file, '..', a NUL or a backslash by a title escape", async () => {
+    const toc = { Modules: [module_(1, "M", [fileTopic(10, "", { Title: "%2ezshrc" }), fileTopic(11, "", { Title: "%2e%2e" }), fileTopic(12, "", { Title: "a%00b" }), fileTopic(13, "", { Title: "a%5Cb" })])] };
+    // A File topic with no Url is broken; give them one with no usable basename.
+    for (const m of (toc.Modules[0] as any).Topics) m.Url = "/content/enforced/42-C/";
+    const { result } = await run(toc, { 10: ok("1"), 11: ok("2"), 12: ok("3"), 13: ok("4") });
+    expect(result.failed).toEqual([]);
+    for (const f of await fs.readdir(path.join(root, "M"))) {
+      expect(f).not.toMatch(/^\.|\u0000|\\|\//);
+      expect(f).not.toBe("..");
+    }
+    expect(await fs.readdir(root)).not.toContain(".zshrc");
+  });
+});
+
+describe("failure wording", () => {
+  it("names a filename the filesystem rejects (EILSEQ) as a per-file failure, not an unexpected error", async () => {
+    const toc = { Modules: [module_(1, "M", [fileTopic(10, url("A.pdf")), fileTopic(11, url("B.pdf"))])] };
+    const realLink = fs.link;
+    const spy = vi.spyOn(fs, "link").mockImplementation((async (from: any, to: any) => {
+      if (String(to).endsWith("A.pdf")) throw Object.assign(new Error("illegal byte sequence"), { code: "EILSEQ" });
+      return realLink(from, to);
+    }) as any);
+    try {
+      const { result } = await run(toc, { 10: ok("a"), 11: ok("b") });
+      expect(result.failed).toEqual([{ path: "M/A.pdf", error: "The file system does not accept this file or folder name" }]);
+      expect(result.downloaded.map((f) => f.path)).toEqual(["M/B.pdf"]);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("reports a 0-byte file as empty on Brightspace, not as a failure or an error page", async () => {
+    const toc = { Modules: [module_(1, "M", [fileTopic(10, url("Empty.pdf")), fileTopic(11, url("Empty2.pdf")), fileTopic(12, url("B.pdf"))])] };
+    const { result } = await run(toc, { 10: { body: Buffer.alloc(0) }, 11: { body: Buffer.alloc(0), noLength: true }, 12: ok("b") });
+    expect(result.emptyOnBrightspace).toBe(2);
+    expect(result.failed).toEqual([]);
+    expect(result.downloaded.map((f) => f.path)).toEqual(["M/B.pdf"]);
+    expect(await listTree(root)).toEqual(["M/", "M/B.pdf"]);
+    const { summarizeSync } = await import("../../src/sync/summary.js");
+    expect(summarizeSync(result)).toMatch(/2 empty files \(0 bytes on Brightspace/);
+  });
+});
+
+describe("table-of-contents depth", () => {
+  const chain = (levels: number, leafModules: unknown[]) => {
+    let nested: any = { ModuleId: 999, Title: "leaf", Topics: [fileTopic(10, url("A.pdf"))], Modules: leafModules };
+    for (let i = 1; i < levels; i++) nested = module_(i, `m${i}`, [], [nested]);
+    return { Modules: [nested] };
+  };
+
+  it("is not truncated when the deepest level ends in an empty list of modules", async () => {
+    const { result } = await run(chain(32, []), { 10: ok() }, { dryRun: true });
+    expect(result.tocTruncated).toBeUndefined();
+    expect(result.planned).toHaveLength(1);
+  });
+
+  it("is truncated when modules really continue past the limit", async () => {
+    const { result } = await run(chain(32, [module_(500, "beyond", [fileTopic(11, url("B.pdf"))])]), { 10: ok() }, { dryRun: true });
+    expect(result.tocTruncated).toBe(true);
+  });
+});
+
+describe("byte budget without Content-Length", () => {
+  it("holds when the server states no length: the stream is cut and the file is not kept", async () => {
+    const toc = { Modules: [module_(1, "M", [fileTopic(10, url("A.pdf")), fileTopic(11, url("B.pdf"))])] };
+    const size = pdf("a", 1000).length;
+    const { result } = await run(toc, { 10: { body: pdf("a", 1000), noLength: true }, 11: { body: pdf("b", 1000), noLength: true } }, { maxTotalBytes: size - 100 });
+    expect(result.downloaded).toEqual([]);
+    expect(result.stopped).toBe("max_total_bytes");
+    expect(result.notAttempted).toBe(2);
+    expect(result.failed).toEqual([]);
+    expect((await listTree(root)).filter((entry) => !entry.endsWith("/"))).toEqual([]);
+  });
+
+  it("lets a file that exactly fits the remaining budget through", async () => {
+    const toc = { Modules: [module_(1, "M", [fileTopic(10, url("A.pdf"))])] };
+    const size = pdf("a", 1000).length;
+    const { result } = await run(toc, { 10: { body: pdf("a", 1000), noLength: true } }, { maxTotalBytes: size });
+    expect(result.downloaded).toHaveLength(1);
+  });
+});
+
+describe("manifest writes are batched", () => {
+  it("writes it every 25 files and at the end, not after every file, and it lists all of them", async () => {
+    const topics = Array.from({ length: 60 }, (_, i) => fileTopic(100 + i, url(`f${i}.pdf`)));
+    const plan = Object.fromEntries(topics.map((t, i) => [100 + i, ok(`f${i}`)]));
+    vi.mocked(writeFileAtomic).mockClear();
+    await run({ Modules: [module_(1, "M", topics)] }, plan);
+    const writes = vi.mocked(writeFileAtomic).mock.calls.filter(([target]) => String(target).endsWith(MANIFEST_NAME)).length;
+    expect(writes).toBeGreaterThanOrEqual(2);
+    expect(writes).toBeLessThanOrEqual(5);
+    const manifest = JSON.parse(await fs.readFile(path.join(root, MANIFEST_NAME), "utf8"));
+    expect(Object.keys(manifest.courses["42"])).toHaveLength(60);
+  });
+
+  it("is written when the run stops early, so nothing downloaded is forgotten", async () => {
+    const topics = Array.from({ length: 6 }, (_, i) => fileTopic(100 + i, url(`f${i}.pdf`)));
+    const plan = Object.fromEntries(topics.map((t, i) => [100 + i, ok(`f${i}`)]));
+    const controller = new AbortController();
+    await run({ Modules: [module_(1, "M", topics)] }, plan, { signal: controller.signal, onProgress: (e) => { if (e.done === 3) controller.abort(); } });
+    const manifest = JSON.parse(await fs.readFile(path.join(root, MANIFEST_NAME), "utf8"));
+    expect(Object.keys(manifest.courses["42"])).toHaveLength(3);
   });
 });

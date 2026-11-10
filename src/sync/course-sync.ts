@@ -43,6 +43,9 @@ const MAX_TOC_NODES = 50_000;
 /** Longest full path, in characters, kept on Windows (its classic limit is 260). */
 const WINDOWS_PATH_BUDGET = 250;
 const MIN_NAME_CHARS = 16;
+/** The manifest is rewritten after this many files or this long, and always at the end. */
+const MANIFEST_BATCH_FILES = 25;
+const MANIFEST_BATCH_MS = 2000;
 
 export interface SyncOptions {
   courseId: number;
@@ -72,7 +75,7 @@ export interface SyncOptions {
 }
 
 export interface SyncProgress {
-  type: "downloaded" | "skipped" | "failed" | "planned" | "unavailable";
+  type: "downloaded" | "skipped" | "failed" | "planned" | "unavailable" | "empty";
   path: string;
   bytes?: number;
   error?: string;
@@ -103,6 +106,8 @@ export interface SyncResult {
   /** Dry run only: the files a real run would download. */
   planned?: string[];
   skippedExisting: number;
+  /** Files that are 0 bytes on Brightspace: nothing to save, and not a failure. */
+  emptyOnBrightspace: number;
   failed: Array<{ path: string; error: string }>;
   /** Files left alone because of a cap, a deadline, a cancel or a sign-in that stopped the run. */
   notAttempted: number;
@@ -180,7 +185,8 @@ function planFiles(toc: unknown, moduleId: number | undefined, cap: number): Pla
     const names = new NameSet(cap);
     const children: Array<{ module: Record<string, unknown>; segments: string[] }> = [];
     if (Array.isArray(container.Modules)) {
-      if (depth >= MAX_DEPTH) truncated = true;
+      // Only a level that really holds modules past the limit is cut off, not one that ends in an empty list.
+      if (depth >= MAX_DEPTH) truncated ||= container.Modules.length > 0;
       else {
         for (const raw of container.Modules) {
           if (++nodes > MAX_TOC_NODES) {
@@ -190,7 +196,7 @@ function planFiles(toc: unknown, moduleId: number | undefined, cap: number): Pla
           const module = record(raw);
           if (!module) continue;
           const title = typeof module.Title === "string" ? module.Title : "";
-          const folder = names.add(sanitizeComponent(title, `Module ${module.ModuleId ?? module.Id ?? ""}`.trim(), cap), true);
+          const folder = names.add(sanitizeComponent(title, sanitizeComponent(`Module ${String(module.ModuleId ?? module.Id ?? "")}`.trim(), "Module", cap), cap), true);
           children.push({ module, segments: [...segments, folder] });
         }
       }
@@ -360,7 +366,9 @@ function describeFailure(error: unknown): string {
     const first = sanitizeError(error).content[0];
     return first.type === "text" ? first.text : "Could not save the file";
   }
-  if ((error as NodeJS.ErrnoException | undefined)?.code === "ENAMETOOLONG") return "The path is too long for this filesystem";
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  if (code === "ENAMETOOLONG") return "The path is too long for this filesystem";
+  if (code === "EILSEQ") return "The file system does not accept this file or folder name";
   if (isTransient(error)) return "The connection to Brightspace dropped";
   return "Unexpected error";
 }
@@ -369,6 +377,7 @@ type Outcome =
   | { kind: "saved"; savedName: string; bytes: number }
   | { kind: "duplicate" }
   | { kind: "unavailable" }
+  | { kind: "empty" }
   | { kind: "overBudget" };
 
 const sleepFor = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
@@ -450,6 +459,7 @@ async function runSync(
       downloaded: [],
       ...(dryRun ? { planned: [] } : {}),
       skippedExisting: 0,
+      emptyOnBrightspace: 0,
       failed: [],
       notAttempted: 0,
       nonFiles: { link: 0, media: 0, broken: 0, other: 0, unavailable: 0 },
@@ -489,6 +499,9 @@ async function runSync(
 
     let attempted = 0;
     let totalBytes = 0;
+    let unsaved = 0;
+    let lastSaved = Date.now();
+    try {
     for (const file of plan.files) {
       done++;
       if (!result.stopped && stop.signal.aborted) stopWith(abortedReason());
@@ -591,12 +604,21 @@ async function runSync(
           // The file as left on disk, so a later edit by the user is noticed.
           const written = await fs.stat(path.join(root, ...segments, outcome.savedName));
           manifest.set(courseId, file.topicId, { path: saved, bytes: outcome.bytes, size: written.size, mtimeMs: written.mtimeMs });
-          await manifest.save();
+          // Written in batches (every 25 files or 2 s) and always when the run ends, however it ends.
+          unsaved++;
+          if (unsaved >= MANIFEST_BATCH_FILES || Date.now() - lastSaved >= MANIFEST_BATCH_MS) {
+            await manifest.save();
+            unsaved = 0;
+            lastSaved = Date.now();
+          }
           emit({ type: "downloaded", path: saved, bytes: outcome.bytes });
           if (totalBytes >= maxTotalBytes) stopWith("max_total_bytes");
         } else if (outcome.kind === "duplicate") {
           result.skippedExisting++;
           emit({ type: "skipped", path: rel });
+        } else if (outcome.kind === "empty") {
+          result.emptyOnBrightspace++;
+          emit({ type: "empty", path: rel });
         } else if (outcome.kind === "overBudget") {
           stopWith("max_total_bytes");
           result.notAttempted++;
@@ -612,6 +634,9 @@ async function runSync(
           stopWith("auth");
           result.authError = textOf(error);
           result.notAttempted++;
+        } else if (error instanceof DownloadError && error.kind === "empty") {
+          result.emptyOnBrightspace++;
+          emit({ type: "empty", path: rel });
         } else if (error instanceof RefusedFolder) {
           fail(rel, error.message);
         } else {
@@ -619,6 +644,9 @@ async function runSync(
           fail(rel, describeFailure(error));
         }
       }
+    }
+    } finally {
+      await manifest.save();
     }
     log("INFO", `Course sync ${courseId}: ${result.downloaded.length} downloaded, ${result.skippedExisting} already present, ${result.failed.length} failed, ${result.notAttempted} not attempted`);
     return result;
@@ -652,7 +680,10 @@ async function downloadOne(
   const { response } = opened;
 
   const expected = expectedLength(response);
-  if (!response.body) throw new DownloadError("undetectableType", "File is empty (0 bytes)");
+  if (!response.body || expected === 0) {
+    await response.body?.cancel();
+    return { kind: "empty" };
+  }
   if (expected !== undefined && expected > DISK_MAX_FILE_SIZE) {
     await response.body.cancel();
     throw new DownloadError("tooLarge", `File exceeds ${DISK_MAX_FILE_SIZE} bytes`);
@@ -671,12 +702,16 @@ async function downloadOne(
   }
 
   const dir = await locateFolder(where.root, where.segments, true);
-  const result = await secureStreamDownload({
+  let result: Awaited<ReturnType<typeof secureStreamDownload>>;
+  try {
+    result = await secureStreamDownload({
     targetDir: dir!,
     filename: where.saveAs,
+    verbatimName: true,
     originalFilename: parseContentDispositionFilename(response.headers.get("Content-Disposition") ?? "") ?? undefined,
     body: response.body,
-    maxBytes: DISK_MAX_FILE_SIZE,
+    // The run's remaining byte budget caps the stream itself, so the limit holds when the server states no Content-Length.
+    maxBytes: Math.min(DISK_MAX_FILE_SIZE, where.remainingBytes),
     expectedBytes: expected,
     replaceExisting: where.replace,
     // Minutes can pass between planning and the rename: an edit made meanwhile turns the replace into a copy beside the file.
@@ -687,7 +722,11 @@ async function downloadOne(
         }
       : undefined,
     signal: where.signal,
-  });
+    });
+  } catch (error) {
+    if (error instanceof DownloadError && error.kind === "tooLarge" && where.remainingBytes < DISK_MAX_FILE_SIZE) return { kind: "overBudget" };
+    throw error;
+  }
   if (expected === undefined && sameSize.includes(result.size)) {
     await fs.rm(result.path, { force: true });
     return { kind: "duplicate" };

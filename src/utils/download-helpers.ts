@@ -145,6 +145,15 @@ export async function secureDownload(options: {
   };
 }
 
+/** A planned name, checked to be exactly one safe path component and nothing else. */
+function verbatimComponent(targetDir: string, name: string): string {
+  const unsafe =
+    name === "" || name === "." || name === ".." || /[/\\\u0000]/.test(name) || path.basename(name) !== name || Buffer.byteLength(name) > 255;
+  const rel = path.relative(path.resolve(targetDir), path.resolve(targetDir, name));
+  if (unsafe || rel !== name) throw new DownloadError("badFilename", "Invalid filename");
+  return name;
+}
+
 /**
  * secureDownload for a response body that is streamed to disk rather than
  * held in memory, so a file's size is bounded by `maxBytes` instead of by
@@ -185,11 +194,18 @@ export async function secureStreamDownload(options: {
   replaceGuard?: (existingPath: string) => Promise<boolean>;
   /** Abort the download; nothing is left behind. */
   signal?: AbortSignal;
+  /**
+   * `filename` is already a final single path component (the course sync
+   * planned it): use it exactly as given instead of decoding and sanitizing it
+   * again, which could turn "%2e%2ezshrc" into something else. A name that is
+   * not one safe component is refused.
+   */
+  verbatimName?: boolean;
 }): Promise<{ path: string; size: number; mime: string }> {
-  const { targetDir, filename, originalFilename, body, maxBytes, expectedBytes, replaceExisting, replaceGuard, signal } = options;
+  const { targetDir, filename, originalFilename, body, maxBytes, expectedBytes, replaceExisting, replaceGuard, signal, verbatimName } = options;
 
   await assertAllowedDestination(targetDir);
-  const safeFilename = path.basename(validateDownloadPath(targetDir, filename));
+  const safeFilename = verbatimName ? verbatimComponent(targetDir, filename) : path.basename(validateDownloadPath(targetDir, filename));
   const partialPath = path.join(targetDir, `.download-${randomUUID()}.part`);
 
   let size = 0;
@@ -223,6 +239,7 @@ export async function secureStreamDownload(options: {
       throw error;
     }
     if (expectedBytes !== undefined && size < expectedBytes) throw incomplete();
+    if (size === 0) throw new DownloadError("empty", "File is empty (0 bytes)");
     const type = await validateFileTypeOfFile(partialPath, undefined, safeFilename, originalFilename);
     const { mime } = type;
     const finalName = nameForType(safeFilename, type);

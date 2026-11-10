@@ -29,7 +29,7 @@ export const module_ = (id: number, title: string, topics: unknown[] = [], modul
 
 /** What the fake Brightspace does when a topic's file is requested, in order; the last entry repeats. */
 export type Step =
-  | { body: Buffer; disposition?: string }
+  | { body: Buffer; disposition?: string; noLength?: boolean }
   | { status: number; retryAfter?: number }
   | { short: true; body: Buffer }
   | { error: Error };
@@ -92,7 +92,7 @@ export async function fakeBrightspace(toc: unknown, topics: Record<number, Step 
       return new Response(new Uint8Array(step.body), {
         headers: {
           "Content-Type": "application/pdf",
-          "Content-Length": String(step.body.length),
+          ...(step.noLength ? {} : { "Content-Length": String(step.body.length) }),
           ...(step.disposition ? { "Content-Disposition": step.disposition } : {}),
         },
       });

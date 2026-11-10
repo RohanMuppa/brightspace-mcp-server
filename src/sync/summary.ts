@@ -47,6 +47,7 @@ export function summarizeSync(result: SyncResult): string {
   if (nonFiles.media) skipped.push(`${plural(nonFiles.media, "embedded video/media item")} (download_file cannot fetch these)`);
   if (nonFiles.broken) skipped.push(`${plural(nonFiles.broken, "broken item")}`);
   if (nonFiles.other) skipped.push(`${plural(nonFiles.other, "other non-file item")} (quizzes, discussions, ...)`);
+  if (result.emptyOnBrightspace) skipped.push(`${plural(result.emptyOnBrightspace, "empty file")} (0 bytes on Brightspace, nothing to save)`);
   if (nonFiles.unavailable) skipped.push(`${plural(nonFiles.unavailable, "file")} locked or not yet released`);
   if (skipped.length > 0) lines.push(`Not files, so not downloaded: ${skipped.join("; ")}. These are not missing from the sync.`);
 

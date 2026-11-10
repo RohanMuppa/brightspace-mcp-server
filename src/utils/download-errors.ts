@@ -26,7 +26,8 @@ export type DownloadFailureKind =
   | "pathTraversal"
   | "tooLarge"
   | "incomplete"
-  | "forbiddenDestination";
+  | "forbiddenDestination"
+  | "empty";
 
 export class DownloadError extends Error {
   constructor(

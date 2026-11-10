@@ -147,3 +147,119 @@ describe("NameSet", () => {
     expect(second.endsWith(" (2).pdf")).toBe(true);
   });
 });
+
+import { foldKey } from "../../src/sync/names.js";
+
+describe("foldKey: what a case-insensitive, normalising filesystem treats as equal", () => {
+  it.each([
+    ["ß", "SS"],
+    ["ς", "σ"],
+    ["ſ", "s"],
+    ["ﬁ", "FI"],
+    ["K", "k"],
+    ["İ".toLowerCase(), "İ".toLowerCase()],
+    ["Café", "CAFÉ"],
+    ["Straße.pdf", "STRASSE.PDF"],
+  ])("%j equals %j", (a, b) => expect(foldKey(a)).toBe(foldKey(b)));
+
+  it("keeps different names apart", () => {
+    expect(foldKey("a.pdf")).not.toBe(foldKey("b.pdf"));
+  });
+});
+
+describe("NameSet with full case folding", () => {
+  it("numbers a file whose name folds to a module folder's name", () => {
+    const names = new NameSet();
+    expect(names.add("SS", true)).toBe("SS");
+    expect(names.add("ß")).toBe("ß (2)");
+  });
+
+  it("numbers ß.pdf, SS.pdf and ss.pdf apart", () => {
+    const names = new NameSet();
+    expect([names.add("ß.pdf"), names.add("SS.pdf"), names.add("ss.PDF")]).toEqual(["ß.pdf", "SS (2).pdf", "ss (3).PDF"]);
+  });
+
+  it("numbers in constant time per name: 20,000 duplicates are quick and distinct", () => {
+    const names = new NameSet();
+    const started = Date.now();
+    const out = new Set<string>();
+    for (let i = 0; i < 20_000; i++) out.add(names.add("Notes.pdf"));
+    expect(out.size).toBe(20_000);
+    expect(Date.now() - started).toBeLessThan(1500);
+  });
+
+  it("does not hand out a number that a literal name already holds", () => {
+    const names = new NameSet();
+    names.add("a.pdf");
+    names.add("a (2).pdf");
+    expect(names.add("a.pdf")).toBe("a (3).pdf");
+  });
+});
+
+describe("sanitizeComponent: hostile characters", () => {
+  it("replaces a lone surrogate with U+FFFD", () => {
+    expect(sanitizeComponent("a\ud800b.pdf", "x")).toBe("a�b.pdf");
+    expect(sanitizeComponent("a\udfffb", "x")).toBe("a�b");
+  });
+
+  it.each(["⁠", "­", "؜", "͏", "ㅤ", "ᅟ", "ᅠ", "﻿", "\u{e0001}", "\u{e0041}", "️", "\u{e0100}", "⁦", "⁪", "́", "​"])(
+    "cannot hide a leading dot behind U+%s",
+    (invisible) => {
+      expect(sanitizeComponent(`${invisible}.ssh`, "x")).toBe("_.ssh");
+      expect(sanitizeComponent(`${invisible}${invisible}.zshrc`, "x")).toBe("_.zshrc");
+    },
+  );
+
+  it.each([["a﷐b", "a_b"], ["a﷯b", "a_b"], ["a￿b", "a_b"], ["a￾b", "a_b"], ["a\u{1fffe}b", "a_b"], ["a\u{10ffff}b", "a_b"], ["ab", "a_b"], ["a\u{f0000}b", "a_b"], ["a͸b", "a_b"]])(
+    "replaces the noncharacter, private-use or unassigned code point in %j",
+    (raw, expected) => expect(sanitizeComponent(raw, "x")).toBe(expected),
+  );
+
+  it("keeps ordinary non-Latin text and emoji", () => {
+    expect(sanitizeComponent("講義ノート😀.pdf", "x")).toBe("講義ノート😀.pdf");
+  });
+});
+
+describe("sanitizeComponent: reserved names are judged on the final name", () => {
+  it.each(["CONIN$", "CONOUT$", "conin$.txt", "CONOUT$.tar.gz"])("prefixes %s", (name) => {
+    expect(sanitizeComponent(name, "x")).toBe(`_${name}`);
+  });
+
+  it("catches a name that only becomes reserved once clipped and trimmed", () => {
+    const out = sanitizeComponent(`COM1${" ".repeat(200)}x`, "f");
+    expect(out).toBe("_COM1");
+  });
+
+  it("catches one that is reserved once trailing dots and spaces go", () => {
+    expect(sanitizeComponent("NUL. . .", "x")).toBe("_NUL");
+  });
+
+  it("still fits the cap after the prefix is added", () => {
+    const out = sanitizeComponent(`aux${"x".repeat(0)}`, "x", 4);
+    expect(out.length).toBeLessThanOrEqual(4);
+  });
+});
+
+describe("length cap holds for small caps", () => {
+  it.each([16, 17, 20, 24])("sanitizeComponent never exceeds %i characters, whatever the extension", (cap) => {
+    for (const raw of [`${"a".repeat(80)}.pdf`, `a.${"e".repeat(19)}`, `${"b".repeat(5)}.${"x".repeat(20)}`, "😀".repeat(60), `.${"z".repeat(40)}`]) {
+      expect(Array.from(sanitizeComponent(raw, "fallback", cap)).length, `${raw} @ ${cap}`).toBeLessThanOrEqual(cap);
+    }
+  });
+
+  it.each([16, 20])("NameSet at %i characters stays under the cap for every number, extension or not", (cap) => {
+    const names = new NameSet(cap);
+    for (const raw of [`a.${"e".repeat(19)}`, `${"c".repeat(16)}.pdf`, "x".repeat(16)]) {
+      const name = sanitizeComponent(raw, "x", cap);
+      for (let i = 0; i < 12; i++) expect(Array.from(names.add(name)).length).toBeLessThanOrEqual(cap);
+    }
+  });
+});
+
+describe("fileNameFromTopic: escapes are never left for a second decode", () => {
+  it("neutralises an escape that survives in the title fallback too", () => {
+    const name = fileNameFromTopic("", "%2e%2e%2fevil%2500", "x");
+    expect(decodeURIComponent(name)).toBe(name);
+    expect(name).not.toMatch(/[\\/]/);
+  });
+});

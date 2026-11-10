@@ -14,6 +14,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { writeFileAtomic } from "../utils/atomic-write.js";
 import { log } from "../utils/logger.js";
+import { foldKey } from "./names.js";
 
 export const MANIFEST_NAME = ".brightspace-sync.json";
 export const LOCK_NAME = ".brightspace-sync.lock";
@@ -47,6 +48,8 @@ function validRelativePath(value: unknown): value is string {
 export class SyncManifest {
   private courses: Record<string, Record<string, ManifestEntry>> = {};
   private changed = false;
+  /** Course id to folded path to topic id, so a lookup by path does not scan every entry. */
+  private owners = new Map<string, Map<string, number>>();
 
   private constructor(private readonly file: string) {}
 
@@ -80,16 +83,26 @@ export class SyncManifest {
     return this.courses[String(courseId)]?.[String(topicId)];
   }
 
-  /** The topic a recorded path belongs to, compared case-insensitively like the dedupe is. */
+  /** The topic a recorded path belongs to, compared the way the dedupe compares names (foldKey). */
   ownerOf(courseId: number, relPath: string): number | undefined {
-    const wanted = relPath.normalize("NFC").toLowerCase();
-    for (const [topicId, entry] of Object.entries(this.courses[String(courseId)] ?? {})) {
-      if (entry.path.normalize("NFC").toLowerCase() === wanted) return Number(topicId);
+    return this.ownersOf(courseId).get(foldKey(relPath));
+  }
+
+  private ownersOf(courseId: number): Map<string, number> {
+    let index = this.owners.get(String(courseId));
+    if (!index) {
+      index = new Map();
+      for (const [topicId, entry] of Object.entries(this.courses[String(courseId)] ?? {})) index.set(foldKey(entry.path), Number(topicId));
+      this.owners.set(String(courseId), index);
     }
-    return undefined;
+    return index;
   }
 
   set(courseId: number, topicId: number, entry: ManifestEntry): void {
+    const index = this.ownersOf(courseId);
+    const previous = this.courses[String(courseId)]?.[String(topicId)];
+    if (previous && index.get(foldKey(previous.path)) === topicId) index.delete(foldKey(previous.path));
+    index.set(foldKey(entry.path), topicId);
     (this.courses[String(courseId)] ??= {})[String(topicId)] = entry;
     this.changed = true;
   }
