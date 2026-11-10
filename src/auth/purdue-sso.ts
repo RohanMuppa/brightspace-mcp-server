@@ -12,6 +12,7 @@ import { AutomaticCodeAuthenticationError, MfaApprovalError, UnsupportedAuthenti
 import type { RequestMfaCode } from "./sso-flow.js";
 import { DuoMfaHandler } from "./duo-mfa.js";
 import { AUTH_COMMAND } from "../utils/commands.js";
+import { MFA_APPROVAL_WINDOW_MS, MFA_MAX_RESENDS } from "./mfa-challenge.js";
 import { generateTotp, secondsUntilFreshCode } from "./totp.js";
 import type { RememberMfaOutcome, RememberMfaResult } from "./microsoft-session.js";
 
@@ -76,17 +77,21 @@ const REMEMBER_MFA_LOG: Record<RememberMfaOutcome, string> = {
 const NUMBER_MATCH_POLL_MS = 2000;
 
 /** A person has to find their phone, unlock it, and read a prompt. */
-const MFA_TIMEOUT_MS = 5 * 60 * 1000;
+const MFA_TIMEOUT_MS = MFA_APPROVAL_WINDOW_MS;
 
 /**
- * Entra's number-match request itself expires (typically ~1-2 minutes) well
- * before the 5-minute MFA_TIMEOUT_MS this flow allows overall, or the user
- * can tap Deny. Either way Entra stops showing the number and offers a way to
- * send another request; without asking for one this flow just polls a dead
- * request until MFA_TIMEOUT_MS. Bounded so a tenant that never clears this
- * screen still hits the ordinary timeout instead of resending forever.
+ * Entra's number-match request itself expires (observed live at about the
+ * same 5 minutes as MFA_TIMEOUT_MS, 2026-11-08; earlier tenants showed 1-2
+ * minutes), or the user can tap Deny. Either way Entra stops showing the
+ * number and offers a way to send another request; without asking for one
+ * this flow just polls a dead request until the deadline. Each resend gives
+ * the new number its own full MFA_TIMEOUT_MS (the deadline moves to
+ * resend time + MFA_TIMEOUT_MS), because a resend made at the 5-minute mark
+ * left the new number about four seconds. Bounded, so the total is at most
+ * (1 + MAX_RESENDS) * MFA_TIMEOUT_MS (MFA_MAX_WAIT_MS, 15 minutes) and a
+ * tenant that never clears this screen still ends instead of resending forever.
  */
-const MAX_RESENDS = 2;
+const MAX_RESENDS = MFA_MAX_RESENDS;
 
 /**
  * EXPECTED, not verified against a live tenant from here: Entra's "Send
@@ -496,7 +501,7 @@ export class PurdueSSOFlow {
       throw new UnsupportedAuthenticationError("A school URL is required to verify authentication.");
     }
     const startedAt = Date.now();
-    const deadline = startedAt + MFA_TIMEOUT_MS;
+    let deadline = startedAt + MFA_TIMEOUT_MS;
     let challenged = false;
     /** True once onMfaHeld has reported this login. */
     let heldReported = false;
@@ -645,9 +650,9 @@ export class PurdueSSOFlow {
           resendNotFoundWarned = false;
         }
         // Fix 2: Entra's number-match request itself times out (or the user
-        // taps Deny) well before the 5-minute budget above. Once that has
+        // taps Deny), at the latest about when the budget above runs out. Once that has
         // happened, ask Entra for another one instead of polling a dead
-        // request until MFA_TIMEOUT_MS; readNumberMatch on the next poll
+        // request until the deadline; readNumberMatch on the next poll
         // picks up the fresh number, and the re-announce logic above tells
         // the caller about it.
         if (manualRequired && sawNumber && number === null && new URL(page.url()).hostname === "login.microsoftonline.com") {
@@ -660,6 +665,8 @@ export class PurdueSSOFlow {
             onResend: (clickedAt) => {
               resendCount += 1;
               resendLastClickAt = clickedAt;
+              // The new number gets its own full approval window; never shorten.
+              deadline = Math.max(deadline, clickedAt + MFA_TIMEOUT_MS);
             },
           });
         }
@@ -721,7 +728,7 @@ export class PurdueSSOFlow {
     }
     const clickedAt = Date.now();
     state.onResend(clickedAt);
-    log("WARN", `Number-match request expired; sent another request (${state.resendCount + 1} of ${MAX_RESENDS}).`);
+    log("WARN", `Number-match request expired; sent another request (${state.resendCount + 1} of ${MAX_RESENDS}). The new number gets its own ${MFA_TIMEOUT_MS / 60000} minutes.`);
     await control.click().catch(() => {});
     return state.resendNotFoundWarned;
   }

@@ -15,18 +15,20 @@ import { AUTH_COMMAND } from "../utils/commands.js";
 import { dependencyRepairHint, PLAYWRIGHT_INSTALL_HINT } from "../utils/browser-install.js";
 import { devActivity, newRecoveryId, RECOVERY_ID_ENV } from "../utils/dev-activity.js";
 import { parsePhaseMarker } from "./auth-phases.js";
-import { AUTOMATIC_PENDING_MARKER, MFA_HELD_MARKER, RELAYED_CHALLENGE_MARKER, RELAYED_STARTING_MARKER, authLockPath, challengeRelayedAt, relayChallenge } from "./mfa-challenge.js";
+import { AUTOMATIC_PENDING_MARKER, MFA_HELD_MARKER, MFA_MAX_WAIT_MS, RELAYED_CHALLENGE_MARKER, RELAYED_STARTING_MARKER, authLockPath, challengeRelayedAt, relayChallenge } from "./mfa-challenge.js";
 import { inspectLockOwner, liveAutomaticOwner } from "./auth-lock.js";
 
 /**
  * Timeout for the auth process. It has to outlast the child's own MFA wait,
- * which is five minutes: a person has to find their phone, unlock it, and read
- * a number off the screen. A shorter parent budget would kill the child in the
- * middle of a sign-in the user was still completing. run() itself usually
+ * which is up to MFA_MAX_WAIT_MS (15 minutes: five for the first number and five
+ * more for each of the two resent ones, see purdue-sso.ts) plus the browser
+ * launch and sign-in pages before MFA starts. A shorter parent budget would
+ * kill the child in the middle of a sign-in the user was still completing
+ * (the 8-minute budget cut a resent number's window short). run() itself usually
  * returns long before this fires — the moment the child reports an MFA
  * challenge — but this timer keeps bounding the background child regardless.
  */
-const AUTH_TIMEOUT_MS = 8 * 60 * 1000;
+const AUTH_TIMEOUT_MS = MFA_MAX_WAIT_MS + 3 * 60 * 1000;
 const KILL_GRACE_MS = 5000;
 
 /**
@@ -73,8 +75,8 @@ const RELAY_POLL_MS = 1000;
 
 /**
  * How long a relayed challenge stays "already told to a caller" for the rule
- * that only a RETRY waits on another process's sign-in. The MFA window is five
- * minutes, so a number reported longer ago than that belongs to a sign-in that
+ * that only a RETRY waits on another process's sign-in. One number's MFA window is five
+ * minutes (a resent number is a new number with a new window), so a number reported longer ago than that belongs to a sign-in that
  * is over; the same digits showing up again are a new challenge.
  */
 const RELAY_TOLD_MS = 5 * 60 * 1000;
