@@ -11,6 +11,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { D2LApiClient } from "../api/index.js";
 import { SyncInputError, syncCourse, type ExistingMode, type SyncResult } from "./course-sync.js";
+import { sensitiveDestination, sensitiveDestinationMessage } from "../utils/sensitive-paths.js";
 import { sanitizeError } from "../tools/tool-helpers.js";
 import { summarizeSync } from "./summary.js";
 
@@ -141,6 +142,9 @@ export async function runSync(argv: string[], io: SyncCliIO, deps: SyncCliDeps):
   };
 
   try {
+    // Checked before anything is created: a refused destination must leave no folder behind.
+    const protectedReason = await sensitiveDestination(args.destination);
+    if (protectedReason) return report(cleanLine(sensitiveDestinationMessage(args.destination, protectedReason)), 2);
     // A real run may create the destination; a dry run creates nothing.
     if (!args.dryRun) await fs.mkdir(args.destination, { recursive: true });
     const client = await deps.createClient();

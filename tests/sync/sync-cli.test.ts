@@ -133,6 +133,16 @@ describe("runSync", () => {
     await expect(fs.access(missing)).rejects.toThrow();
   });
 
+  it("checks the destination before creating anything: a refused one leaves no folder behind", async () => {
+    const os = await import("node:os");
+    const fresh = path.join(os.homedir(), `.brightspace-sync-test-${process.pid}-${Date.now()}`, "nested");
+    const code = await go(["--course", "42", "--dest", fresh, "--json"], {});
+    expect(code).toBe(2);
+    expect(JSON.parse(out).error).toMatch(/Cannot save into/);
+    await expect(fs.access(path.dirname(fresh))).rejects.toThrow();
+    expect(fake.tocReads()).toBe(0);
+  });
+
   it("creates a missing destination for a real run", async () => {
     const fresh = path.join(parent, "fresh", "nested");
     const code = await go(["--course", "42", "--dest", fresh], { 10: { body: pdf("a") }, 11: { body: pdf("b") } });
