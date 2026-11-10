@@ -37,7 +37,7 @@ Works with Claude Desktop, Claude Code, Cursor, ChatGPT Desktop, Windsurf, and a
 ```
 Install brightspace-mcp-server for me by following
 https://github.com/RohanMuppa/brightspace-mcp-server/blob/main/LLMs.md
-(use --purdue at Purdue, --suny at SUNY, --tudelft at TU Delft, --cuny at CUNY, --leiden at Leiden, --mcgill at McGill, --mun at Memorial University, --ngeeann at Ngee Ann Polytechnic, or --javeriana at Javeriana Cali).
+(use --purdue at Purdue, --suny at SUNY, --western at Western University, --tudelft at TU Delft, --cuny at CUNY, --leiden at Leiden, --mcgill at McGill, --mun at Memorial University, --ngeeann at Ngee Ann Polytechnic, or --javeriana at Javeriana Cali).
 ```
 
 The AI does everything it can by itself, then gives you one terminal command. That command asks for your password and waits for you to approve the sign-in on your phone. That's the only part that needs you. Afterwards the AI checks that it can see your courses.
@@ -108,6 +108,18 @@ Every file in the course's Content area is saved into folders named after its mo
 
 **Some folders are refused.** Downloads can't go to your home folder itself, a drive root, a hidden (dot) folder such as `~/.ssh`, `~/Library` (except cloud-drive and iCloud folders), system folders such as `/etc` or `/System`, or on Windows `Windows`, `Program Files`, `ProgramData` and `AppData`. Anything else is fine, including `/tmp`, external drives and `~/Documents`. Choose a folder like `~/Documents/Brightspace`; the refusal names the rule. The same rule applies to `download_file`, `get_syllabus` and every other tool that saves to disk. The person running the server can allow a folder anyway with `D2L_DOWNLOAD_ROOTS` (see [Settings](#settings-you-might-want)). Full rules: [LLMs.md](LLMs.md).
 
+## Tools
+
+The server registers these 29 tools. Each tool's arguments and response fields are in [LLMs.md](LLMs.md#available-tools).
+
+- **Courses and grades:** `get_my_courses`, `get_my_grades`, `get_upcoming_due_dates`, `get_calendar_events`
+- **Assignments and rubrics:** `get_assignments`, `get_assignment_rubric`, `get_assignment_files`, `get_rubrics_for_object`
+- **Announcements and discussions:** `get_announcements`, `get_announcement_files`, `get_discussions`
+- **Course content:** `get_course_content`, `search_course`, `get_syllabus`, `get_video_transcript`, `download_file`, `download_course_files`
+- **People and groups:** `get_roster`, `get_classlist_emails`, `get_my_groups`, `get_available_groups`
+- **Dropbox (instructors and TAs):** `get_dropbox_folders`, `get_dropbox_submissions`, `get_dropbox_user_submissions`, `get_dropbox_feedback`, `download_dropbox_submission_file`
+- **Account and sign-in:** `sign_in`, `sign_out`, `get_server_info`
+
 ## Prompts
 
 Apps with a prompt picker (like Claude Desktop) also offer four one-click prompts:
@@ -136,6 +148,8 @@ How often your school asks for two-factor is up to the school, not this tool.
 **To sign out early** (on a shared computer, say), ask your AI app to sign you out of Brightspace, or run `npx -y brightspace-mcp-server@latest auth --logout`. This deletes this computer's saved session, so the next question does a full sign-in. Your password and authenticator key are kept. It doesn't sign you out of Microsoft or Brightspace elsewhere. On a shared computer, also delete the saved `brightspace-mcp-server` entries from Keychain Access (Mac) or Credential Manager (Windows). Details: [docs/sign-in.md](docs/sign-in.md#signing-out-early).
 
 Duo, authenticator codes, visible-browser mode, and running without a browser at all (Docker, WSL, hardware keys) are covered in [docs/sign-in.md](docs/sign-in.md).
+
+**What a sign-in message means,** including Microsoft's "having trouble verifying your account" hold and what to do about each one, is in [docs/troubleshooting.md](docs/troubleshooting.md#what-each-sign-in-message-means). Numbers that expire, and signing in on more than one computer, are in [docs/sign-in.md](docs/sign-in.md#when-a-number-expires).
 
 ## Settings you might want
 

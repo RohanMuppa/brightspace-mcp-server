@@ -18,6 +18,32 @@ If a second app (say Claude Desktop and a terminal session) is signed in to the 
 
 To be asked less often, see [Fewer 2FA prompts](#fewer-2fa-prompts).
 
+## When a number expires
+
+Each number has 5 minutes to be approved. If it expires, or you tap Deny, the sign-in asks Microsoft for a new number by itself, at most twice, so one sign-in waits 15 minutes at most. Each new number gets its own full 5 minutes (PR #426), so a resend doesn't cut your time short. The limits are `MFA_APPROVAL_WINDOW_MS`, `MFA_MAX_RESENDS` and `MFA_MAX_WAIT_MS` in `src/auth/mfa-challenge.ts`, and the resend itself is in `src/auth/purdue-sso.ts`.
+
+A new number replaces the old one. **Approve only the latest number.** The next answer from your assistant carries it, and an earlier number no longer works. This applies to Microsoft number matching only; Duo doesn't resend.
+
+## When Microsoft holds a prompt
+
+Sometimes Microsoft shows **"We're having trouble verifying your account"** instead of a number. The answer then says Microsoft is holding a new prompt (`mfaHeld`). The page is matched by `MFA_HELD_TEXT` in `src/auth/purdue-sso.ts`.
+
+This happens because an earlier prompt for your account is still open. Microsoft refuses a new one until that prompt expires, up to 5 minutes after it was sent. While the hold lasts, the sign-in asks Microsoft again every minute (`HELD_RETRY_MS`, up to six times). The first ask after the old prompt expires sends one new prompt, and its number ends the hold.
+
+That has three effects:
+
+- **An earlier number stops working,** even if it still shows on your phone. Use only the newest number.
+- **A prompt can arrive late,** or for a number from an earlier attempt. Check it against the newest number the assistant gave you.
+- **Deny any prompt you didn't start.** It came from another app, another computer, or an earlier attempt.
+
+Cancelling the sign-in doesn't make Microsoft send a prompt any sooner. Call the tool again and it waits for the new number. The message-by-message guidance is in [What each sign-in message means](troubleshooting.md#what-each-sign-in-message-means).
+
+## More than one computer or app
+
+- **Each computer has its own sign-in.** Its session is in `~/.d2l-session` (or wherever `D2L_SESSION_DIR` points), and its saved password is in that computer's keychain. Signing in on one computer doesn't sign in another.
+- **Signing out is local.** `sign_out` and `auth --logout` clear only this computer (`src/tools/sign-out.ts`). They don't sign you out of Microsoft or Brightspace on other devices.
+- **Sign in on one computer or app at a time.** If two of them sign in at once, each one sends its own prompt, and Microsoft holds the second. Finish one sign-in, then start the other.
+
 ## Passwordless sign-in
 
 Setup no longer offers this; it always saves your password. It is still available for anyone who sets `D2L_PASSWORDLESS=true` in their AI client's config for this server: sign-in then submits only your username, no password is read, and Microsoft's passwordless phone approval (the number you type into Authenticator) is the whole sign-in. Microsoft Entra only, and passwordless phone sign-in must already be on in Microsoft Authenticator.
@@ -72,6 +98,8 @@ npx -y brightspace-mcp-server@latest auth
 ```
 
 Run it from your home folder — macOS blocks `npx` from Documents, Desktop, or Downloads without Files and Folders permission (`EPERM`). Grant access in System Settings → Privacy & Security → Files and Folders, or run elsewhere.
+
+Each message you might see is explained in [What each sign-in message means](troubleshooting.md#what-each-sign-in-message-means). Pressing Ctrl-C during `auth` has a known problem: it records the automatic cooldown. See [Stopping `auth` with Ctrl-C](troubleshooting.md#stopping-auth-with-ctrl-c-known-issue).
 
 ## Signing out early
 

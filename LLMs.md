@@ -386,6 +386,9 @@ src/
 | `npx -y brightspace-mcp-server@latest setup --help` | Every setup flag |
 | `npx -y brightspace-mcp-server@latest setup --purdue` | Setup with Purdue preset |
 | `npx -y brightspace-mcp-server@latest setup --suny` | Setup with SUNY preset (also asks for campus) |
+| `npx -y brightspace-mcp-server@latest setup --western` | Setup with Western University preset |
+| `npx -y brightspace-mcp-server@latest setup --tudelft` | Setup with TU Delft preset (NetID, headless, no MFA) |
+| `npx -y brightspace-mcp-server@latest setup --leiden` | Setup with Leiden University preset |
 | `npx -y brightspace-mcp-server@latest setup --cuny` | Setup with CUNY preset |
 | `npx -y brightspace-mcp-server@latest setup --mcgill` | Setup with McGill preset |
 | `npx -y brightspace-mcp-server@latest setup --mun` | Setup with Memorial University preset |
@@ -403,6 +406,8 @@ src/
 | `npm run dev` | Watch-mode TypeScript compile |
 | `npm run test` | Run Vitest suite |
 | `npm run test:run` | Run Vitest once |
+
+Two entry points are internal and not for people to run: `auth --automatic` (the background sign-in the server starts, `src/auth/auth-runner.ts`) and `runtime <dir>` (the automatic shared server, `src/runtime-relay.ts`). Both are in `src/index.ts`.
 
 ## Environment variables
 
@@ -449,14 +454,14 @@ A `config.json` that is corrupt or unreadable (bad permissions, truncated write,
 
 ## Adding a school
 
-Add a preset to `SCHOOL_PRESETS` in `src/setup.ts`. If the school uses a non-standard login flow (SAML, Shibboleth, custom SSO), add a handler in `src/auth/` alongside `purdue-sso.ts` and register it in `createSSOFlow()` in `src/auth/sso-flow.ts`.
+Add a preset to `SCHOOL_PRESETS` in `src/setup/presets.ts` (`src/setup.ts` re-exports it). Then add its `--<flag>` to the school table in README.md, the school table in docs/sign-in.md, and the lists in this file. `tests/docs/doc-coverage.test.ts` fails until README.md and LLMs.md both mention the flag. If the school uses a non-standard login flow (SAML, Shibboleth, custom SSO), add a handler in `src/auth/` alongside `purdue-sso.ts` and register it in `createSSOFlow()` in `src/auth/sso-flow.ts`.
 
 ## Adding a tool
 
 1. Create `src/tools/<name>.ts` using an existing tool as a template.
 2. Add the input schema to `src/tools/schemas.ts`.
 3. Export it from `src/tools/index.ts`.
-4. Register it in `src/index.ts`.
+4. Register it in `src/server.ts` (next to the other `register*` calls), and add its name to the tool table above and to README.md's Tools list.
 5. If it only reads, give its config `annotations: { readOnlyHint: true }`. Claude Code runs unmarked tools one at a time, which holds a batch behind a sign-in. Leave it off for a tool that can write a file (a `downloadPath` argument): clients also use it to skip permission prompts.
 
 Build paths with `apiClient.lp()`, `le()`, or `leGlobal()` and nothing else. They return a template carrying a `{lp}`/`{le}` placeholder, which `get()` and `getRaw()` substitute after discovering the versions, so a new tool gets lazy discovery and sign-in without asking for them. A hand-written path with a literal version skips discovery and will break when the tenant moves.
