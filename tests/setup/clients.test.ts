@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { detectMcpClients, registerAll } from "../../src/setup/clients.js";
+import { detectMcpClients, getClaudeDesktopConfigPath, registerAll } from "../../src/setup/clients.js";
 import { serverCommand, type CommandRunner } from "../../src/utils/mcp-client-cli.js";
 
 /**
@@ -55,6 +55,74 @@ describe("detectMcpClients", () => {
     const onlyClaude: CommandRunner = (command) => ({ status: command === "claude" ? 0 : null, stdout: "" });
     const ids = detectMcpClients({ platform: "darwin", home, runCommand: onlyClaude, warn: silent }).map((t) => t.id);
     expect(ids).toEqual(["claude-desktop", "claude-code"]);
+  });
+});
+
+describe("getClaudeDesktopConfigPath on Windows", () => {
+  const winEnv = () => ({ APPDATA: path.join(home, "Roaming"), LOCALAPPDATA: path.join(home, "Local") });
+  const legacy = () => path.join(home, "Roaming", "Claude", "claude_desktop_config.json");
+  const dataRoot = () => path.join(home, "Local", "Claude-Data");
+  const pkg = (name: string, withConfig = true) => {
+    const dir = path.join(dataRoot(), name);
+    fs.mkdirSync(dir, { recursive: true });
+    if (withConfig) fs.writeFileSync(path.join(dir, "claude_desktop_config.json"), "{}");
+    return path.join(dir, "claude_desktop_config.json");
+  };
+  const marker = (name: string) => {
+    fs.mkdirSync(path.join(home, "Roaming", "Claude"), { recursive: true });
+    fs.writeFileSync(path.join(home, "Roaming", "Claude", `.user-data-left.${name}`), "");
+  };
+  const age = (file: string, secondsAgo: number) => {
+    const t = new Date(Date.now() - secondsAgo * 1000);
+    fs.utimesSync(file, t, t);
+  };
+
+  it("uses %APPDATA%\\Claude when there is no Claude-Data folder", () => {
+    expect(getClaudeDesktopConfigPath("win32", home, winEnv())).toBe(legacy());
+  });
+
+  it("uses the Claude-Data package folder the app moved its data to", () => {
+    const relocated = pkg("claude_pzs8sxrjxfjjc");
+    marker("claude_pzs8sxrjxfjjc");
+    expect(getClaudeDesktopConfigPath("win32", home, winEnv())).toBe(relocated);
+  });
+
+  it("prefers the package the marker names over a more recently written one", () => {
+    const named = pkg("claude_aaa");
+    const other = pkg("claude_bbb");
+    age(named, 3600);
+    age(other, 0);
+    marker("claude_aaa");
+    expect(getClaudeDesktopConfigPath("win32", home, winEnv())).toBe(named);
+  });
+
+  it("without a marker, picks the package whose config was written last", () => {
+    const older = pkg("claude_aaa");
+    const newer = pkg("claude_bbb");
+    age(older, 3600);
+    age(newer, 0);
+    expect(getClaudeDesktopConfigPath("win32", home, winEnv())).toBe(newer);
+  });
+
+  it("uses a lone package folder that has no config yet", () => {
+    const fresh = pkg("claude_pzs8sxrjxfjjc", false);
+    expect(getClaudeDesktopConfigPath("win32", home, winEnv())).toBe(fresh);
+  });
+
+  it("registers into the relocated config and keeps the app's own settings", () => {
+    const relocated = pkg("claude_pzs8sxrjxfjjc");
+    fs.writeFileSync(relocated, JSON.stringify({ preferences: { sidebarMode: "x" } }));
+    marker("claude_pzs8sxrjxfjjc");
+
+    const targets = detectMcpClients({ platform: "win32", home, env: winEnv(), runCommand: noCli, warn: silent })
+      .filter((t) => t.id === "claude-desktop");
+    expect(targets[0].detected).toBe(true);
+    expect(registerAll(targets, { replace: false })[0].outcome).toBe("added");
+
+    const written = JSON.parse(fs.readFileSync(relocated, "utf-8"));
+    expect(written.preferences).toEqual({ sidebarMode: "x" });
+    expect(written.mcpServers.brightspace).toBeDefined();
+    expect(fs.existsSync(legacy())).toBe(false);
   });
 });
 
