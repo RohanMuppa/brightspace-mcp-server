@@ -100,6 +100,14 @@ Every file in the course's Content area is saved into folders named after its mo
 | `--max-files <n>` | Most files in one run (default 300); run it again to continue |
 | `--json` | Print the result as JSON on stdout (progress goes to stderr), for scripts and schedulers |
 
+How it keeps your own files safe:
+
+- **A manifest.** The sync records what it wrote in `.brightspace-sync.json` in the destination folder. Only files listed there are ever replaced, so `--existing replace` can never overwrite a file you put there yourself. A file that is there but not in the manifest is treated as yours and skipped. The manifest also lets a rerun find a file again even if it was saved under a slightly different name (for example a legacy `.xls` that was named `.xlsx` in the course).
+- **One sync at a time.** While it runs, a `.brightspace-sync.lock` file in the folder makes a second sync into the same folder refuse. A lock left by a crashed run (dead process, or older than an hour) is taken over automatically.
+- **Names from the course are made safe.** Characters Windows rejects are replaced, reserved names such as `CON` are prefixed, names are capped at about 150 characters (shorter on Windows if the full path would pass 250), and a name that starts with a dot gets a leading `_`, so a course can never create a `.ssh` or `.zshrc` in your folder. Folders that are symbolic links are not followed.
+- **Protected destinations are refused.** It will not save into your home folder itself, the root of a drive, or anything inside `~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.config`, `~/Library`, `/etc`, `/usr`, `/bin`, `/System`, `C:\Windows` or `C:\Program Files`. `download_file` refuses the same places. Make a folder of your own, such as `~/Courses/ECE-264`.
+- **Limits per run.** At most 300 files (`--max-files`) and 5 GB per run; run it again to continue. When your AI assistant calls `download_course_files`, it also stops cleanly after 8 minutes (`maxMinutes` raises it up to 120), when you cancel the call, and reports progress as it goes. The files it did not reach are reported as not attempted; call it again.
+
 It exits 0 when everything was done, 1 if a file failed or was not attempted (including a sign-in that expired partway; files already saved are kept), and 2 for a usage error. Web links, embedded videos, quizzes and locked items are not files; the result counts them so they are not mistaken for missing downloads.
 
 ## Prompts
