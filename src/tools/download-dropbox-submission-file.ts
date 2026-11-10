@@ -18,7 +18,7 @@ import { DownloadDropboxSubmissionFileSchema } from "./schemas.js";
 import { toolResponse, sanitizeError, errorResponse } from "./tool-helpers.js";
 import { log } from "../utils/logger.js";
 import { validateContentId, DISK_MAX_FILE_SIZE } from "../utils/file-validator.js";
-import { secureStreamDownload } from "../utils/download-helpers.js";
+import { secureStreamDownload, expectedLength } from "../utils/download-helpers.js";
 import { DownloadError } from "../utils/download-errors.js";
 import path from "node:path";
 import fs from "node:fs/promises";
@@ -181,6 +181,7 @@ export function registerDownloadDropboxSubmissionFile(
           originalFilename,
           body: response.body,
           maxBytes: DISK_MAX_FILE_SIZE,
+          expectedBytes: expectedLength(response),
         });
 
         log(

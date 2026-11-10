@@ -22,7 +22,7 @@ import {
   MAX_FILE_SIZE,
   DISK_MAX_FILE_SIZE,
 } from "../utils/file-validator.js";
-import { secureStreamDownload, readBodyCapped } from "../utils/download-helpers.js";
+import { secureStreamDownload, readBodyCapped, expectedLength } from "../utils/download-helpers.js";
 import { DownloadError } from "../utils/download-errors.js";
 import { AUTH_COMMAND } from "../utils/commands.js";
 import { parseCoursePath, QUICKLINK_PATH } from "../utils/course-files.js";
@@ -272,6 +272,7 @@ async function finishDownload(
     originalFilename,
     body: response.body,
     maxBytes: DISK_MAX_FILE_SIZE,
+    expectedBytes: expectedLength(response),
   });
 
   log(

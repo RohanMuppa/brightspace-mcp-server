@@ -140,7 +140,13 @@ export async function secureDownload(options: {
  * type-checked there, and only then published under its final name; a refused or
  * failed download leaves nothing behind.
  *
+ * With `expectedBytes` (the response's Content-Length, see expectedLength), a
+ * body that ends short of it fails and leaves nothing behind: a dropped
+ * connection must not publish a truncated file that a later sync would take
+ * for the whole one.
+ *
  * @throws DownloadError("tooLarge") once the body passes maxBytes
+ * @throws DownloadError("incomplete") when fewer than expectedBytes arrive
  */
 export async function secureStreamDownload(options: {
   targetDir: string;
@@ -149,8 +155,10 @@ export async function secureStreamDownload(options: {
   originalFilename?: string;
   body: ReadableStream<Uint8Array>;
   maxBytes: number;
+  /** Bytes the server said it would send; fewer arriving is a failed download. */
+  expectedBytes?: number;
 }): Promise<{ path: string; size: number; mime: string }> {
-  const { targetDir, filename, originalFilename, body, maxBytes } = options;
+  const { targetDir, filename, originalFilename, body, maxBytes, expectedBytes } = options;
 
   const safeFilename = path.basename(validateDownloadPath(targetDir, filename));
   const partialPath = path.join(targetDir, `.download-${randomUUID()}.part`);
@@ -167,12 +175,24 @@ export async function secureStreamDownload(options: {
     },
   });
 
+  const incomplete = () =>
+    new DownloadError("incomplete", `Download incomplete: ${size} of ${expectedBytes} bytes arrived`);
+
   try {
-    await pipeline(
-      Readable.fromWeb(body as WebReadableStream<Uint8Array>),
-      limit,
-      createWriteStream(partialPath, { flags: "wx" })
-    );
+    try {
+      await pipeline(
+        Readable.fromWeb(body as WebReadableStream<Uint8Array>),
+        limit,
+        createWriteStream(partialPath, { flags: "wx" })
+      );
+    } catch (error) {
+      // fetch reports a connection cut mid-body as a bare "terminated".
+      if (expectedBytes !== undefined && size < expectedBytes && !(error instanceof DownloadError)) {
+        throw incomplete();
+      }
+      throw error;
+    }
+    if (expectedBytes !== undefined && size < expectedBytes) throw incomplete();
     const type = await validateFileTypeOfFile(partialPath, undefined, safeFilename, originalFilename);
     const { mime } = type;
     const finalPath = await publishExclusively(partialPath, targetDir, nameForType(safeFilename, type));
@@ -181,6 +201,19 @@ export async function secureStreamDownload(options: {
   } finally {
     await fs.rm(partialPath, { force: true });
   }
+}
+
+/**
+ * The byte count a response promises, or undefined when it promises none we
+ * can hold it to: no Content-Length, or a Content-Encoding, where fetch hands
+ * back the decoded body and the header counts the encoded one.
+ */
+export function expectedLength(response: Response): number | undefined {
+  const encoding = (response.headers.get("Content-Encoding") ?? "").trim().toLowerCase();
+  if (encoding && encoding !== "identity") return undefined;
+  const header = response.headers.get("Content-Length");
+  if (header === null || !/^\d+$/.test(header.trim())) return undefined;
+  return Number(header);
 }
 
 /**
