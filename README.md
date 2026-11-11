@@ -35,12 +35,11 @@ Works with Claude Desktop, Claude Code, Cursor, ChatGPT Desktop, Windsurf, and a
 **Rather have the AI install it?** Paste this into Claude Code, Cursor, Windsurf, Copilot, or Codex:
 
 ```
-Install brightspace-mcp-server for me by following
-https://github.com/RohanMuppa/brightspace-mcp-server/blob/main/LLMs.md
-(use --purdue at Purdue, --suny at SUNY, --western at Western University, --tudelft at TU Delft, --cuny at CUNY, --leiden at Leiden, --mcgill at McGill, --mun at Memorial University, --ngeeann at Ngee Ann Polytechnic, or --javeriana at Javeriana Cali).
+Install the Brightspace MCP server for me. Follow the steps at
+https://raw.githubusercontent.com/RohanMuppa/brightspace-mcp-server/main/LLMs.md
 ```
 
-The AI does everything it can by itself, then gives you one terminal command. That command asks for your password and waits for you to approve the sign-in on your phone. That's the only part that needs you. Afterwards the AI checks that it can see your courses.
+The AI asks which school you attend and your username, does everything it can by itself, then gives you one terminal command. That command asks for your password and waits for you to approve the sign-in on your phone. That's the only part that needs you. Afterwards the AI checks that it can see your courses.
 
 Using a different AI app? Add the command `npx -y brightspace-mcp-server@latest` to its MCP settings (on Windows: `cmd /c npx -y brightspace-mcp-server@latest`). Codex and Claude Code commands, and general steps, are in [docs/troubleshooting.md](docs/troubleshooting.md).
 
@@ -81,7 +80,7 @@ School-specific quirks are in [docs/sign-in.md](docs/sign-in.md#per-school-notes
 | Calendar | "When is my midterm?" · "Is lab cancelled on Thursday?" |
 | Instructors and TAs | "Which students haven't submitted Lab 4 yet?" (students see "Instructor or TA access required" for these) |
 
-If Brightspace hides part of the data, such as a submission, quiz attempts, or part of the quiz list, the answer says "unknown" or "incomplete" rather than "missing" or "complete". Full tool reference: [LLMs.md](LLMs.md).
+If Brightspace hides part of the data, such as a submission, quiz attempts, or part of the quiz list, the answer says "unknown" or "incomplete" rather than "missing" or "complete". Full tool reference: [docs/reference/tools.md](docs/reference/tools.md).
 
 ## Download a whole course
 
@@ -106,11 +105,11 @@ Every file in the course's Content area is saved into folders named after its mo
 - Each run is capped at 300 files and 5 GB. The assistant's version also stops cleanly after 8 minutes. Ask it again to continue. Ctrl-C stops the CLI cleanly (exit 130) with no partial file left behind.
 - Exit codes: 0 when everything was done, 1 if a file failed or wasn't attempted (including a sign-in that expired partway; saved files are kept), 2 for a usage error. Links and embedded videos aren't files, so the result counts them separately rather than as missing downloads.
 
-**Some folders are refused.** Downloads can't go to your home folder itself, a drive root, a hidden (dot) folder such as `~/.ssh`, `~/Library` (except cloud-drive and iCloud folders), system folders such as `/etc` or `/System`, or on Windows `Windows`, `Program Files`, `ProgramData` and `AppData`. Anything else is fine, including `/tmp`, external drives and `~/Documents`. Choose a folder like `~/Documents/Brightspace`; the refusal names the rule. The same rule applies to `download_file`, `get_syllabus` and every other tool that saves to disk. The person running the server can allow a folder anyway with `D2L_DOWNLOAD_ROOTS` (see [Settings](#settings-you-might-want)). Full rules: [LLMs.md](LLMs.md).
+**Some folders are refused.** Downloads can't go to your home folder itself, a drive root, a hidden (dot) folder such as `~/.ssh`, `~/Library` (except cloud-drive and iCloud folders), system folders such as `/etc` or `/System`, or on Windows `Windows`, `Program Files`, `ProgramData` and `AppData`. Anything else is fine, including `/tmp`, external drives and `~/Documents`. Choose a folder like `~/Documents/Brightspace`; the refusal names the rule. The same rule applies to `download_file`, `get_syllabus` and every other tool that saves to disk. The person running the server can allow a folder anyway with `D2L_DOWNLOAD_ROOTS` (see [Settings](#settings-you-might-want)). Full rules: [docs/internals/downloads.md](docs/internals/downloads.md).
 
 ## Tools
 
-The server registers these 29 tools. Each tool's arguments and response fields are in [LLMs.md](LLMs.md#available-tools).
+Every tool the server registers. Each tool's arguments and response fields are in [docs/reference/tools.md](docs/reference/tools.md).
 
 - **Courses and grades:** `get_my_courses`, `get_my_grades`, `get_upcoming_due_dates`, `get_calendar_events`
 - **Assignments and rubrics:** `get_assignments`, `get_assignment_rubric`, `get_assignment_files`, `get_rubrics_for_object`
@@ -153,7 +152,7 @@ Duo, authenticator codes, visible-browser mode, and running without a browser at
 
 ## Settings you might want
 
-All optional. Set them in your AI app's MCP `env` config or in your shell. The full list is in [LLMs.md](LLMs.md#environment-variables).
+All optional. Set them in your AI app's MCP `env` config or in your shell. The full list is in [docs/reference/settings.md](docs/reference/settings.md).
 
 | Setting | What it does |
 |---------|--------------|
@@ -191,7 +190,9 @@ Your password is stored in your computer's password store, never in a plaintext 
 
 ## For developers
 
-Tool reference, response fields, environment variables and the codebase map: [LLMs.md](LLMs.md). What's safe to build against: [STABILITY.md](STABILITY.md).
+- **Changing the code:** start with [AGENTS.md](AGENTS.md). It says which doc to read before touching each area.
+- **Exact behaviour:** [tools](docs/reference/tools.md), [commands](docs/reference/cli.md) and [settings](docs/reference/settings.md).
+- **What's safe to build against:** [STABILITY.md](STABILITY.md). **What changed:** [CHANGELOG.md](CHANGELOG.md).
 
 ## License
 

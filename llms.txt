@@ -9,9 +9,25 @@ SUNY, Western University, TU Delft, CUNY, Leiden University, and any other D2L s
 
 Install: `npx -y brightspace-mcp-server@latest setup`
 
-## Docs
+## Installing it for someone
 
-- [README](https://github.com/RohanMuppa/brightspace-mcp-server/blob/main/README.md): what it does, install steps, supported schools, FAQ
-- [LLMs.md](https://github.com/RohanMuppa/brightspace-mcp-server/blob/main/LLMs.md): agent guide — install steps, auth semantics, codebase map, full tool list
+- [LLMs.md](https://raw.githubusercontent.com/RohanMuppa/brightspace-mcp-server/main/LLMs.md): the install steps for an AI agent, start to finish
+
+## Using it
+
+- [README](https://github.com/RohanMuppa/brightspace-mcp-server/blob/main/README.md): what it does, supported schools, things to ask, common settings
+- [Signing in](https://github.com/RohanMuppa/brightspace-mcp-server/blob/main/docs/sign-in.md): MFA, numbers, fewer prompts, per-school notes
+- [Troubleshooting](https://github.com/RohanMuppa/brightspace-mcp-server/blob/main/docs/troubleshooting.md): what each sign-in message means and how to fix it
+
+## Reference
+
+- [Tools](https://github.com/RohanMuppa/brightspace-mcp-server/blob/main/docs/reference/tools.md): every MCP tool, its arguments and what it returns
+- [Commands](https://github.com/RohanMuppa/brightspace-mcp-server/blob/main/docs/reference/cli.md): every command, flag and exit code
+- [Settings](https://github.com/RohanMuppa/brightspace-mcp-server/blob/main/docs/reference/settings.md): every environment variable and saved file
 - [STABILITY.md](https://github.com/RohanMuppa/brightspace-mcp-server/blob/main/STABILITY.md): what outside integrations and PRs may rely on
-- [Available tools](https://github.com/RohanMuppa/brightspace-mcp-server/blob/main/LLMs.md#available-tools): the full list of MCP tools this server registers
+- [CHANGELOG.md](https://github.com/RohanMuppa/brightspace-mcp-server/blob/main/CHANGELOG.md): what changed in each version
+
+## Changing the code
+
+- [AGENTS.md](https://github.com/RohanMuppa/brightspace-mcp-server/blob/main/AGENTS.md): rules for contributors, and which doc to read before changing each area
+- [Architecture](https://github.com/RohanMuppa/brightspace-mcp-server/blob/main/docs/internals/architecture.md): how a request travels and where things are
