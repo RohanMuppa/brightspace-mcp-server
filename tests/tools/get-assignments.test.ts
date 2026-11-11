@@ -491,7 +491,7 @@ describe("get_assignments across all courses", () => {
  * A sign-in that has not finished is not an empty course. Every route below
  * get_assignments swallows its own failures so one forbidden endpoint cannot
  * hide the rest, but an authentication failure means none of them answered.
- * CLAUDE.md forbids turning a previously successful `{assignments: []}`
+ * AGENTS.md forbids turning a previously successful `{assignments: []}`
  * response into an error, so the tool keeps the success envelope and adds an
  * explicit authPending/notice pair a caller can check instead.
  */

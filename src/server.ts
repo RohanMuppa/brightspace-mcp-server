@@ -171,7 +171,7 @@ export function createMcpServer(runtime: ServerRuntime): McpServer {
   registerGetDropboxFeedback(server, apiClient);
   registerGetRubricsForObject(server, apiClient);
   registerDownloadDropboxSubmissionFile(server, apiClient);
-  log("DEBUG", "MCP tools registered (29 tools)");
+  log("DEBUG", "MCP tools registered");
 
   // Register MCP prompts — surfaced in clients (e.g. Claude Desktop) as a
   // picker, distinct from tools. Each one is a canned user message that

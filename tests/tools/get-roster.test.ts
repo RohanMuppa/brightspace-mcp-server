@@ -103,7 +103,7 @@ describe("get_roster truncation", () => {
 });
 
 /**
- * A sign-in that has not finished is not an empty roster. CLAUDE.md forbids
+ * A sign-in that has not finished is not an empty roster. AGENTS.md forbids
  * turning a previously successful `{users: []}` response into an error, so
  * the tool keeps the success envelope and adds an explicit authPending/notice
  * pair a caller can check instead.

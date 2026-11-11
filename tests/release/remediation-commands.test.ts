@@ -51,7 +51,7 @@ describe("remediation commands are pinned to @latest", () => {
   });
 
   it("has no unpinned npx command in user-facing docs", () => {
-    const docs = ["README.md", "LLMs.md"]
+    const docs = ["README.md", "LLMs.md", "AGENTS.md", ...walk(resolve(repoRoot, "docs"), [".md"]).map((f) => f.replace(repoRoot + "/", ""))]
       .map((f) => resolve(repoRoot, f))
       .filter((f) => {
         try {

@@ -358,7 +358,7 @@ describe("get_calendar_events", () => {
 });
 
 /**
- * A sign-in that has not finished is not an empty calendar. CLAUDE.md forbids
+ * A sign-in that has not finished is not an empty calendar. AGENTS.md forbids
  * turning a previously successful response into an error, so the tool keeps
  * the bare-array shape it always returns and adds the authPending notice as a
  * second content block instead of changing content[0]'s shape.

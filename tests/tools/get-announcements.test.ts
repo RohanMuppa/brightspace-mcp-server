@@ -556,7 +556,7 @@ describe("get_announcements attachments", () => {
 });
 
 /**
- * A sign-in that has not finished is not an empty course. CLAUDE.md forbids
+ * A sign-in that has not finished is not an empty course. AGENTS.md forbids
  * turning a previously successful response into an error. Without
  * modifiedSince the response is always a bare array — changing content[0]'s
  * shape would break every existing caller — so the authPending notice lands

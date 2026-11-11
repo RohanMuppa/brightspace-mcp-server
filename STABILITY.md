@@ -1,73 +1,41 @@
 # Stability
 
 What outside integrations and PRs may rely on, and what counts as a breaking change.
-The rule across all of it: **additive only**. New tools, new optional parameters, and
-new response fields are fine. Renaming an existing tool, removing or renaming a field
-a caller already gets back, or changing the shape of existing output is not — see
-`CLAUDE.md`'s "Changing behavior".
+
+The rule across all of it: **additive only**. New tools, new optional parameters and new response fields are fine. Renaming an existing tool, removing or renaming a field a caller already gets back, or changing the shape of existing output is not. The rule for contributors is "Changing behaviour" in [AGENTS.md](AGENTS.md#changing-behaviour). Anything that does change is recorded in [CHANGELOG.md](CHANGELOG.md).
 
 ## Tools
 
-Every tool name listed in `LLMs.md` ("Available tools") is stable, as is every field its
-response carries today (defined in `src/tools/*.ts` and `src/tools/schemas.ts`). A field
-can be added; it is never removed, renamed, or repurposed to mean something else.
+Every tool name in [docs/reference/tools.md](docs/reference/tools.md) is stable, as is every field its response carries today (defined in `src/tools/` and `src/tools/schemas.ts`). A field can be added. It is never removed, renamed, or repurposed to mean something else.
 
 ## Runtime
 
 Node.js 22 or newer (`engines` in `package.json`). 5.0.0 dropped Node 20, because file-type 22 requires Node 22. CI tests Node 22 and 24 on macOS, Ubuntu and Windows.
 
-## CLI subcommands
+## Commands
 
-- `setup` — interactive wizard. School-preset flags come from `SCHOOL_PRESETS` in
-  `src/setup/presets.ts`: `--purdue`, `--suny`, `--western`, `--cuny`, `--tudelft`,
-  `--leiden`, `--mcgill`, `--ngeeann`, `--javeriana` today. New presets may be added;
-  an existing flag's school and behavior won't change.
-  - `--prepare` (agents, no prompts) and `--sign-in` (the person's last step) are stable,
-    as are `--url`, `--username`, `--campus`, `--json`, `--replace` and `--no-browser-install`.
-    `--prepare --json` prints `{state, school?, steps, apps, restart, next}`. Its `state`
-    values and those fields follow the additive-only rule.
-  - Since 4.0.0, an unknown flag is an error (exit 2) instead of being ignored. The wizard
-    and `--sign-in` exit 2 when stdin is not a terminal, instead of waiting for typing.
-- `http` — since 4.1.0, one shared MCP server over Streamable HTTP on `127.0.0.1` (`/mcp`),
-  default port 18765 (`--port` or `D2L_HTTP_PORT`). Requires `D2L_HTTP_TOKEN` (at least 32
-  characters) as a bearer token on every request. Plain stdio stays the default.
-- `doctor` — `--json` prints `{checks: [{id, ok, line}], allOk, notes}`. Check ids may be
-  added (4.0.0 added `browser`).
-- `auth` — manual re-authentication, no required flags. `--automatic` is internal
-  (used by `AuthRunner` to retry in the background) and not a documented user flag.
-- No subcommand — runs the MCP server itself.
+The full description of each command is in [docs/reference/cli.md](docs/reference/cli.md). These parts are stable:
 
-## Environment variables
+- **`setup`**
+  - Every school flag (from `SCHOOL_PRESETS` in `src/setup/presets.ts`; the list is the README's school table). New presets may be added. An existing flag's school and behaviour will not change.
+  - `--prepare`, `--sign-in`, `--url`, `--username`, `--campus`, `--json`, `--replace` and `--no-browser-install`.
+  - `--prepare --json` prints `{state, school?, steps, apps, restart, next}`. Its `state` values and those fields follow the additive-only rule.
+  - Since 4.0.0, an unknown flag is an error (exit 2) instead of being ignored. The wizard and `--sign-in` exit 2 when stdin is not a terminal, instead of waiting for typing.
+- **`auth`**: manual sign-in, with no required flags. `auth --logout` deletes this computer's saved session. `--automatic` is internal and not a user flag.
+- **`sync`**: `--course`, `--dest`, `--existing`, `--module`, `--dry-run`, `--json`, `--max-files`, and exit codes 0, 1, 2 and 130.
+- **`doctor`**: `--json` prints `{checks: [{id, ok, line}], allOk, notes}`. Check ids may be added (4.0.0 added `browser`).
+- **`repair`**: `--json`.
+- **`http`**: since 4.1.0, one shared MCP server over Streamable HTTP on `127.0.0.1` (`/mcp`), default port 18765 (`--port` or `D2L_HTTP_PORT`). Requires `D2L_HTTP_TOKEN` (at least 32 characters) as a bearer token on every request.
+- **No command**: runs the MCP server over stdio. This stays the default.
 
-All are optional; env always overrides `config.json`.
+## Settings
 
-| Variable | Meaning |
-|---|---|
-| `D2L_USERNAME` | Brightspace login username |
-| `D2L_PASSWORD` | Brightspace password (fed into the native credential store, not stored in plaintext) |
-| `D2L_BASE_URL` | School's Brightspace origin (must be `https://`, no embedded credentials) |
-| `D2L_SESSION_DIR` | Root directory for session state (default `~/.d2l-session`) |
-| `D2L_TOKEN_TTL` | Access token lifetime in seconds (default `3600`) |
-| `D2L_HEADLESS` | Run browser auth without a visible window (default `true`) |
-| `D2L_REMEMBER_MFA` | Tick Microsoft Entra's "Don't ask again" box during MFA (default off; opt-in) |
-| `D2L_CAMPUS` | Campus selector for a shared multi-campus tenant (e.g. SUNY) |
-| `D2L_DUO_PASSCODE` | Use a typed Duo Mobile passcode instead of waiting for a push |
-| `D2L_INCLUDE_COURSES` | Comma-separated course ID whitelist |
-| `D2L_EXCLUDE_COURSES` | Comma-separated course ID blacklist |
-| `D2L_ACTIVE_ONLY` | Only show active (non-archived) courses (default `true`) |
-| `D2L_CURRENT_ONLY` | Only show courses in their current enrollment window, matching Brightspace's "Current Courses" widget (default `false`) |
-| `D2L_NO_UPDATE_CHECK` | Set to any value to switch off the background npm update check and its update notices |
+Every environment variable in [docs/reference/settings.md](docs/reference/settings.md) is stable in name and meaning. All are optional, and an environment value always overrides `config.json`.
 
-## On-disk layout
+## Files on disk
 
-- `~/.brightspace-mcp/config.json` (0600) — keys: `baseUrl`, `username`, `campus`,
-  `sessionDir`, `tokenTtl`, `headless`, `includeCourses`, `excludeCourses`, `activeOnly`.
-  No plaintext password; the password lives in the OS credential store.
-- `~/.d2l-session/accounts/<account-hash>/session.json` and
-  `storage-state.encrypted.json` (AES-256-GCM, 0600) — `<account-hash>` is
-  `sha256([origin, username])`. Used only when a username is configured; otherwise
-  state sits directly under `~/.d2l-session/`.
+- `~/.brightspace-mcp/config.json` (0600). Keys: `baseUrl`, `username`, `campus`, `sessionDir`, `tokenTtl`, `headless`, `rememberMfa`, `passwordless`, `includeCourses`, `excludeCourses`, `activeOnly`, `currentOnly`. No plaintext password; the password lives in the OS credential store.
+- `~/.d2l-session/accounts/<account-hash>/session.json` and `storage-state.encrypted.json` (AES-256-GCM, 0600). `<account-hash>` is `sha256([origin, username])`. Used only when a username is configured; otherwise state sits directly under `~/.d2l-session/`.
+- `.brightspace-sync.json` in a synced course folder: the manifest a sync keeps, keyed by course id and topic id.
 
-Both paths, and the key/field names in them, are load-bearing for anything that reads
-this server's state directly. Adding a key is fine; removing or repurposing one is a
-breaking change.
+These paths, and the key and field names in them, are load-bearing for anything that reads this server's state directly. Adding a key is fine. Removing or repurposing one is a breaking change.
