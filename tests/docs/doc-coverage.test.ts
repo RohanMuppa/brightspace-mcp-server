@@ -4,7 +4,7 @@
  * Licensed under MIT — see LICENSE file for details.
  *
  * Doc coverage. Fails `npm run test:run` (and so CI) when a user-visible name
- * in the source is not written down in the doc that owns it. See CLAUDE.md
+ * in the source is not written down in the doc that owns it. See AGENTS.md
  * for the map of which doc owns what.
  *
  * Each list is derived from the source, not copied here:
@@ -17,7 +17,7 @@
  * - SCHOOL_PRESETS keys (imported from src/setup/presets.ts): each must appear
  *   as `--key` in README.md and in LLMs.md.
  * - MCP tools (every `registerTool("name", ...)` call under src/): each must
- *   appear in README.md.
+ *   appear in README.md and have a heading in docs/reference/tools.md.
  *
  * The source is parsed with the TypeScript compiler API, so multi-line calls
  * and type unions are read from the syntax tree rather than matched by regex.
@@ -185,14 +185,19 @@ describe("documentation covers the user-visible surface", () => {
     expect(problems).toEqual([]);
   });
 
-  it("documents every registered MCP tool name in README.md", () => {
+  it("documents every registered MCP tool in README.md and docs/reference/tools.md", () => {
     const tools = registeredTools();
     expect(tools.length, "no registerTool calls found under src/").toBeGreaterThan(0);
 
     const readme = read("README.md");
-    const problems = tools
-      .filter(({ name }) => !containsWord(readme, name))
-      .map(({ name, file }) => `MCP tool \`${name}\` (registered in ${file}) is missing from README.md`);
+    const reference = read("docs/reference/tools.md");
+    const problems = tools.flatMap(({ name, file }) => [
+      ...(containsWord(readme, name) ? [] : [`MCP tool \`${name}\` (registered in ${file}) is missing from README.md`]),
+      // Match the heading line itself: a Windows checkout has CRLF line endings.
+      ...(new RegExp(`^### ${name}\\s*$`, "m").test(reference)
+        ? []
+        : [`MCP tool \`${name}\` (registered in ${file}) has no "### ${name}" section in docs/reference/tools.md`]),
+    ]);
     expect(problems).toEqual([]);
   });
 });

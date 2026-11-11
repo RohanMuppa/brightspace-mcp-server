@@ -3,9 +3,9 @@ import { readFileSync, readdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 /**
- * Issue #252: README points to LLMs.md for "the full list" of settings, but
- * LLMs.md had drifted to naming fewer than half of the D2L_* variables the
- * server reads. Every D2L_* name in src/ must be in LLMs.md's
+ * Issue #252: README points to the settings reference for "the full list" of
+ * settings, but that list (then in LLMs.md, now docs/reference/settings.md) had drifted to naming fewer than half of the D2L_* variables the
+ * server reads. Every D2L_* name in src/ must be in docs/reference/settings.md's
  * "Environment variables" table unless it is listed here as internal.
  */
 
@@ -34,16 +34,16 @@ const namesInSource = new Set(
 );
 
 // Windows checkouts may convert to CRLF; match on LF regardless.
-const llms = readFileSync(join(root, "LLMs.md"), "utf-8").replace(/\r\n/g, "\n");
+const llms = readFileSync(join(root, "docs", "reference", "settings.md"), "utf-8").replace(/\r\n/g, "\n");
 
 function section(heading: string): string {
   const start = llms.indexOf(`## ${heading}\n`);
-  expect(start, `LLMs.md has no "## ${heading}" section`).toBeGreaterThanOrEqual(0);
+  expect(start, `docs/reference/settings.md has no "## ${heading}" section`).toBeGreaterThanOrEqual(0);
   const next = llms.indexOf("\n## ", start + 1);
   return llms.slice(start, next === -1 ? undefined : next);
 }
 
-describe("LLMs.md environment variable reference", () => {
+describe("docs/reference/settings.md environment variable reference", () => {
   const table = section("Environment variables");
 
   it("finds the variables it is meant to guard", () => {
@@ -57,7 +57,7 @@ describe("LLMs.md environment variable reference", () => {
       .filter((name) => !INTERNAL.has(name))
       .filter((name) => !table.includes(`| \`${name}\` |`))
       .sort();
-    expect(missing, "add these to the Environment variables table in LLMs.md, or to INTERNAL here").toEqual([]);
+    expect(missing, "add these to the Environment variables tables in docs/reference/settings.md, or to INTERNAL here").toEqual([]);
   });
 
   it("keeps the internal allowlist honest", () => {

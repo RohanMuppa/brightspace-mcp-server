@@ -137,7 +137,7 @@ describe("get_my_grades all-courses course resolution", () => {
 });
 
 /**
- * A sign-in that has not finished is not an empty gradebook. CLAUDE.md forbids
+ * A sign-in that has not finished is not an empty gradebook. AGENTS.md forbids
  * turning a previously successful `{grades: []}` response into an error, so
  * the tool keeps the success envelope and adds an explicit authPending/notice
  * pair a caller can check instead.
