@@ -193,7 +193,8 @@ describe("documentation covers the user-visible surface", () => {
     const reference = read("docs/reference/tools.md");
     const problems = tools.flatMap(({ name, file }) => [
       ...(containsWord(readme, name) ? [] : [`MCP tool \`${name}\` (registered in ${file}) is missing from README.md`]),
-      ...(reference.includes(`### ${name}\n`)
+      // Match the heading line itself: a Windows checkout has CRLF line endings.
+      ...(new RegExp(`^### ${name}\\s*$`, "m").test(reference)
         ? []
         : [`MCP tool \`${name}\` (registered in ${file}) has no "### ${name}" section in docs/reference/tools.md`]),
     ]);
