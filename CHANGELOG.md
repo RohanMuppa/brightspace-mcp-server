@@ -6,6 +6,11 @@ A change that can break something a caller relied on is marked **Changed behavio
 
 Entries up to 5.2.1 were generated from the merged PR titles. Versions before 5.0.0 are in the [GitHub releases](https://github.com/RohanMuppa/brightspace-mcp-server/releases) and the git history.
 
+## 5.3.0 (unmerged)
+
+- feat: macOS notifications for the sign-in approval number and for new course files (`sync --notify`). `D2L_NOTIFY=0` turns them off.
+- feat: `schedule` runs a course sync every day through a per-user launchd agent (macOS).
+
 ## 5.2.2 (2026-11-11)
 
 - docs: one short install page for agents (`LLMs.md`), one rules file for contributors (`AGENTS.md`), and the tool, command and setting reference moved to `docs/reference/` and `docs/internals/`. The install prompt in the README is now one sentence.

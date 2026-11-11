@@ -114,6 +114,8 @@ npx -y brightspace-mcp-server@latest auth
 - **Why:** a resent number is a new number, so it gets a new window. A resend should not cut the user's time short.
 - The next tool response carries the new number. Always relay the latest number, not one from an earlier call.
 - The tool text is in `MFA_NEW_NUMBER` in `src/tools/tool-helpers.ts`.
+- On macOS the number is also shown as a system notification, sent from `publishChallenge` in `src/auth/auth-runner.ts` through `src/utils/notify.ts`. The same number is not repeated within 2 minutes, and a number counts as shown only after the notification was sent. `D2L_NOTIFY=0` turns it off.
+  **Why:** a background sign-in can ask for approval when no chat is showing the answer, so the number reached nobody (#424).
 
 ## Microsoft's held prompt
 

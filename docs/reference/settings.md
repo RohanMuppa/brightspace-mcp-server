@@ -60,10 +60,13 @@ More on `D2L_DOWNLOAD_ROOTS`:
 | Variable | Default | What it does |
 |----------|---------|--------------|
 | `D2L_NO_UPDATE_CHECK` | unset | Any non-empty value turns off the npm new-version notice and the auth CLI's self-update re-exec |
+| `D2L_NOTIFY` | on (macOS) | `0`, `false`, `no` or `off` turns off system notifications: the sign-in approval number and `sync --notify`. Other platforms do nothing |
 | `D2L_DEV_MODE` | unset | Exactly `true` writes a local, content-free activity log ([docs/dev-mode.md](../dev-mode.md)) |
 | `D2L_RUNTIME_IDLE_SECONDS` | `600` | Default command only: seconds the shared runtime waits with no request in progress before stopping |
 | `D2L_HTTP_TOKEN` | none | `http` only, and required there: the bearer token every request to the shared server must carry. At least 32 characters; never logged ([docs/shared-server.md](../shared-server.md)) |
 | `D2L_HTTP_PORT` | `18765` | `http` only: the port on 127.0.0.1. `--port` overrides it |
+
+Notification text never holds a password, cookie, token or code. It holds only a 1 to 3 digit approval number, a course name and a file count (`src/utils/notify.ts`).
 
 ## Files on disk
 

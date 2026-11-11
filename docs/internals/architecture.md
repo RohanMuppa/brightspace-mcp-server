@@ -135,7 +135,8 @@ Read [downloads.md](downloads.md) before changing anything here.
 | `src/sync/names.ts` | Cross-platform name sanitising and duplicate numbering |
 | `src/sync/cleanup.ts` | Removes `.download-<uuid>.part` files a killed run left behind |
 | `src/sync/summary.ts` | The compact plain-text summary of a sync result |
-| `src/sync/sync-cli.ts` | `sync` argument parsing, output and exit codes |
+| `src/sync/sync-cli.ts` | `sync` argument parsing, output, exit codes and `--notify` |
+| `src/sync/schedule-cli.ts` | `schedule` (macOS): a per-user launchd agent that runs `sync --notify` daily; `--list`, `--remove`. launchctl and the filesystem are injected for tests |
 | `src/sync/errors.ts` | `SyncInputError`: a bad argument, as opposed to a failed request |
 
 ### `src/utils/`: shared pieces
@@ -160,6 +161,7 @@ Read [downloads.md](downloads.md) before changing anything here.
 | `src/utils/mcp-client-cli.ts` | Registering the server through the Codex and Claude Code CLIs |
 | `src/utils/install-sites.ts`, `src/utils/update-checker.ts`, `src/utils/self-update.ts` | Finding stale copies of the package, the new-version notice, and the auth CLI re-running itself on the newest version |
 | `src/utils/dev-activity.ts` | The optional content-free activity log ([docs/dev-mode.md](../dev-mode.md)) |
+| `src/utils/notify.ts` | macOS notifications through `/usr/bin/osascript`. Text is passed as arguments, never inside the script; it never throws. `notifyApprovalNumber()` fires once per distinct number. `D2L_NOTIFY=0` turns it off |
 | `src/utils/logger.ts` | Logging to stderr, with secrets redacted |
 | `src/utils/errors.ts`, `src/utils/error-kind.ts` | User-facing error text, and the closed set of failure categories |
 | `src/utils/atomic-write.ts`, `src/utils/process-guard.ts`, `src/utils/startup-phase.ts` | Half-written-file protection, crash protection for the server process, timed startup steps |

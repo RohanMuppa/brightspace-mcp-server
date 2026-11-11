@@ -14,6 +14,8 @@ import { SyncInputError, syncCourse, type ExistingMode, type SyncResult } from "
 import { sensitiveDestination, sensitiveDestinationMessage } from "../utils/sensitive-paths.js";
 import { sanitizeError } from "../tools/tool-helpers.js";
 import { summarizeSync } from "./summary.js";
+import { notify, setApprovalNotificationsSuppressed, type NotifyOptions } from "../utils/notify.js";
+import { AuthError } from "../utils/errors.js";
 
 export const SYNC_USAGE = `Usage: brightspace-mcp-server sync --course <id> --dest <dir> [options]
 
@@ -28,6 +30,9 @@ Options:
                        keep_both: save a differing copy as "name (1).ext"
   --module <id>        Only this module and the modules inside it
   --dry-run            List what would be downloaded; download nothing
+  --notify             Show a system notification (macOS) when files were downloaded
+                       or the sign-in has expired; quiet when nothing changed
+                       (turn off everywhere with D2L_NOTIFY=0)
   --json               Print only the result as JSON on stdout (progress on stderr)
   --max-files <n>      Most files to download in one run (default 300)
   --help               Show this help
@@ -43,11 +48,12 @@ export interface ParsedSyncArgs {
   moduleId?: number;
   dryRun: boolean;
   json: boolean;
+  notify: boolean;
   maxFiles?: number;
 }
 
 const FLAGS_WITH_VALUE = new Set(["--course", "--dest", "--existing", "--module", "--max-files"]);
-const FLAGS_ALONE = new Set(["--dry-run", "--json", "--help"]);
+const FLAGS_ALONE = new Set(["--dry-run", "--json", "--notify", "--help"]);
 
 const wholeNumber = (value: string | undefined): number | null =>
   value !== undefined && /^\d+$/.test(value) && Number(value) > 0 && Number.isSafeInteger(Number(value)) ? Number(value) : null;
@@ -99,6 +105,7 @@ export function parseSyncArgs(argv: string[]): ParsedSyncArgs | { help: true } |
     ...(moduleId !== undefined ? { moduleId } : {}),
     dryRun: flags.has("--dry-run"),
     json: flags.has("--json"),
+    notify: flags.has("--notify"),
     ...(maxFiles !== undefined ? { maxFiles } : {}),
   };
 }
@@ -114,6 +121,8 @@ export interface SyncCliDeps {
   /** Aborts the run (Ctrl-C, SIGTERM): it stops cleanly and the exit status is 130. */
   signal?: AbortSignal;
   sleep?: (ms: number) => Promise<void>;
+  /** Shows a notification for `--notify`; the system one by default. Must not throw. */
+  notify?: (options: NotifyOptions) => Promise<unknown>;
 }
 
 /** One printable line of at most 300 characters: no control or escape characters from whatever text came back. */
@@ -124,6 +133,21 @@ export function cleanLine(text: string): string {
 
 const exitCodeFor = (result: SyncResult): number =>
   result.failed.length === 0 && result.notAttempted === 0 && !result.authError ? 0 : 1;
+
+const MAX_LABEL = 120;
+
+/** The course's name for a notification, or its id when the lookup fails or returns nothing usable. */
+async function courseLabel(client: D2LApiClient, courseId: number): Promise<string> {
+  try {
+    const course = await client.get<{ Name?: unknown }>(client.lp(`/courses/${courseId}`));
+    const name = typeof course?.Name === "string" ? cleanLine(course.Name) : "";
+    // Capped so the file count after it always fits in the notification.
+    const chars = Array.from(name);
+    return (chars.length > MAX_LABEL ? `${chars.slice(0, MAX_LABEL - 1).join("")}\u2026` : name) || String(courseId);
+  } catch {
+    return String(courseId);
+  }
+}
 
 /** Run `sync` and return the process exit code. */
 export async function runSync(argv: string[], io: SyncCliIO, deps: SyncCliDeps): Promise<number> {
@@ -145,6 +169,15 @@ export async function runSync(argv: string[], io: SyncCliIO, deps: SyncCliDeps):
     return code;
   };
 
+  const tell = args.notify ? (deps.notify ?? ((options: NotifyOptions) => notify(options))) : undefined;
+  const signInNeeded = async (): Promise<void> => {
+    await tell?.({ title: "Brightspace", message: "Brightspace sign-in needed" }).catch(() => {});
+  };
+
+  // sync does not wait for a sign-in: it reports "sign-in needed" and stops, so an
+  // "Approve NN" notification for the attempt it abandons would only mislead.
+  const quietApprovals = args.notify;
+  if (quietApprovals) setApprovalNotificationsSuppressed(true);
   try {
     // Checked before anything is created: a refused destination must leave no folder behind.
     const protectedReason = await sensitiveDestination(args.destination);
@@ -175,6 +208,15 @@ export async function runSync(argv: string[], io: SyncCliIO, deps: SyncCliDeps):
     } else {
       io.stdout(`${summarizeSync(result)}\n`);
     }
+    if (tell && !args.dryRun) {
+      if (result.authError) {
+        await signInNeeded();
+      } else if (result.downloaded.length > 0) {
+        const count = result.downloaded.length;
+        const label = await courseLabel(client, args.courseId);
+        await tell({ title: "Brightspace", message: `${label}: ${count} new ${count === 1 ? "file" : "files"}`, openPath: args.destination }).catch(() => {});
+      }
+    }
     if (deps.signal?.aborted) {
       io.stderr("Interrupted. Files already saved are kept; run it again to continue.\n");
       return 130;
@@ -182,9 +224,12 @@ export async function runSync(argv: string[], io: SyncCliIO, deps: SyncCliDeps):
     return exitCodeFor(result);
   } catch (error) {
     if (error instanceof SyncInputError) return report(cleanLine(error.message), 2);
+    if (error instanceof AuthError) await signInNeeded();
     // The tools' own wording for each kind of failure; the raw message may carry a response body or URL.
     const first = sanitizeError(error).content[0];
     return report(cleanLine(`Could not sync the course: ${first.type === "text" ? first.text : "unexpected error"}`), 1);
+  } finally {
+    if (quietApprovals) setApprovalNotificationsSuppressed(false);
   }
 }
 
