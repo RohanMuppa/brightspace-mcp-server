@@ -27,7 +27,7 @@ describe("2FA shortcuts: the docs section", () => {
   });
 
   it("keeps the old anchors out of the repo (README links the new one)", () => {
-    for (const file of ["README.md", "LLMs.md", "docs/troubleshooting.md", "docs/sign-in.md"]) {
+    for (const file of ["README.md", "LLMs.md", "docs/troubleshooting.md", "docs/sign-in.md", "docs/internals/sign-in.md"]) {
       expect(read(file)).not.toContain("#answering-code-challenges-without-your-phone");
     }
     expect(read("README.md")).toContain("docs/sign-in.md#fewer-2fa-prompts");

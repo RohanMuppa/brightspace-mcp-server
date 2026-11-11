@@ -275,7 +275,7 @@ describe("the one 2FA question: docs", () => {
   const read = (p: string) => readFileSync(path.join(__dirname, "..", "..", p), "utf-8");
 
   it("describe the single question, its three options, and turning off by picking 1", () => {
-    for (const file of ["docs/sign-in.md", "README.md", "LLMs.md"]) {
+    for (const file of ["docs/sign-in.md", "README.md", "docs/internals/sign-in.md"]) {
       const t = read(file);
       expect(t).toContain("How often do you want to approve sign-ins on your phone?");
     }
