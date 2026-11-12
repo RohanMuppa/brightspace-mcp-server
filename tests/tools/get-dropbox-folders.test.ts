@@ -79,12 +79,17 @@ describe("get_dropbox_folders", () => {
     ]);
   });
 
-  it("returns a clear instructor/TA note on 403, not a generic error", async () => {
+  // Students can read the folder list, so a 403 must not blame a missing staff role (#437).
+  it("explains a 403 as enrolment or a hidden Assignments tool, not a staff-only read", async () => {
     const { call } = setup(forbidden);
     const result = await call({ courseId: COURSE_ID });
 
     expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain("Instructor or TA access required for this course");
+    const text = result.content[0].text;
+    expect(text).not.toContain("Instructor or TA");
+    expect(text).toContain("refused to list this course's assignment folders");
+    expect(text).toContain("not enrolled");
+    expect(text).toContain("get_my_courses");
   });
 
   it("returns an empty list with a note on 404, not a failure", async () => {

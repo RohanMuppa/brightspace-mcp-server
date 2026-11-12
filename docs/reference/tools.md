@@ -442,7 +442,7 @@ These tools are read-only views of a course's dropbox folders. Most of them are 
 - Returns every dropbox (assignment) folder in a course, with its due dates, submission type, visibility, and whether rubrics are attached.
 - Use it to find the `folderId` values that the other dropbox tools need.
 - A 404 returns `folders: []` with the note "No dropbox folders found for this course."
-- The tool is not gated up front. A 403 still returns the instructor and TA error. See [Instructor and TA access](#instructor-and-ta-access).
+- Students can read this list, so the tool is not gated to staff. A 403 is a `permission` error that names the likely causes: the student is not enrolled in that course, or the course hides its Assignments tool from their role. See [Instructor and TA access](#instructor-and-ta-access).
 
 ### get_dropbox_submissions
 
@@ -619,7 +619,8 @@ These tools are read-only views of a course's dropbox folders. Most of them are 
 - These tools read every student's submissions and feedback for a course. Brightspace grants that only to course staff.
 - A student who calls one of them gets the note "Instructor or TA access required for this course" with a 403, rather than a generic or broken-looking error.
 - `get_dropbox_folders` and `get_rubrics_for_object` read the same folder listing that a student's own client reads. They are not gated up front.
-  - A 403 from that listing still returns the same "Instructor or TA access required" error (`src/tools/get-dropbox-folders.ts`, `src/tools/get-rubrics-for-object.ts`).
+  - A 403 from that list is a `permission` error, but it does not say "Instructor or TA access required". It says Brightspace refused to list the course's assignment folders. It names the likely causes (not enrolled in that course, or Assignments hidden from the student's role) and points to `get_my_courses` (`src/tools/get-dropbox-folders.ts`, `src/tools/get-rubrics-for-object.ts`).
+    - **Why:** students can read this list, so the staff-only message sent them the wrong way (#437).
 - A 404 (no folders, no submissions, folder not found) returns an empty list or null with an explanatory `note`. It is not a failure.
 - All dropbox tools are read-only. No tool in this server posts a grade or feedback back to Brightspace.
 
