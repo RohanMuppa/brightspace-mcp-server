@@ -6,6 +6,10 @@ A change that can break something a caller relied on is marked **Changed behavio
 
 Entries up to 5.2.1 were generated from the merged PR titles. Versions before 5.0.0 are in the [GitHub releases](https://github.com/RohanMuppa/brightspace-mcp-server/releases) and the git history.
 
+## 5.2.4 (2026-11-12)
+
+- fix: `get_available_groups` now says in `note` when it couldn't read an open sign-up's groups, so the agent doesn't report that sign-up as full or closed (#433).
+
 ## 5.2.2 (2026-11-11)
 
 - docs: one short install page for agents (`LLMs.md`), one rules file for contributors (`AGENTS.md`), and the tool, command and setting reference moved to `docs/reference/` and `docs/internals/`. The install prompt in the README is now one sentence.

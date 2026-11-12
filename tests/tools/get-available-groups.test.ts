@@ -198,6 +198,20 @@ describe("get_available_groups", () => {
     const payload = parse(await call({ courseId: COURSE.Id }));
 
     expect(payload.courses[0].unreadCategories).toEqual(["Lab slots"]);
+    expect(payload.note).toMatch(new RegExp(`Couldn't read the groups in the open sign-up\\(s\\) "Lab slots" in course ${COURSE.Id}`));
+    expect(payload.note).not.toMatch(/No group sign-ups are open/);
+  });
+
+  it("leaves the note out when every open category's groups were read", async () => {
+    const { call } = setup({
+      [categoriesPath(COURSE.Id)]: [category(1)],
+      [groupsPath(COURSE.Id, 1)]: [group(10, [])],
+    });
+
+    const payload = parse(await call({ courseId: COURSE.Id }));
+
+    expect(payload.courses[0]).not.toHaveProperty("unreadCategories");
+    expect(payload.note).toBeUndefined();
   });
 
   it("keeps the other courses and names the one that failed", async () => {
