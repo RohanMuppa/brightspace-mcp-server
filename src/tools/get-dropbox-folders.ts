@@ -83,8 +83,10 @@ export function registerGetDropboxFolders(
         } catch (error) {
           if (error instanceof ApiError && error.status === 403) {
             return errorResponse(
-              "Instructor or TA access required for this course. This tool reads every student's " +
-              "dropbox folder metadata, which Brightspace only grants to course staff.", "permission"
+              "Brightspace refused to list this course's assignment folders (403). Students can " +
+              "normally read this list, so the likely causes are that you are not enrolled in this " +
+              "course (check the courseId with get_my_courses) or that the course hides its " +
+              "Assignments tool from your role. Check the course in Brightspace.", "permission"
             );
           }
           if (error instanceof ApiError && error.status === 404) {
