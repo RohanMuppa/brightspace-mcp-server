@@ -209,6 +209,18 @@ export function registerGetAvailableGroups(
         if (failedCourseIds.length > 0) {
           notes.push(`Couldn't read groups for course(s) ${failedCourseIds.join(", ")}, so open sign-ups there aren't listed.`);
         }
+        // Without a reason attached, a bare unreadCategories list reads like a
+        // category with nothing open, so name each one and say why it's there.
+        const unread = withChoices.filter((c) => c.unreadCategories);
+        if (unread.length > 0) {
+          const where = unread
+            .map((c) => `${c.unreadCategories!.map((name) => `"${name}"`).join(", ")} in course ${c.courseId}`)
+            .join("; ");
+          notes.push(
+            `Couldn't read the groups in the open sign-up(s) ${where}, so any open groups there aren't listed ` +
+            "(see unreadCategories). Don't report them as full or closed; check Groups > Available Groups in Brightspace."
+          );
+        }
         const data = {
           coursesChecked: courses.length,
           courses: withChoices,

@@ -422,6 +422,8 @@ Tools are registered in `src/tools/index.ts`, and their input schemas are in `sr
   - `courseId` (optional). Omit it to check courses that started in the last 12 months.
   - `includeOlder` (default `false`). Without `courseId`, also checks older and undated courses. Schools that never close a course keep years of finished courses whose sign-ups still look open.
 - Returns groups the current user can still join themselves, with spots left and when sign-up closes.
+- An open sign-up category whose groups could not be read (403 or 404) is listed in that course's `unreadCategories` and named in `note`, which tells the agent not to report it as full or closed.
+  **Why:** a bare `unreadCategories` list read like a category with nothing open (#433).
 - If a course is still loading in the background, the response sets `authPending: true` and `unavailableCourseIds`. See [Background sign-in](#background-sign-in).
 
 ### get_classlist_emails
