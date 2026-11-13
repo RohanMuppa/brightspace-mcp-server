@@ -74,14 +74,24 @@ export function registerGetMyGroups(
 
         const { courseId } = GetMyGroupsSchema.parse(args);
 
-        const { matches, categoriesUnavailable, unreadCategories } = await fetchMyGroupMemberships(apiClient, courseId);
+        const { matches, categoriesUnavailable, categoriesStatus, unreadCategories } =
+          await fetchMyGroupMemberships(apiClient, courseId);
+        // An empty `groups` here means "not read", not "none": the field lets a
+        // caller tell the two apart without parsing the note (#442).
         if (categoriesUnavailable) {
           return toolResponse({
             courseId,
             groups: [],
-            note: "No groups are visible for this course (it may not use groups, or group info isn't accessible).",
+            groupsUnavailable: { status: categoriesStatus ?? null },
+            note: categoriesStatus === 403
+              ? "Brightspace refused this course's group list (403), so whether the current user is in a group " +
+                "is unknown. Don't tell them they have no group; they can check Groups in Brightspace."
+              : "No groups are visible for this course (it may not use groups, or group info isn't accessible), " +
+                "so whether the current user is in a group is unknown.",
           });
         }
+        const unreadNames = unreadCategories.map((c) => c.Name || String(c.GroupCategoryId));
+        const unreadField = unreadNames.length > 0 ? { unreadCategories: unreadNames } : {};
 
         const unreadNote = unreadCategories.length === 0 ? undefined
           : `Couldn't read the groups in ${unreadCategories.map((c) => `"${c.Name || c.GroupCategoryId}"`).join(", ")}, ` +
@@ -94,7 +104,7 @@ export function registerGetMyGroups(
         }
 
         if (matches.length === 0 && unreadNote) {
-          return toolResponse({ courseId, groups: [], note: unreadNote });
+          return toolResponse({ courseId, groups: [], ...unreadField, note: unreadNote });
         }
 
         if (matches.length === 0) {
@@ -174,7 +184,7 @@ export function registerGetMyGroups(
             : "Couldn't read this course's classlist, so member names are null; only user ids are listed" +
               (pageNames.size > 0 ? ", except where memberNames lists a group's members from its member page." : ".");
         const note = [unreadNote, namesNote].filter(Boolean).join(" ") || undefined;
-        return toolResponse({ courseId, groups, ...(note ? { note } : {}) });
+        return toolResponse({ courseId, groups, ...unreadField, ...(note ? { note } : {}) });
       } catch (error) {
         return sanitizeError(error);
       }
