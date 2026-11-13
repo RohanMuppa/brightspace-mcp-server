@@ -6,6 +6,10 @@ A change that can break something a caller relied on is marked **Changed behavio
 
 Entries up to 5.2.1 were generated from the merged PR titles. Versions before 5.0.0 are in the [GitHub releases](https://github.com/RohanMuppa/brightspace-mcp-server/releases) and the git history.
 
+## 5.2.4 (2026-11-13)
+
+- fix: `get_my_groups` no longer lets "couldn't read the groups" pass for "you're in no group". It adds `groupsUnavailable` when Brightspace refuses the course's group list, and `unreadCategories` when it refuses some categories, and on a 403 the note says membership is unknown (#442).
+
 ## 5.2.3 (2026-11-12)
 
 - fix: when Brightspace refuses `get_dropbox_folders` or `get_rubrics_for_object`, the error no longer says "Instructor or TA access required", because students can read that list. It says you may not be enrolled in that course, or the course may hide its Assignments tool, and suggests checking the course id with `get_my_courses` (#437).

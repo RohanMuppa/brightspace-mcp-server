@@ -33,7 +33,12 @@ export async function fetchMyGroupMemberships(apiClient: D2LApiClient, courseId:
       : [{ GroupCategoryId: categoryId, Name: "" }];
   } catch (error) {
     if (inaccessible(error)) {
-      return { matches: [] as GroupMembership[], categoriesUnavailable: true, unreadCategories: [] as GroupCategoryDto[] };
+      return {
+        matches: [] as GroupMembership[],
+        categoriesUnavailable: true,
+        categoriesStatus: (error as ApiError).status as number | undefined,
+        unreadCategories: [] as GroupCategoryDto[],
+      };
     }
     throw error;
   }
@@ -56,5 +61,5 @@ export async function fetchMyGroupMemberships(apiClient: D2LApiClient, courseId:
       if (group.Enrollments?.some((id) => Number(id) === myId)) matches.push({ category, group });
     }
   }
-  return { matches, categoriesUnavailable: false, unreadCategories };
+  return { matches, categoriesUnavailable: false, categoriesStatus: undefined as number | undefined, unreadCategories };
 }

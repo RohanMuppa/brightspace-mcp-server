@@ -413,6 +413,10 @@ Tools are registered in `src/tools/index.ts`, and their input schemas are in `sr
 - Code: `src/tools/get-my-groups.ts`.
 - Argument: `courseId` (required).
 - Returns the current user's project and discussion groups in a course, with each group's members.
+- An empty `groups` is only "in no group" when neither of these fields is present:
+  - `groupsUnavailable: { status }`: the course's group list answered 403 or 404, so membership is unknown.
+  - `unreadCategories`: names of group categories whose groups answered 403 or 404. Any group the user has there is not listed.
+  - **Why:** an empty list read as "you're in no group" when the server never read the groups (#442, 2026-11-13).
 - The group membership lookup is cached. [Links into Brightspace](#links-into-brightspace) uses the same lookup.
 
 ### get_available_groups

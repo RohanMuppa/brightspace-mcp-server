@@ -260,12 +260,14 @@ describe("get_my_groups missing group data", () => {
 
     expect(payload.courseId).toBe(COURSE_ID);
     expect(payload.groups).toEqual([]);
+    expect(payload.groupsUnavailable).toEqual({ status: 404 });
     expect(payload.note).toMatch(/no groups/i);
+    expect(payload.note).toMatch(/unknown/i);
     // Never falls through to the classlist once categories are known absent.
     expect(requested).not.toContain(CLASSLIST_PATH);
   });
 
-  it("returns an empty list with a note when group categories are forbidden", async () => {
+  it("marks membership unknown, not absent, when group categories are forbidden", async () => {
     const { call } = setup({
       categoriesError: new ApiError(403, CATEGORIES_PATH, "Forbidden"),
     });
@@ -273,7 +275,10 @@ describe("get_my_groups missing group data", () => {
     const payload = parse(await call({ courseId: COURSE_ID }));
 
     expect(payload.groups).toEqual([]);
-    expect(payload.note).toMatch(/no groups/i);
+    expect(payload.groupsUnavailable).toEqual({ status: 403 });
+    expect(payload.note).toMatch(/403/);
+    expect(payload.note).toMatch(/unknown/i);
+    expect(payload.note).not.toMatch(/no groups are visible/i);
   });
 });
 
@@ -290,6 +295,8 @@ describe("get_my_groups user in no group", () => {
     expect(payload.groups).toEqual([]);
     expect(payload.note).toMatch(/not a member/i);
     expect(payload.note).not.toMatch(/no groups are visible/i);
+    expect(payload.groupsUnavailable).toBeUndefined();
+    expect(payload.unreadCategories).toBeUndefined();
     // No match was found, so the classlist (needed only for member names)
     // must never be fetched.
     expect(requested).not.toContain(CLASSLIST_PATH);
@@ -310,6 +317,7 @@ describe("get_my_groups unreadable group category", () => {
     const payload = parse(await call({ courseId: COURSE_ID }));
 
     expect(payload.groups).toEqual([]);
+    expect(payload.unreadCategories).toEqual(["Lab Sections"]);
     expect(payload.note).toContain('"Lab Sections"');
     expect(payload.note).not.toMatch(/not a member/i);
     expect(requested).not.toContain(CLASSLIST_PATH);
@@ -329,6 +337,7 @@ describe("get_my_groups unreadable group category", () => {
     const payload = parse(await call({ courseId: COURSE_ID }));
 
     expect(payload.groups.map((g: any) => g.groupId)).toEqual([10]);
+    expect(payload.unreadCategories).toEqual(["Lab Sections"]);
     expect(payload.note).toContain('"Lab Sections"');
     expect(payload.note).not.toContain("Project Groups");
   });
