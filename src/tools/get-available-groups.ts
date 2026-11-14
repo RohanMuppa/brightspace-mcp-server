@@ -65,6 +65,13 @@ interface CourseGroups {
   unreadCategories?: string[];
 }
 
+/** An open category whose groups answered 403 or 404, with that status, so the note can say why. */
+interface UnreadCategory { courseId: number; name: string; status: number }
+
+/** Why a category's groups couldn't be read, in words an agent can relay. */
+const unreadReason = (status: number) =>
+  status === 403 ? "Brightspace refused access (403)" : "Brightspace found no group list (404)";
+
 const inaccessible = (error: unknown) => error instanceof ApiError && (error.status === 403 || error.status === 404);
 
 const text = (value: RichText | null | undefined): string | undefined => value?.Text?.trim() || undefined;
@@ -80,7 +87,9 @@ function signUpOpen(category: GroupCategory, now: number): boolean {
   return start <= now && now <= end;
 }
 
-async function fetchCourseGroups(apiClient: D2LApiClient, course: CourseRef, myId: number, now: number): Promise<CourseGroups> {
+async function fetchCourseGroups(
+  apiClient: D2LApiClient, course: CourseRef, myId: number, now: number, unreadOut: UnreadCategory[],
+): Promise<CourseGroups> {
   const result: CourseGroups = { courseId: course.id, courseName: course.name, categories: [], alreadyInGroup: [] };
   let categories: GroupCategory[];
   try {
@@ -99,6 +108,7 @@ async function fetchCourseGroups(apiClient: D2LApiClient, course: CourseRef, myI
     } catch (error) {
       if (inaccessible(error)) {
         unread.push(category.Name);
+        unreadOut.push({ courseId: course.id, name: category.Name, status: (error as ApiError).status });
         continue;
       }
       throw error;
@@ -178,7 +188,9 @@ export function registerGetAvailableGroups(
         });
         const olderSkipped = enrolled.length - courses.length;
 
-        const results = await Promise.allSettled(courses.map((course) => fetchCourseGroups(apiClient, course, myId, now)));
+        const unreadCategories: UnreadCategory[] = [];
+        const results = await Promise.allSettled(
+          courses.map((course) => fetchCourseGroups(apiClient, course, myId, now, unreadCategories)));
         const pendingCourseIds: number[] = [];
         const failedCourseIds: number[] = [];
         let firstAuthError: unknown = null;
@@ -208,6 +220,18 @@ export function registerGetAvailableGroups(
         }
         if (failedCourseIds.length > 0) {
           notes.push(`Couldn't read groups for course(s) ${failedCourseIds.join(", ")}, so open sign-ups there aren't listed.`);
+        }
+        // Without a reason attached, a bare unreadCategories list reads like a
+        // category with nothing open, so name each one and say why it's there (#433).
+        const shownCourseIds = new Set(withChoices.map((c) => c.courseId));
+        const unread = unreadCategories.filter((u) => shownCourseIds.has(u.courseId));
+        if (unread.length > 0) {
+          const where = unread.map((u) => `"${u.name}" in course ${u.courseId}: ${unreadReason(u.status)}`).join("; ");
+          notes.push(
+            `Couldn't read the groups in these open sign-ups, so any open groups there aren't listed ` +
+            `(see unreadCategories): ${where}. Don't report them as full or closed; ` +
+            "check Groups > Available Groups in Brightspace."
+          );
         }
         const data = {
           coursesChecked: courses.length,
