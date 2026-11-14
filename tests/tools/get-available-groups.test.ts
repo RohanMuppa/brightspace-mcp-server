@@ -198,6 +198,36 @@ describe("get_available_groups", () => {
     const payload = parse(await call({ courseId: COURSE.Id }));
 
     expect(payload.courses[0].unreadCategories).toEqual(["Lab slots"]);
+    expect(payload.note).toContain(`"Lab slots" in course ${COURSE.Id}: Brightspace refused access (403)`);
+    expect(payload.note).toMatch(/aren't listed/);
+    expect(payload.note).toMatch(/Don't report them as full or closed/);
+    expect(payload.note).not.toMatch(/No group sign-ups are open/);
+  });
+
+  it("gives each unread category its own reason", async () => {
+    const { call } = setup({
+      [categoriesPath(COURSE.Id)]: [category(1, { Name: "Lab slots" }), category(2, { Name: "Project teams" })],
+      [groupsPath(COURSE.Id, 1)]: new ApiError(403, groupsPath(COURSE.Id, 1), "Forbidden"),
+      [groupsPath(COURSE.Id, 2)]: new ApiError(404, groupsPath(COURSE.Id, 2), "Not Found"),
+    });
+
+    const payload = parse(await call({ courseId: COURSE.Id }));
+
+    expect(payload.courses[0].unreadCategories).toEqual(["Lab slots", "Project teams"]);
+    expect(payload.note).toContain(`"Lab slots" in course ${COURSE.Id}: Brightspace refused access (403)`);
+    expect(payload.note).toContain(`"Project teams" in course ${COURSE.Id}: Brightspace found no group list (404)`);
+  });
+
+  it("leaves the note out when every open category's groups were read", async () => {
+    const { call } = setup({
+      [categoriesPath(COURSE.Id)]: [category(1)],
+      [groupsPath(COURSE.Id, 1)]: [group(10, [])],
+    });
+
+    const payload = parse(await call({ courseId: COURSE.Id }));
+
+    expect(payload.courses[0]).not.toHaveProperty("unreadCategories");
+    expect(payload.note).toBeUndefined();
   });
 
   it("keeps the other courses and names the one that failed", async () => {
