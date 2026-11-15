@@ -663,12 +663,38 @@ function feedbackPageListsSubmission(html: string): boolean {
   return false;
 }
 
+/**
+ * Set when the course's dropbox folder list could not be read, so its
+ * assignments are missing rather than absent. A 404 is not this: like the
+ * quiz list, it means the course has no Assignments tool.
+ * **Why:** a failed list used to leave only a DEBUG log, and a course with
+ * quizzes read as "no assignments due" (#447).
+ */
+interface AssignmentListCoverage {
+  assignmentListUnavailable?: { status: number | null };
+  assignmentListNote?: string;
+}
+
+function assignmentListCoverage(reason: unknown): AssignmentListCoverage {
+  const status = typeof (reason as any)?.status === "number" ? (reason as any).status as number : null;
+  if (status === 404) return {};
+  return {
+    assignmentListUnavailable: { status },
+    assignmentListNote:
+      (status === 403
+        ? "Brightspace refused this course's assignment (dropbox) list (403), "
+        : `Brightspace did not return this course's assignment (dropbox) list${status !== null ? ` (it answered ${status})` : ""}, `) +
+      "so its assignments are missing from this answer. Do not tell the user this course has no " +
+      "assignments due; call get_assignments again for it, or tell them to check Assignments in Brightspace.",
+  };
+}
+
 /** A course's assignments and quizzes, with whether its quiz list is complete. */
 async function fetchCourseInventory(
   apiClient: D2LApiClient,
   courseId: number,
   baseUrl?: string
-): Promise<{ assignments: any[] } & QuizCoverage> {
+): Promise<{ assignments: any[] } & QuizCoverage & AssignmentListCoverage> {
   const assignments: any[] = [];
   const assignmentLink = assignmentLinkResolver(apiClient, baseUrl, courseId);
 
@@ -902,8 +928,9 @@ async function fetchCourseInventory(
       assignments.push(assignment);
     }
   } else {
-    // Log dropbox fetch failure but don't throw
-    log("DEBUG", `Failed to fetch dropbox folders for course ${courseId}`, dropboxResult.reason);
+    // Don't throw: the quizzes and gradebook may still have answered. The
+    // failure is reported through assignmentListCoverage below.
+    log("INFO", `Failed to fetch dropbox folders for course ${courseId}`, dropboxResult.reason);
   }
 
   // Process quizzes. Content discovery remains useful when the list route is
@@ -1109,6 +1136,7 @@ async function fetchCourseInventory(
       gradebook: gradebookResult.status === "fulfilled",
       contentRecovery,
     }),
+    ...(dropboxResult.status === "rejected" ? assignmentListCoverage(dropboxResult.reason) : {}),
   };
 }
 
@@ -1191,7 +1219,9 @@ export function registerGetAssignments(
         "availability (notYetOpen, open, closed) is worked out from the quiz's own start and end dates and is left out when it has none. exempt: true means Brightspace marks the user exempt from that quiz's topic; the quiz is still listed. " +
         "Each course also carries quizCoverage. \"complete\" means every quiz source answered, not that every quiz is guaranteed to be listed; \"incomplete\" means a quiz source could not be read, so the course may have quizzes not listed. " +
         "Never conclude that a quiz was missed or not taken because it is absent, and never present the listed quizzes as all of them. " +
-        "A gradeOnly row named like a quiz is a quiz whose details could not be read.",
+        "A gradeOnly row named like a quiz is a quiz whose details could not be read. " +
+        "A course with assignmentListUnavailable had its assignment list unread: its assignments are missing, not absent, so never say it has none due. " +
+        "Without courseId, courses listed in unreadCourses could not be read at all and are not in courses; never report them as having nothing due.",
       inputSchema: GetAssignmentsSchema,
     },
     async (args: any) => {
@@ -1276,14 +1306,6 @@ export function registerGetAssignments(
               ...inventory,
             };
           } catch (error: any) {
-            // 403 means no access (past course, etc) - log and skip
-            if (error?.status === 403) {
-              log(
-                "DEBUG",
-                `get_assignments: 403 Forbidden for course ${item.OrgUnit.Id} (${item.OrgUnit.Name}) - skipping`
-              );
-              return null;
-            }
             // A pending sign-in only means this course's routes never
             // answered — it says nothing about the other courses, whose
             // requests may already have gone out independently. Mark this one
@@ -1301,17 +1323,31 @@ export function registerGetAssignments(
                 authError: error,
               };
             }
-            throw error; // Re-throw other errors
+            throw error;
           }
         });
 
         const results = await Promise.allSettled(assignmentPromises);
         const settled = results
-          .filter(
-            (r): r is PromiseFulfilledResult<any> =>
-              r.status === "fulfilled" && r.value !== null
-          )
+          .filter((r): r is PromiseFulfilledResult<any> => r.status === "fulfilled")
           .map((r) => r.value);
+
+        // A course whose inventory failed (a 403 on a past course, a 5xx, a
+        // malformed payload) is not a course with nothing due. It stays out
+        // of `courses`, as before, and is named here instead.
+        // **Why:** these courses used to vanish with no trace, so "what's
+        // due?" silently skipped a class (#447).
+        const unreadCourses = results.flatMap((result, index) => {
+          if (result.status !== "rejected") return [];
+          const item = filteredEnrollments[index];
+          const status = typeof result.reason?.status === "number" ? result.reason.status : null;
+          log(
+            "INFO",
+            `get_assignments: could not read course ${item.OrgUnit.Id} (${item.OrgUnit.Name})`,
+            result.reason
+          );
+          return [{ courseId: item.OrgUnit.Id, courseName: item.OrgUnit.Name, status }];
+        });
 
         const pending = settled.filter((c) => c.authPending);
         const courses = settled
@@ -1338,16 +1374,28 @@ export function registerGetAssignments(
             })),
           ],
         };
+        const notices: string[] = [];
         if (pending.length > 0) {
           throwIfCredentialRejected(pending[0].authError);
           response.authPending = true;
           response.unavailableCourseIds = pending.map((c) => c.courseId);
-          response.notice =
+          notices.push(
             "Sign-in to Brightspace is still in progress, so assignments for " +
             `${pending.length} course(s) (${pending.map((c) => c.courseId).join(", ")}) could not be ` +
             `fetched yet. ${authPendingNotice(pending[0].authError)} Call get_assignments again once ` +
-            "sign-in finishes.";
+            "sign-in finishes."
+          );
         }
+        if (unreadCourses.length > 0) {
+          response.unreadCourses = unreadCourses;
+          notices.push(
+            `Assignments for ${unreadCourses.length} course(s) could not be read from Brightspace ` +
+            `(${unreadCourses.map((c) => `"${c.courseName}" ${c.courseId}`).join(", ")}), so they are ` +
+            "missing from this list. Do not tell the user those courses have nothing due: call " +
+            "get_assignments again with that courseId, or tell them to check Brightspace."
+          );
+        }
+        if (notices.length > 0) response.notice = notices.join(" ");
         return toolResponse(response);
       } catch (error) {
         // Temporary: log full error details to stderr for debugging
