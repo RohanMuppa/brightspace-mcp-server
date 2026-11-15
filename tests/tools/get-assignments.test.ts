@@ -483,7 +483,89 @@ describe("get_assignments across all courses", () => {
     const result = await call({});
 
     expect(result.isError).toBeUndefined();
-    expect(body(result).courses.map((c: any) => c.courseId)).toEqual([COURSE_A.Id]);
+    const parsed = body(result);
+    expect(parsed.courses.map((c: any) => c.courseId)).toEqual([COURSE_A.Id]);
+    // Dropped from courses, but named: an unread course is not one with nothing due (#447).
+    expect(parsed.unreadCourses).toEqual([{ courseId: COURSE_B.Id, courseName: COURSE_B.Name, status: null }]);
+    expect(parsed.notice).toContain(`"${COURSE_B.Name}" ${COURSE_B.Id}`);
+    expect(parsed.notice).toContain("Do not tell the user those courses have nothing due");
+    expect(parsed.authPending).toBeUndefined();
+  });
+
+  it("leaves unreadCourses out when every course answered", async () => {
+    const { call } = setupTool((path) => {
+      if (path.includes("/enrollments/")) {
+        return { Items: [enrollmentItem(COURSE_A), enrollmentItem(COURSE_B)] };
+      }
+      return courseWork(path);
+    }, allCoursesConfig(true));
+
+    const parsed = body(await call({}));
+    expect(parsed.unreadCourses).toBeUndefined();
+    expect(parsed.notice).toBeUndefined();
+  });
+
+  it("says when a course's assignment list was refused, instead of listing only its quizzes", async () => {
+    const { call } = setupTool((path) => {
+      if (path.includes("/enrollments/")) return { Items: [enrollmentItem(COURSE_A)] };
+      if (path.endsWith("/dropbox/folders/")) throw forbidden();
+      return courseWork(path);
+    }, allCoursesConfig(true));
+
+    const parsed = body(await call({}));
+    const [course] = parsed.courses;
+    expect(course.assignments).toEqual([]);
+    expect(course.assignmentListUnavailable).toEqual({ status: 403 });
+    expect(course.assignmentListNote).toContain("Do not tell the user this course has no assignments due");
+  });
+});
+
+/**
+ * The dropbox folder list is one of four routes read side by side. Its failure
+ * must not pass for a course with no assignments (#447). A 404 is the
+ * exception: like the quiz list, it means the course has no Assignments tool.
+ */
+describe("get_assignments assignment list coverage", () => {
+  const single = (dropbox: () => unknown) =>
+    setupTool((path) => (path.endsWith("/dropbox/folders/") ? dropbox() : courseWork(path)), allCoursesConfig(true));
+
+  it.each([
+    [403, "refused"],
+    [500, "it answered 500"],
+  ])("marks the list unavailable on a %i", async (status, wording) => {
+    const { call } = single(() => {
+      throw Object.assign(new Error("API error"), { status });
+    });
+
+    const parsed = body(await call({ courseId: COURSE_A.Id }));
+    expect(parsed.assignments).toEqual([]);
+    expect(parsed.assignmentListUnavailable).toEqual({ status });
+    expect(parsed.assignmentListNote).toContain(wording);
+  });
+
+  it("marks the list unavailable with a null status on a network failure", async () => {
+    const { call } = single(() => {
+      throw new TypeError("fetch failed");
+    });
+
+    const parsed = body(await call({ courseId: COURSE_A.Id }));
+    expect(parsed.assignmentListUnavailable).toEqual({ status: null });
+  });
+
+  it("treats a 404 as a course without the Assignments tool", async () => {
+    const { call } = single(() => {
+      throw notFound();
+    });
+
+    const parsed = body(await call({ courseId: COURSE_A.Id }));
+    expect(parsed.assignments).toEqual([]);
+    expect(parsed.assignmentListUnavailable).toBeUndefined();
+    expect(parsed.assignmentListNote).toBeUndefined();
+  });
+
+  it("adds nothing when the list answered", async () => {
+    const parsed = body(await single(() => []).call({ courseId: COURSE_A.Id }));
+    expect(parsed.assignmentListUnavailable).toBeUndefined();
   });
 });
 

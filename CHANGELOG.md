@@ -6,6 +6,10 @@ A change that can break something a caller relied on is marked **Changed behavio
 
 Entries up to 5.2.1 were generated from the merged PR titles. Versions before 5.0.0 are in the [GitHub releases](https://github.com/RohanMuppa/brightspace-mcp-server/releases) and the git history.
 
+## 5.2.6 (2026-11-15)
+
+- fix: `get_assignments` no longer lets "couldn't read the assignment list" pass for "no assignments due". A course whose assignment (dropbox) list Brightspace refused or failed now carries `assignmentListUnavailable` and `assignmentListNote`, and without `courseId` a course that couldn't be read at all is named in `unreadCourses` and the `notice` instead of vanishing from the answer (#447).
+
 ## 5.2.5 (2026-11-14)
 
 - fix: `get_available_groups` now says in `note` why each open sign-up is in `unreadCategories`: it names the category and course, says whether Brightspace refused access (403) or found no group list (404), and says open groups there aren't listed, so the agent doesn't report that sign-up as full or closed (#433).

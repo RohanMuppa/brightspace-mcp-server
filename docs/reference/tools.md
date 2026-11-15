@@ -97,6 +97,8 @@ Tools are registered in `src/tools/index.ts`, and their input schemas are in `sr
 - Arguments: `courseId` (optional). Omit it for all enrolled courses.
 - Due dates carry `dueIn` ([Shared behaviour](#duein)) and `url` and `urlKind` ([Links into Brightspace](#links-into-brightspace)).
 - Gradebook-only items: `gradeOnly` rows are gradebook columns that match no assignment or quiz, such as a proctored exam.
+- `assignmentListUnavailable: { status }` and `assignmentListNote` are added to a course when its dropbox folder list (`/dropbox/folders/`) failed with anything but a 404. `status` is the HTTP status, or `null` for a network failure. The course's assignments are then missing, not absent; quizzes and gradebook rows still appear. A 404 counts as a course without the Assignments tool, the same rule as the quiz list. **Why:** a failed list used to read as "no assignments due" (#447).
+- Without `courseId`, a course whose inventory could not be read at all is left out of `courses` and named in `unreadCourses: [{ courseId, courseName, status }]`, with a sentence in `notice`. Both are omitted when every course answered. A course whose sign-in is still pending is reported through `authPending` instead ([Background sign-in](#background-sign-in)). **Why:** such a course used to vanish with no trace (#447).
 
 **Dropbox assignments**
 
