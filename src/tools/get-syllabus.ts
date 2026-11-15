@@ -6,6 +6,7 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { D2LApiClient, ApiError, DEFAULT_CACHE_TTLS } from "../api/index.js";
+import { fetchAllObjects } from "../api/paginate.js";
 import { GetSyllabusSchema } from "./schemas.js";
 import { toolResponse, sanitizeError, errorResponse, isAuthUnavailable, throwIfCredentialRejected } from "./tool-helpers.js";
 import { convertHtmlToMarkdown } from "../utils/html-converter.js";
@@ -38,6 +39,14 @@ interface LtiLink {
   IsVisible: boolean;
 }
 
+// D2L LTIAdvantageLinkData (LTI 1.3), trimmed to what we read (CustomParameters are never touched)
+interface LtiAdvantageLink {
+  Name: string;
+  URL: string;
+  IsEnabled: boolean;
+  IsAvailable: boolean;
+}
+
 interface ExternalSyllabusSource {
   title: string;
   location: "lti-link" | "content";
@@ -61,11 +70,19 @@ function stripQuery(url: string): string {
  */
 function findExternalSyllabusSources(
   ltiLinks: LtiLink[],
+  advantageLinks: LtiAdvantageLink[],
   toc: TocModule[]
 ): ExternalSyllabusSource[] {
-  const sources: ExternalSyllabusSource[] = ltiLinks
-    .filter((l) => l.IsVisible !== false && (SYLLABUS_PATTERN.test(l.Title) || SYLLABUS_PATTERN.test(l.Url)))
-    .map((l) => ({ title: l.Title, location: "lti-link", url: stripQuery(l.Url) }));
+  const sources: ExternalSyllabusSource[] = [
+    ...ltiLinks
+      .filter((l) => l.IsVisible !== false)
+      .map((l) => ({ title: l.Title, url: l.Url })),
+    ...advantageLinks
+      .filter((l) => l.IsEnabled !== false && l.IsAvailable !== false)
+      .map((l) => ({ title: l.Name, url: l.URL })),
+  ]
+    .filter((l) => SYLLABUS_PATTERN.test(l.title ?? "") || SYLLABUS_PATTERN.test(l.url ?? ""))
+    .map((l) => ({ title: l.title, location: "lti-link", url: stripQuery(l.url) }));
 
   const walk = (modules: TocModule[]): void => {
     for (const m of modules) {
@@ -83,7 +100,7 @@ function findExternalSyllabusSources(
   return sources;
 }
 
-type DiscoveryLookup = "lti-links" | "content-toc";
+type DiscoveryLookup = "lti-links" | "lti-advantage-links" | "content-toc";
 
 interface UnavailableLookup {
   lookup: DiscoveryLookup;
@@ -94,6 +111,7 @@ interface UnavailableLookup {
 
 const LOOKUP_LABELS: Record<DiscoveryLookup, string> = {
   "lti-links": "course LTI links",
+  "lti-advantage-links": "course LTI Advantage links",
   "content-toc": "course content table of contents",
 };
 
@@ -134,6 +152,15 @@ function describeUnavailable(u: UnavailableLookup): string {
   return `${LOOKUP_LABELS[u.lookup]}: ${why}`;
 }
 
+/**
+ * Places a syllabus can be linked that no Brightspace API exposes, so they are
+ * never checked. A course navbar link (e.g. to Simple Syllabus) is one.
+ */
+const NOT_CHECKED = ["course-navbar"] as const;
+
+const NOT_CHECKED_NOTE =
+  "The course navbar was not checked: Brightspace has no API for reading its links, so a syllabus tool linked only there (e.g. Simple Syllabus) does not appear here.";
+
 interface ExternalDiscovery {
   /** Fields merged into the tool output. Empty when discovery was complete and found nothing. */
   fields: Record<string, unknown>;
@@ -144,9 +171,14 @@ async function discoverExternalSyllabusSources(
   apiClient: D2LApiClient,
   courseId: number
 ): Promise<ExternalDiscovery> {
-  const [lti, toc] = await Promise.all([
+  const [lti, advantage, toc] = await Promise.all([
     tryLookup("lti-links", () =>
       apiClient.get<LtiLink[]>(apiClient.leGlobal(`/lti/link/${courseId}/`), { ttl: DEFAULT_CACHE_TTLS.courseContent })
+    ),
+    tryLookup("lti-advantage-links", () =>
+      fetchAllObjects<LtiAdvantageLink>(apiClient, apiClient.leGlobal(`/ltiadvantage/links/orgunit/${courseId}/`), {
+        ttl: DEFAULT_CACHE_TTLS.courseContent,
+      })
     ),
     tryLookup("content-toc", () =>
       apiClient.get<{ Modules?: TocModule[] }>(apiClient.le(courseId, "/content/toc"), { ttl: DEFAULT_CACHE_TTLS.courseContent })
@@ -154,24 +186,35 @@ async function discoverExternalSyllabusSources(
   ]);
   const ltiLinks = lti.ok ? (Array.isArray(lti.value) ? lti.value : []) : [];
   const modules = toc.ok ? (toc.value?.Modules ?? []) : [];
-  const sources = findExternalSyllabusSources(ltiLinks, modules);
-  const unavailable = [lti, toc].flatMap((o) => (o.ok ? [] : [o.unavailable]));
+  const advantageLinks = advantage.ok ? advantage.value : [];
+  const sources = findExternalSyllabusSources(ltiLinks, advantageLinks, modules);
+  const unavailable = [lti, toc, advantage].flatMap((o) => (o.ok ? [] : [o.unavailable]));
+  // With a source in hand the unread navbar no longer hides the syllabus; with
+  // none, it might, so an empty result is never presented as complete.
+  const notChecked = sources.length === 0 ? [...NOT_CHECKED] : [];
 
   const fields: Record<string, unknown> = {};
   if (sources.length > 0) {
     fields.externalSyllabusSources = sources;
     fields.externalSyllabusNote = EXTERNAL_SYLLABUS_NOTE;
   }
-  if (unavailable.length > 0) {
+  const complete = unavailable.length === 0 && notChecked.length === 0;
+  if (!complete) {
+    const failed =
+      unavailable.length > 0
+        ? `Could not check every place an external syllabus may be linked (${unavailable.map(describeUnavailable).join("; ")}). `
+        : "";
     fields.externalSyllabusDiscovery = {
       complete: false,
       unavailable,
+      ...(notChecked.length > 0 ? { notChecked } : {}),
       note:
-        `Could not check every place an external syllabus may be linked (${unavailable.map(describeUnavailable).join("; ")}). ` +
+        failed +
+        (notChecked.length > 0 ? `${NOT_CHECKED_NOTE} ` : "") +
         "Missing external sources here does not mean the course has no syllabus.",
     };
   }
-  return { fields, complete: unavailable.length === 0 };
+  return { fields, complete };
 }
 
 /**
@@ -186,7 +229,7 @@ export function registerGetSyllabus(
     {
       title: "Get Course Syllabus",
       description:
-        "Fetch the syllabus/overview text and optional attachment for a course. Returns the course overview description as markdown. When the syllabus lives in an external LTI tool (e.g. Simple Syllabus), lists those sources in externalSyllabusSources; their contents cannot be read. If some of those lookups could not be completed (e.g. permission denied), externalSyllabusDiscovery says which, and an empty result is then not proof the course has no syllabus. If the attachment request fails with anything but a 404, attachmentUnreadable is true and an empty hasAttachment is not proof the course has no syllabus file. If downloadPath is provided, also downloads the syllabus attachment (e.g. PDF); the directory must already exist, since it is not created for you. IMPORTANT: You MUST ask the user where they want to save the file before calling this tool with a downloadPath.",
+        "Fetch the syllabus/overview text and optional attachment for a course. Returns the course overview description as markdown. When the syllabus lives in an external LTI tool (e.g. Simple Syllabus), lists those sources in externalSyllabusSources; their contents cannot be read. If some of those lookups could not be completed (e.g. permission denied), or a place could not be checked at all (course navbar links, which no Brightspace API exposes), externalSyllabusDiscovery says which, and an empty result is then not proof the course has no syllabus. If the attachment request fails with anything but a 404, attachmentUnreadable is true and an empty hasAttachment is not proof the course has no syllabus file. If downloadPath is provided, also downloads the syllabus attachment (e.g. PDF); the directory must already exist, since it is not created for you. IMPORTANT: You MUST ask the user where they want to save the file before calling this tool with a downloadPath.",
       inputSchema: GetSyllabusSchema,
     },
     async (args: any) => {
@@ -239,7 +282,7 @@ export function registerGetSyllabus(
               hasAttachment: false,
               message: discovery.complete
                 ? "No syllabus/overview found for this course."
-                : "No course overview found, but external syllabus discovery was incomplete, so the course may still have a syllabus elsewhere.",
+                : "No course overview found, but external syllabus discovery was incomplete (the course navbar, for one, cannot be checked), so the course may still have a syllabus elsewhere.",
               ...discovery.fields,
             });
           }

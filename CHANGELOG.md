@@ -6,6 +6,10 @@ A change that can break something a caller relied on is marked **Changed behavio
 
 Entries up to 5.2.1 were generated from the merged PR titles. Versions before 5.0.0 are in the [GitHub releases](https://github.com/RohanMuppa/brightspace-mcp-server/releases) and the git history.
 
+## 5.2.7 (2026-11-15)
+
+- fix: `get_syllabus` now finds a syllabus tool (e.g. Simple Syllabus) set up as an LTI 1.3 (LTI Advantage) link, and lists it in `externalSyllabusSources`. When it finds no external source, `externalSyllabusDiscovery` now says the course navbar wasn't checked (`notChecked: ["course-navbar"]`), because Brightspace has no API for navbar links, so an empty answer is no longer read as "this course has no syllabus" (#449). **Changed behaviour:** in that case `externalSyllabusDiscovery` is now present with `complete: false`, and a course with no overview no longer gets the message "No syllabus/overview found for this course."
+
 ## 5.2.6 (2026-11-15)
 
 - fix: `get_assignments` no longer lets "couldn't read the assignment list" pass for "no assignments due". A course whose assignment (dropbox) list Brightspace refused or failed now carries `assignmentListUnavailable` and `assignmentListNote`, and without `courseId` a course that couldn't be read at all is named in `unreadCourses` and the `notice` instead of vanishing from the answer (#447).
