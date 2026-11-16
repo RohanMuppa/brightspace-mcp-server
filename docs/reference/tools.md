@@ -601,6 +601,7 @@ These tools are read-only views of a course's dropbox folders. Most of them are 
 - For group assignment folders, `get_assignments`, `get_assignment_files` (both discovery and file reading), and `get_upcoming_due_dates` resolve the learner's group. They look within the folder's `GroupTypeId` category. They use the same cached membership helper as `get_my_groups`.
 - Individual folders (missing or null `GroupTypeId`) use `grpid=0`. Group folders use their actual group identifier. See [D2L's folder reference](https://docs.valence.desire2learn.com/res/dropbox.html#Dropbox.DropboxFolder).
 - If membership is missing, inaccessible or ambiguous, or the group category metadata is invalid, the tool returns the course home. That result has `urlKind: "course-home"` and a `urlNote` that directs the learner to Assignments.
+- When the membership request was refused (403/404) or failed, that course-home result also has `groupMembershipUnavailable: true`, and its `urlNote` says the membership couldn't be read rather than that the learner has no group. **Why:** the same "did not identify a unique group" note was returned whether or not the membership had been read, so an agent could tell a student they had no group when the server never checked (#451).
 - A resolved folder has `urlKind: "assignment"`.
 
 ### Feedback fields

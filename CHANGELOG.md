@@ -6,6 +6,10 @@ A change that can break something a caller relied on is marked **Changed behavio
 
 Entries up to 5.2.1 were generated from the merged PR titles. Versions before 5.0.0 are in the [GitHub releases](https://github.com/RohanMuppa/brightspace-mcp-server/releases) and the git history.
 
+## 5.2.8 (2026-11-16)
+
+- fix: a group assignment whose group membership Brightspace refused or failed to return no longer says "Brightspace did not identify a unique group". In `get_assignments`, `get_assignment_files` and `get_upcoming_due_dates` that row still links to the course home, but now carries `groupMembershipUnavailable: true` and a `urlNote` that says the membership couldn't be read, so the agent doesn't tell you that you have no group (#451).
+
 ## 5.2.7 (2026-11-15)
 
 - fix: `get_syllabus` now finds a syllabus tool (e.g. Simple Syllabus) set up as an LTI 1.3 (LTI Advantage) link, and lists it in `externalSyllabusSources`. When it finds no external source, `externalSyllabusDiscovery` now says the course navbar wasn't checked (`notChecked: ["course-navbar"]`), because Brightspace has no API for navbar links, so an empty answer is no longer read as "this course has no syllabus" (#449). **Changed behaviour:** in that case `externalSyllabusDiscovery` is now present with `complete: false`, and a course with no overview no longer gets the message "No syllabus/overview found for this course."
