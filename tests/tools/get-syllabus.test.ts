@@ -18,6 +18,8 @@ interface Routes {
   overview?: unknown;
   toc?: unknown;
   ltiLinks?: unknown;
+  /** LTI Advantage (1.3) links; defaults to an empty page. */
+  ltiAdvantageLinks?: unknown;
   attachment?: () => Response;
 }
 
@@ -34,6 +36,9 @@ function setup(routes: Routes) {
       if (path.endsWith(`/${COURSE_ID}/overview`)) return respond(routes.overview, path);
       if (path.endsWith("/content/toc")) return respond(routes.toc, path);
       if (path.endsWith(`/lti/link/${COURSE_ID}/`)) return respond(routes.ltiLinks, path);
+      if (path.endsWith(`/ltiadvantage/links/orgunit/${COURSE_ID}/`)) {
+        return respond("ltiAdvantageLinks" in routes ? routes.ltiAdvantageLinks : { Objects: [], Next: null }, path);
+      }
       throw new ApiError(404, path, "Not Found");
     }),
     getRaw: vi.fn(async () => {
@@ -247,6 +252,69 @@ describe("get_syllabus external LTI syllabus sources", () => {
     expect(result.externalSyllabusSources).toHaveLength(1);
   });
 
+  it("reports an enabled syllabus LTI Advantage link, such as a navbar Simple Syllabus (#449)", async () => {
+    const call = setup({
+      overview: EMPTY_OVERVIEW,
+      toc: tocWith([]),
+      ltiLinks: [],
+      ltiAdvantageLinks: {
+        Objects: [
+          {
+            LinkId: 9,
+            IsEnabled: true,
+            IsAvailable: true,
+            Name: "Simple Syllabus",
+            URL: "https://purdue.simplesyllabus.com/api2/lti13?ctx=abc",
+            CustomParameters: [{ Name: "secret", Value: "do-not-echo" }],
+          },
+        ],
+        Next: null,
+      },
+    });
+
+    const result = await call();
+
+    expect(result.externalSyllabusSources).toEqual([
+      { title: "Simple Syllabus", location: "lti-link", url: "https://purdue.simplesyllabus.com/api2/lti13" },
+    ]);
+    expect(JSON.stringify(result)).not.toContain("do-not-echo");
+  });
+
+  it("skips LTI Advantage links that are disabled or unavailable", async () => {
+    const call = setup({
+      overview: EMPTY_OVERVIEW,
+      toc: tocWith([]),
+      ltiLinks: [],
+      ltiAdvantageLinks: {
+        Objects: [
+          { LinkId: 9, IsEnabled: false, IsAvailable: true, Name: "Syllabus", URL: "https://a.example/lti13" },
+          { LinkId: 10, IsEnabled: true, IsAvailable: false, Name: "Syllabus", URL: "https://b.example/lti13" },
+        ],
+        Next: null,
+      },
+    });
+
+    const result = await call();
+
+    expect(result.externalSyllabusSources).toBeUndefined();
+  });
+
+  it("reports a forbidden LTI Advantage lookup as permission-denied", async () => {
+    const call = setup({
+      overview: EMPTY_OVERVIEW,
+      toc: tocWith([]),
+      ltiLinks: [],
+      ltiAdvantageLinks: new ApiError(403, "/ltiadvantage/links/orgunit/101/", "Forbidden"),
+    });
+
+    const result = await call();
+
+    expect(result.externalSyllabusDiscovery.unavailable).toEqual([
+      { lookup: "lti-advantage-links", reason: "permission-denied", status: 403 },
+    ]);
+    expect(result.externalSyllabusDiscovery.note).toMatch(/LTI Advantage links: permission denied/);
+  });
+
   it("still returns the overview when both LTI lookups fail", async () => {
     const call = setup({
       overview: { Description: { Text: "Welcome", Html: "<p>Welcome</p>" } },
@@ -263,23 +331,43 @@ describe("get_syllabus external LTI syllabus sources", () => {
 describe("get_syllabus external discovery outcome (#188)", () => {
   const networkError = () => new TypeError("fetch failed");
 
-  it("adds no discovery notice when both lookups succeed with nothing found", async () => {
+  it("adds no discovery notice when a source was found and every lookup succeeded", async () => {
+    const call = setup({
+      overview: EMPTY_OVERVIEW,
+      toc: { Modules: [] },
+      ltiLinks: [{ LtiLinkId: 7, Title: "Simple Syllabus", Url: "https://s.example/lti", IsVisible: true }],
+    });
+
+    const result = await call();
+
+    expect(result.externalSyllabusSources).toHaveLength(1);
+    expect(result.externalSyllabusDiscovery).toBeUndefined();
+  });
+
+  it("says the course navbar was not checked when every lookup succeeds with nothing found (#449)", async () => {
     const call = setup({ overview: EMPTY_OVERVIEW, toc: { Modules: [] }, ltiLinks: [] });
 
     const result = await call();
 
     expect(result.externalSyllabusSources).toBeUndefined();
     expect(result.externalSyllabusNote).toBeUndefined();
-    expect(result.externalSyllabusDiscovery).toBeUndefined();
+    expect(result.externalSyllabusDiscovery).toMatchObject({
+      complete: false,
+      unavailable: [],
+      notChecked: ["course-navbar"],
+    });
+    expect(result.externalSyllabusDiscovery.note).toMatch(/navbar/);
+    expect(result.externalSyllabusDiscovery.note).toMatch(/does not mean the course has no syllabus/);
   });
 
-  it("keeps the plain 404 message when discovery succeeded empty", async () => {
+  it("does not claim the course has no syllabus when the overview 404s and nothing was found (#449)", async () => {
     const call = setup({ overview: undefined, toc: { Modules: [] }, ltiLinks: [] });
 
     const result = await call();
 
-    expect(result.message).toBe("No syllabus/overview found for this course.");
-    expect(result.externalSyllabusDiscovery).toBeUndefined();
+    expect(result.message).not.toBe("No syllabus/overview found for this course.");
+    expect(result.message).toMatch(/navbar/);
+    expect(result.externalSyllabusDiscovery.notChecked).toEqual(["course-navbar"]);
   });
 
   it("reports both lookups as permission-denied when they return 403", async () => {
