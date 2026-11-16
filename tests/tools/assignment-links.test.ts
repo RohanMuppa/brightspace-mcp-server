@@ -51,6 +51,32 @@ describe("assignment group links", () => {
     expect((await resolve({ Id: 56, GroupTypeId: 0 })).urlKind).toBe("course-home");
   });
 
+  it.each([
+    { label: "403", error: Object.assign(new Error("Forbidden"), { status: 403 }) },
+    { label: "500", error: Object.assign(new Error("Server error"), { status: 500 }) },
+    { label: "network", error: new Error("socket hang up") },
+  ])("says the membership couldn't be read, not that there is no group ($label)", async ({ error }) => {
+    const link = await assignmentLinkResolver(client([], error) as any, BASE, 101)({ Id: 55, GroupTypeId: 9 });
+    expect(link).toMatchObject({ url: `${BASE}/d2l/home/101`, urlKind: "course-home", groupMembershipUnavailable: true });
+    expect(link.urlNote).toContain("does not mean you have no group");
+    expect(link.urlNote).not.toContain("did not identify a unique group");
+  });
+
+  it.each([
+    { groups: [] },
+    { groups: [{ GroupId: 1, Enrollments: [7] }, { GroupId: 2, Enrollments: [7] }] },
+  ])("keeps the no-unique-group note when membership was read (%j)", async ({ groups }) => {
+    const link = await assignmentLinkResolver(client(groups) as any, BASE, 101)({ Id: 55, GroupTypeId: 9 });
+    expect(link.urlNote).toContain("did not identify a unique group");
+    expect(link).not.toHaveProperty("groupMembershipUnavailable");
+  });
+
+  it("carries groupMembershipUnavailable into get_assignments rows", async () => {
+    const api = client([], Object.assign(new Error("Forbidden"), { status: 403 }));
+    const [assignment] = await fetchCourseAssignments(api as any, 101, BASE);
+    expect(assignment).toMatchObject({ urlKind: "course-home", groupMembershipUnavailable: true });
+  });
+
   it("does not fetch membership for known individual folders or absent base URL", async () => {
     const api = client();
     expect((await assignmentLinkResolver(api as any, BASE, 101)({ Id: 55, GroupTypeId: null })).url).toContain("grpid=0");
