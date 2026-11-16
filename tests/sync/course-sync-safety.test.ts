@@ -321,7 +321,7 @@ describe("path length", () => {
   it("shortens names so every full path fits the budget", async () => {
     const long = "x".repeat(140);
     const toc = { Modules: [module_(1, long, [fileTopic(10, url(`${long}.pdf`))], [module_(2, `${long}2`, [fileTopic(11, url(`${long}3.pdf`))])])] };
-    const budget = root.length + 90;
+    const budget = root.length + 100;
     const { result } = await run(toc, { 10: ok("a"), 11: ok("b") }, { pathBudget: budget });
     expect(result.failed).toEqual([]);
     expect(result.downloaded).toHaveLength(2);
@@ -329,6 +329,54 @@ describe("path length", () => {
       expect(path.join(root, f.path).length).toBeLessThanOrEqual(budget);
       expect(f.path.endsWith(".pdf")).toBe(true);
     }
+  });
+
+  it("keeps full names on paths that fit, when another path in the course is too long (#453)", async () => {
+    const long = "x".repeat(140);
+    const toc = {
+      Modules: [
+        module_(1, "Introduction to Insects + Science Literacy (Week 1-6)", [
+          fileTopic(10, url("Minimum Technology Requirements.html")),
+          fileTopic(11, url("InClass_03_SciLitMethods(1).pptx")),
+        ]),
+        module_(2, "Parasites and Pests of Humans (Week 10)", [fileTopic(12, url("Product Project Instructions.html"))]),
+        module_(3, long, [fileTopic(13, url(`${long}.pdf`))]),
+      ],
+    };
+    // Tight enough that one cap for the whole course would cut every name to about 30 characters.
+    const budget = root.length + 100;
+    const { result } = await run(toc, {}, { dryRun: true, pathBudget: budget });
+    expect(result.planned).toEqual(
+      expect.arrayContaining([
+        "Introduction to Insects + Science Literacy (Week 1-6)/Minimum Technology Requirements.html",
+        "Introduction to Insects + Science Literacy (Week 1-6)/InClass_03_SciLitMethods(1).pptx",
+        "Parasites and Pests of Humans (Week 10)/Product Project Instructions.html",
+      ]),
+    );
+    const longPath = result.planned!.find((p) => p.startsWith("xxx"))!;
+    expect(path.join(root, longPath).length).toBeLessThanOrEqual(budget);
+    expect(longPath.endsWith(".pdf")).toBe(true);
+  });
+
+  it("shortens a path that is only one character over the budget", async () => {
+    const toc = { Modules: [module_(1, "Introduction to Insects + Science Literacy (Week 1-6)", [fileTopic(10, url("Minimum Technology Requirements.html"))])] };
+    const budget = root.length + 90;
+    const { result } = await run(toc, {}, { dryRun: true, pathBudget: budget });
+    expect(result.failed).toEqual([]);
+    expect(result.planned).toHaveLength(1);
+    expect(path.join(root, result.planned![0]).length).toBeLessThanOrEqual(budget);
+    expect(result.planned![0].endsWith(".html")).toBe(true);
+  });
+
+  it("shortens a shared folder once, for every file under it", async () => {
+    const long = "x".repeat(140);
+    const toc = { Modules: [module_(1, long, [fileTopic(10, url(`${long}.pdf`)), fileTopic(11, url("short.pdf"))])] };
+    const budget = root.length + 120;
+    const { result } = await run(toc, {}, { dryRun: true, pathBudget: budget });
+    const folders = new Set(result.planned!.map((p) => p.split("/")[0]));
+    expect(folders.size).toBe(1);
+    expect(result.planned).toContainEqual(expect.stringMatching(/\/short\.pdf$/));
+    for (const p of result.planned!) expect(path.join(root, p).length).toBeLessThanOrEqual(budget);
   });
 
   it("reports a file whose path cannot be shortened enough as too long, not as an unexpected error", async () => {

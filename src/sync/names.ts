@@ -138,7 +138,8 @@ export class NameSet {
 
   constructor(private readonly maxChars: number = MAX_NAME_CHARS) {}
 
-  add(name: string, isFolder = false): string {
+  /** `maxChars` overrides the set's cap for this one name. */
+  add(name: string, isFolder = false, maxChars: number = this.maxChars): string {
     const key = foldKey(name);
     if (!this.taken.has(key)) {
       this.taken.add(key);
@@ -148,9 +149,9 @@ export class NameSet {
     for (let n = this.nextNumber.get(key) ?? 2; ; n++) {
       const suffix = ` (${n})`;
       // An extension too long to leave room for a stem is dropped rather than break the cap.
-      const keepExt = charCount(ext) + charCount(suffix) < this.maxChars;
+      const keepExt = charCount(ext) + charCount(suffix) < maxChars;
       const tail = `${suffix}${keepExt ? ext : ""}`;
-      const room = Math.max(1, this.maxChars - charCount(tail));
+      const room = Math.max(1, maxChars - charCount(tail));
       const roomBytes = Math.max(1, MAX_NAME_BYTES - Buffer.byteLength(tail));
       const candidate = `${trimEnds(clip(stem, room, roomBytes))}${tail}`;
       const candidateKey = foldKey(candidate);
