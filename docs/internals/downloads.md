@@ -193,6 +193,9 @@ Names are in `src/sync/names.ts`.
   **Why:** a filesystem caps a name at 255 bytes. The 240-byte limit leaves room for ` (99)` and the downloader's own checks.
 - On Windows, the full path must fit in 250 characters (`WINDOWS_PATH_BUDGET`). Names are shortened in up to six rounds, to at least 16 characters. A file that is still too long fails with "The path is too long (over 250 characters)". Elsewhere there is no limit, unless `pathBudget` is set.
   **Why:** the classic Windows path limit is 260.
+  - Each module and topic keeps its own name cap. Only the folders and file on a path that is over the budget are shortened. A path that fits keeps its full names, however long another path in the course is. A folder shared by several files is shortened once, for all of them.
+  - Each round's new cap is scaled from the longest name on the over-long path, and is always below that name. So a path only a few characters over still gets shorter every round.
+  **Why:** one cap for the whole course let a single deep path cut every name in the course to about 30 characters (#453). The scaling was taken from the 150-character cap instead of the real names, so a path a little over the budget never got shorter and failed. Do not bring back a course-wide cap.
 
 **Duplicates:**
 
