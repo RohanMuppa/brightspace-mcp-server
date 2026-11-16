@@ -6,6 +6,10 @@ A change that can break something a caller relied on is marked **Changed behavio
 
 Entries up to 5.2.1 were generated from the merged PR titles. Versions before 5.0.0 are in the [GitHub releases](https://github.com/RohanMuppa/brightspace-mcp-server/releases) and the git history.
 
+## 5.2.10 (2026-11-16)
+
+- fix: `download_course_files` on Windows no longer cuts every file and folder name to about 30 characters because one path somewhere in the course was too long. Only the names on a path that is actually over the length limit are shortened now, so files like "Minimum Technology Requirements.html" keep their full names, and a path just a few characters over the limit is shortened to fit instead of failing as too long (#453).
+
 ## 5.2.8 (2026-11-16)
 
 - fix: a group assignment whose group membership Brightspace refused or failed to return no longer says "Brightspace did not identify a unique group". In `get_assignments`, `get_assignment_files` and `get_upcoming_due_dates` that row still links to the course home, but now carries `groupMembershipUnavailable: true` and a `urlNote` that says the membership couldn't be read, so the agent doesn't tell you that you have no group (#451).

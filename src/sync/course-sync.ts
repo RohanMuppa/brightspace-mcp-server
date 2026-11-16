@@ -125,7 +125,14 @@ interface PlannedFile {
   segments: string[];
   name: string;
   topicId: number;
+  /** The table-of-contents records its folders and its own name came from, outermost first. */
+  sources: object[];
 }
+
+/** Longest name a synced file or folder gets before any path budget applies. */
+const FULL_NAME_CHARS = 150;
+/** The name cap for each table-of-contents record; a record not in the map gets FULL_NAME_CHARS. */
+type NameCaps = ReadonlyMap<object, number>;
 
 type TopicKind = "file" | "link" | "media" | "broken" | "other";
 
@@ -154,14 +161,15 @@ interface Plan {
   truncated: boolean;
 }
 
-/** The table of contents as folders and files, every name made safe and unique, none longer than `cap` characters. */
-function planFiles(toc: unknown, moduleId: number | undefined, cap: number): Plan {
+/** The table of contents as folders and files, every name made safe and unique, each within its record's cap in `caps`. */
+function planFiles(toc: unknown, moduleId: number | undefined, caps: NameCaps): Plan {
+  const capOf = (source: object): number => caps.get(source) ?? FULL_NAME_CHARS;
   const files: PlannedFile[] = [];
   const nonFiles: NonFileCounts = { link: 0, media: 0, broken: 0, other: 0, unavailable: 0 };
   let nodes = 0;
   let truncated = false;
 
-  const addTopics = (topics: unknown, segments: string[], names: NameSet): void => {
+  const addTopics = (topics: unknown, segments: string[], sources: object[], names: NameSet): void => {
     if (!Array.isArray(topics)) return;
     for (const raw of topics) {
       if (++nodes > MAX_TOC_NODES) {
@@ -177,13 +185,14 @@ function planFiles(toc: unknown, moduleId: number | undefined, cap: number): Pla
         continue;
       }
       const title = typeof topic.Title === "string" ? topic.Title : "";
-      const name = names.add(sanitizeComponent(fileNameFromTopic(topic.Url as string, title, `File ${topicId}`), `File ${topicId}`, cap));
-      files.push({ segments, name, topicId });
+      const cap = capOf(topic);
+      const name = names.add(sanitizeComponent(fileNameFromTopic(topic.Url as string, title, `File ${topicId}`), `File ${topicId}`, cap), false, cap);
+      files.push({ segments, name, topicId, sources: [...sources, topic] });
     }
   };
 
-  const walk = (container: Record<string, unknown>, segments: string[], depth: number): void => {
-    const names = new NameSet(cap);
+  const walk = (container: Record<string, unknown>, segments: string[], sources: object[], depth: number): void => {
+    const names = new NameSet(FULL_NAME_CHARS);
     const children: Array<{ module: Record<string, unknown>; segments: string[] }> = [];
     if (Array.isArray(container.Modules)) {
       // Only a level that really holds modules past the limit is cut off, not one that ends in an empty list.
@@ -197,36 +206,55 @@ function planFiles(toc: unknown, moduleId: number | undefined, cap: number): Pla
           const module = record(raw);
           if (!module) continue;
           const title = typeof module.Title === "string" ? module.Title : "";
-          const folder = names.add(sanitizeComponent(title, sanitizeComponent(`Module ${String(module.ModuleId ?? module.Id ?? "")}`.trim(), "Module", cap), cap), true);
+          const cap = capOf(module);
+          const folder = names.add(sanitizeComponent(title, sanitizeComponent(`Module ${String(module.ModuleId ?? module.Id ?? "")}`.trim(), "Module", cap), cap), true, cap);
           children.push({ module, segments: [...segments, folder] });
         }
       }
     }
     // Folder names are taken before file names, so a file can never claim a module's name.
-    addTopics(container.Topics, segments, names);
-    for (const child of children) walk(child.module, child.segments, depth + 1);
+    addTopics(container.Topics, segments, sources, names);
+    for (const child of children) walk(child.module, child.segments, [...sources, child.module], depth + 1);
   };
 
   const root = record(toc);
   if (root && moduleId === undefined) {
-    walk(root, [], 0);
+    walk(root, [], [], 0);
   } else if (root) {
     const found = findModule(root, moduleId!, 0);
     if (!found) throw new SyncInputError(`Module ${moduleId} is not in this course's table of contents.`);
-    walk({ Modules: [found] }, [], 0);
+    walk({ Modules: [found] }, [], [], 0);
   }
   return { files, nonFiles, truncated };
 }
 
-/** Plan, shortening names until the longest full path fits `budget` (when there is one). */
+/**
+ * Plan, shortening names until every full path fits `budget` (when there is
+ * one). Only the folders and file on a path that is too long are shortened:
+ * a path that already fits keeps its full names, however long another path
+ * in the course is.
+ */
 function planWithinBudget(toc: unknown, moduleId: number | undefined, rootLength: number, budget: number): Plan {
-  let cap = 150;
-  let plan = planFiles(toc, moduleId, cap);
-  for (let round = 0; round < 6 && Number.isFinite(budget) && cap > MIN_NAME_CHARS; round++) {
-    const longest = Math.max(0, ...plan.files.map((f) => rootLength + 1 + [...f.segments, f.name].join("/").length));
-    if (longest <= budget) break;
-    cap = Math.max(MIN_NAME_CHARS, Math.floor((cap * (budget - rootLength)) / (longest - rootLength)));
-    plan = planFiles(toc, moduleId, cap);
+  const caps = new Map<object, number>();
+  let plan = planFiles(toc, moduleId, caps);
+  for (let round = 0; round < 6 && Number.isFinite(budget); round++) {
+    let shortened = false;
+    for (const file of plan.files) {
+      const length = rootLength + 1 + [...file.segments, file.name].join("/").length;
+      if (length <= budget) continue;
+      // Scaled from the longest name actually on the path, and always below it, so every round makes progress.
+      const longestName = Math.max(...[...file.segments, file.name].map((name) => Array.from(name).length));
+      const scaled = Math.floor((longestName * (budget - rootLength)) / (length - rootLength));
+      const next = Math.max(MIN_NAME_CHARS, Math.min(longestName - 1, scaled));
+      for (const source of file.sources) {
+        if (next < (caps.get(source) ?? FULL_NAME_CHARS)) {
+          caps.set(source, next);
+          shortened = true;
+        }
+      }
+    }
+    if (!shortened) break;
+    plan = planFiles(toc, moduleId, caps);
   }
   return plan;
 }
