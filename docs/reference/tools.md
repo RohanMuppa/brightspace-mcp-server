@@ -222,6 +222,11 @@ Tools are registered in `src/tools/index.ts`, and their input schemas are in `sr
   - With `modifiedSince`, `pagination` is a field in the response object.
 - `pagination` has `returned`, `total` (matching posts fetched), `truncated`, `coverageComplete` and `unavailableCourseIds`. It also has `offset`, `count` and `nextOffset`.
 - If a course could not be read, `coverageComplete` is false, even when `nextOffset` is null. Recover access, then restart from offset 0.
+- Without `courseId`, a course whose announcements could not be read (a 403, a server error, a network error) is named in `unreadCourses: [{ courseId, courseName, status }]`, with a sentence in the notice. Both are omitted when every course answered.
+  - Without `modifiedSince`, `unreadCourses` sits next to `pagination` in the JSON block, and the notice is its own text block.
+  - With `modifiedSince`, both are fields of the response object.
+  - A course whose sign-in is still pending is reported through `authPending` instead ([Background sign-in](#background-sign-in)).
+  - **Why:** such a course was only a bare id in `pagination.unavailableCourseIds`, so an agent reported it as having nothing new (#456).
 - Offsets apply after filtering and after the global newest-first sort.
 - New or edited posts can shift offsets between calls. Use the same course and filter arguments on every call. Reconcile announcement IDs when archiving.
 - If a course's data is still loading in the background, see [Background sign-in](#background-sign-in).
