@@ -23,12 +23,37 @@ function pageInfo(offset: number, count: number, returned: number, total: number
     coverageComplete: total !== null && unavailableCourseIds.length === 0, unavailableCourseIds };
 }
 
+interface UnreadCourse {
+  courseId: number;
+  courseName: string;
+  status: number | null;
+}
+
 // Preserve the original array in content[0] and existing auth notices, while
 // exposing machine-readable continuation metadata in a separate text block.
-function arrayPage(items: unknown[], pagination: ReturnType<typeof pageInfo>, notice?: string) {
+// unreadCourses rides in that same block, after pagination, so content[0]
+// stays a bare array for existing callers.
+function arrayPage(
+  items: unknown[],
+  pagination: ReturnType<typeof pageInfo>,
+  notice?: string,
+  unreadCourses: UnreadCourse[] = []
+) {
   const result = notice ? toolResponseWithNotice(items, notice) : toolResponse(items);
-  result.content.push({ type: "text", text: JSON.stringify({ pagination }) });
+  result.content.push({
+    type: "text",
+    text: JSON.stringify({ pagination, ...(unreadCourses.length > 0 ? { unreadCourses } : {}) }),
+  });
   return result;
+}
+
+function unreadCoursesNotice(unreadCourses: UnreadCourse[]): string {
+  return (
+    `Announcements for ${unreadCourses.length} course(s) could not be read from Brightspace ` +
+    `(${unreadCourses.map((c) => `"${c.courseName}" ${c.courseId}${c.status !== null ? ` (HTTP ${c.status})` : ""}`).join(", ")}), ` +
+    "so they are missing from this list. Do not tell the user those courses have no announcements: " +
+    "call get_announcements again with that courseId, or tell them to check Brightspace."
+  );
 }
 
 export interface NewsItem {
@@ -170,7 +195,7 @@ export function registerGetAnnouncements(
       title: "Get Announcements",
       annotations: { readOnlyHint: true },
       description:
-        "Fetch announcements from one course with courseId, or all courses when omitted, newest first. count is 1-50 per page. Each body is the full announcement text as markdown (links kept); pagination.truncated only means more announcements remain, never that a body was cut. Continue with offset= pagination.nextOffset until it is null. Pagination metadata is in a separate JSON text block for array responses, or the pagination field with modifiedSince. A false coverageComplete means some courses were not fetched: retry from offset 0 after recovery. Offsets reflect the current filtered list; new posts can shift pages. Attachments are listed per announcement; fetch them with download_file (newsId + fileId) or read them with get_announcement_files.",
+        "Fetch announcements from one course with courseId, or all courses when omitted, newest first. count is 1-50 per page. Each body is the full announcement text as markdown (links kept); pagination.truncated only means more announcements remain, never that a body was cut. Continue with offset= pagination.nextOffset until it is null. Pagination metadata is in a separate JSON text block for array responses, or the pagination field with modifiedSince. A false coverageComplete means some courses were not fetched: retry from offset 0 after recovery. Without courseId, courses in unreadCourses could not be read at all; never report them as having no announcements. Offsets reflect the current filtered list; new posts can shift pages. Attachments are listed per announcement; fetch them with download_file (newsId + fileId) or read them with get_announcement_files.",
       inputSchema: GetAnnouncementsSchema,
     },
     async (args: any) => {
@@ -288,13 +313,14 @@ export function registerGetAnnouncements(
                   courseName: item.OrgUnit.Name,
                 }));
             } catch (error: any) {
-              // 403 means no access (past course, etc) - log and skip
+              // 403 means no access (past course, etc). The course is left
+              // out of the list but named in unreadCourses below.
               if (error?.status === 403) {
                 log(
                   "DEBUG",
                   `get_announcements: 403 Forbidden for course ${item.OrgUnit.Id} (${item.OrgUnit.Name}) - skipping`
                 );
-                return { unavailable: true as const, courseId: item.OrgUnit.Id };
+                return { unavailable: true as const, courseId: item.OrgUnit.Id, status: 403 };
               }
               // A pending sign-in only means this course's route never
               // answered — it says nothing about the other courses, whose
@@ -330,6 +356,25 @@ export function registerGetAnnouncements(
             ? [filteredEnrollments[index].OrgUnit.Id] : []
         );
 
+        // A course whose news route failed (a 403, a 5xx, a network error) is
+        // not a course with no announcements. It stays out of the list and
+        // is named here, with a notice.
+        // **Why:** such a course was only a bare id in
+        // pagination.unavailableCourseIds, so "anything new?" read it as
+        // nothing new (#456).
+        const unreadCourses: UnreadCourse[] = results.flatMap((result, index) => {
+          const item = filteredEnrollments[index];
+          if (result.status === "rejected") {
+            log("INFO", `get_announcements: could not read course ${item.OrgUnit.Id} (${item.OrgUnit.Name})`, result.reason);
+            const status = typeof result.reason?.status === "number" ? result.reason.status : null;
+            return [{ courseId: item.OrgUnit.Id, courseName: item.OrgUnit.Name, status }];
+          }
+          if (!Array.isArray(result.value) && result.value?.unavailable === true) {
+            return [{ courseId: item.OrgUnit.Id, courseName: item.OrgUnit.Name, status: result.value.status }];
+          }
+          return [];
+        });
+
         const allMatched = cutoff
           ? allAnnouncements.filter((a) => matchesModifiedSince(a.lastModified, cutoff))
           : allAnnouncements;
@@ -353,15 +398,19 @@ export function registerGetAnnouncements(
         // caller — so a pending course adds a second content block carrying
         // the notice instead of changing content[0].
         if (pending.length > 0) throwIfCredentialRejected(pending[0].authError);
-        if (!modifiedSince) {
-          if (pending.length === 0) return arrayPage(announcements, pagination);
-          return arrayPage(
-            announcements, pagination,
+        const notices: string[] = [];
+        if (pending.length > 0) {
+          notices.push(
             "Sign-in to Brightspace is still in progress, so announcements for " +
               `${pending.length} course(s) (${pending.map((c) => c.courseId).join(", ")}) could not be ` +
               `fetched yet. ${authPendingNotice(pending[0].authError)} Call get_announcements again once ` +
               "sign-in finishes."
           );
+        }
+        if (unreadCourses.length > 0) notices.push(unreadCoursesNotice(unreadCourses));
+        const notice = notices.length > 0 ? notices.join(" ") : undefined;
+        if (!modifiedSince) {
+          return arrayPage(announcements, pagination, notice, unreadCourses);
         }
 
         const response: Record<string, unknown> = {
@@ -374,12 +423,9 @@ export function registerGetAnnouncements(
         if (pending.length > 0) {
           response.authPending = true;
           response.unavailableCourseIds = pending.map((c) => c.courseId);
-          response.notice =
-            "Sign-in to Brightspace is still in progress, so announcements for " +
-            `${pending.length} course(s) (${pending.map((c) => c.courseId).join(", ")}) could not be ` +
-            `fetched yet. ${authPendingNotice(pending[0].authError)} Call get_announcements again once ` +
-            "sign-in finishes.";
         }
+        if (unreadCourses.length > 0) response.unreadCourses = unreadCourses;
+        if (notice) response.notice = notice;
         return toolResponse(response);
       } catch (error) {
         return sanitizeError(error);

@@ -656,3 +656,83 @@ describe("get_announcements while sign-in is pending", () => {
     expect(parsed.unavailableCourseIds).toEqual([COURSE_B.Id]);
   });
 });
+
+/**
+ * A course whose news route failed (not a pending sign-in) used to be only a
+ * bare id in pagination.unavailableCourseIds, with no name and no notice, so
+ * an agent read it as "no new announcements" (#456).
+ */
+describe("get_announcements names courses it could not read", () => {
+  const failingB = (failure: () => Error) => (path: string) => {
+    if (path.includes("/enrollments/")) return enrollments(COURSE_A, COURSE_B);
+    if (path.includes(`/le/1.0/${COURSE_B.Id}/`)) throw failure();
+    return [
+      news({
+        Id: 1,
+        StartDate: "2026-09-18T00:00:00.000Z",
+        LastModifiedDate: "2026-09-18T00:00:00.000Z",
+        IsPublished: true,
+      }),
+    ];
+  };
+  const pageBlock = (result: any) => JSON.parse(
+    result.content.find((item: any) => item.type === "text" && item.text.startsWith('{"pagination":')).text
+  );
+
+  it.each([
+    ["a 403", () => new ApiError(403, "/news/", "Forbidden"), 403],
+    ["a 500", () => new ApiError(500, "/news/", "Server error"), 500],
+    ["a network error", () => new Error("Network unavailable"), null],
+  ])("keeps the bare array and adds a notice and unreadCourses for %s", async (_label, failure, status) => {
+    const { call } = setup(failingB(failure));
+
+    const result = await call({});
+
+    expect(result.isError).toBeUndefined();
+    expect(Array.isArray(body(result))).toBe(true);
+    expect(body(result)).toHaveLength(1);
+    expect(notice(result)).toContain(`"${COURSE_B.Name}" ${COURSE_B.Id}`);
+    expect(notice(result)).toContain("Do not tell the user those courses have no announcements");
+    expect(pageBlock(result).unreadCourses).toEqual([
+      { courseId: COURSE_B.Id, courseName: COURSE_B.Name, status },
+    ]);
+    expect(pageBlock(result).pagination.unavailableCourseIds).toEqual([COURSE_B.Id]);
+  });
+
+  it("adds unreadCourses and a notice to the modifiedSince object", async () => {
+    const { call } = setup(failingB(() => new ApiError(403, "/news/", "Forbidden")));
+
+    const parsed = body(await call({ modifiedSince: "2026-01-01T00:00:00Z" }));
+
+    expect(parsed.announcements).toHaveLength(1);
+    expect(parsed.unreadCourses).toEqual([{ courseId: COURSE_B.Id, courseName: COURSE_B.Name, status: 403 }]);
+    expect(parsed.notice).toContain(COURSE_B.Name);
+    expect(parsed.authPending).toBeUndefined();
+  });
+
+  it("puts the sign-in and unread sentences in one notice block", async () => {
+    const COURSE_C = { Id: 303, Name: "PHYS 172", Code: "phys172" };
+    const { call } = setup((path) => {
+      if (path.includes("/enrollments/")) return enrollments(COURSE_A, COURSE_B, COURSE_C);
+      if (path.includes(`/le/1.0/${COURSE_B.Id}/`)) throw mfaPending();
+      if (path.includes(`/le/1.0/${COURSE_C.Id}/`)) throw new ApiError(403, path, "Forbidden");
+      return [];
+    });
+
+    const result = await call({});
+
+    expect(result.content).toHaveLength(3);
+    expect(notice(result)).toContain("Approve the sign-in request");
+    expect(notice(result)).toContain(`"${COURSE_C.Name}" ${COURSE_C.Id}`);
+    expect(pageBlock(result).unreadCourses).toEqual([{ courseId: COURSE_C.Id, courseName: COURSE_C.Name, status: 403 }]);
+  });
+
+  it("adds nothing when every course answered", async () => {
+    const { call } = setup(manyCourses({ [COURSE_A.Id]: [], [COURSE_B.Id]: [] }));
+
+    const result = await call({});
+
+    expect(result.content).toHaveLength(2);
+    expect(pageBlock(result).unreadCourses).toBeUndefined();
+  });
+});
