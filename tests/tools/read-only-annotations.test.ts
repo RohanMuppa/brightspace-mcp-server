@@ -20,12 +20,13 @@ const WRITES_TO_DISK = new Set(["download_file", "download_course_files", "downl
  * neither read-only nor a file writer, and it says so with destructiveHint so
  * clients ask the user before running it.
  */
+const DESTRUCTIVE = new Set(["sign_out"]);
 /**
- * Writes only the server's own saved-topic record (a small file in its settings folder), never a course file and
- * never a path the caller names. Not read-only, and not destructive: unmarking forgets a record, no file.
+ * Writes only the server's own saved-topic record (a small file in its settings folder), never a course file.
+ * The one path it takes (a student's own copy) is only checked and recorded, never written or opened for content.
+ * Not read-only, and not destructive: unmarking forgets a record, no file.
  */
 const WRITES_LEDGER = new Set(["mark_course_files_saved"]);
-const DESTRUCTIVE = new Set(["sign_out"]);
 /**
  * Changes sign-in state rather than reading Brightspace, so not read-only.
  * sign_in starts a sign-in: openWorldHint, because it reaches the school's

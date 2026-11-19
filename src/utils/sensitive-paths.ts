@@ -100,6 +100,16 @@ const POSIX_SYSTEM_FOLDERS = ["/etc", "/usr", "/bin", "/sbin", "/System", "/Libr
 /** Temporary folders under /var (macOS keeps its per-user temp there), the only part of it that is allowed. */
 const VAR_TEMP_FOLDERS = ["/var/folders", "/var/tmp", "/private/var/folders", "/private/var/tmp"];
 
+/**
+ * A network (UNC: \\host\share or //host/share) or device (\\?\ or \\.\) path, by its first two characters alone,
+ * so it can be judged on any platform and without touching the path. Statting one on Windows makes the machine
+ * authenticate to that host. A drive-letter path (`Z:\share`) is not matched: a drive the person mapped is allowed,
+ * and a string cannot tell a mapped network drive from a local one.
+ */
+export function isNetworkOrDevicePath(value: string): boolean {
+  return /^[\\/]{2}/.test(value);
+}
+
 const REFUSED_DEVICE = "it is a Windows device path (\\\\?\\ or \\\\.\\)";
 const REFUSED_ROOT = "it is the root of a drive";
 const REFUSED_HOME = "it is your home directory itself";

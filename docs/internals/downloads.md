@@ -347,10 +347,16 @@ The answer is text. Its first line reads "Course N saved to D: X downloaded, Y a
 
 - The ledger stays at `version: 1`. A marked entry with a path is, to 5.2.15 and 5.2.16, an ordinary entry (absolute path, size, savedAt). One without a path is skipped by them, so the topic reads as unsaved there. That is the safe direction: it errs toward listing the topic.
 - **Why not version 2:** the version guard makes an older server report the whole ledger as unreadable and refuse to record anything, which would break every download record on a machine where an older server also runs (an `npx` copy that has not updated). Bumping would punish the common case to protect a rare one.
-- **The cost:** an older server that rewrites the ledger drops entries it does not understand, so marks without a path are lost when it records a save. The student marks them again. Newer servers keep what they read.
+- **The cost:** a ledger entry's `path` is now optional. An older server (5.2.15 or 5.2.16) that rewrites the ledger drops path-less marks, and strips the `marked` flag from pathed ones, so those read as ordinary saves afterwards. The student marks them again. Newer servers keep what they read.
 - `markTopics` and `unmarkTopics` use the same lock as every other write, but report a failure to the caller instead of logging it (`enqueueStrict`).
 - `allUnsaved` is computed from the same diff as `get_unsaved_course_files` (`diffCourse`) and is refused when that diff is incomplete: a damaged ledger, an unreadable manifest, a cut-off table. Marking "everything unsaved" on partial knowledge would hide topics the student does not have.
-- A mark without a path never replaces an entry that has one.
+- A mark without a path never replaces an entry that has one. A mark with a path does not replace a `download_file` record whose file is still there (reported as `alreadyRecorded`), and a replaced record keeps its `lastModified`.
+- A call that would record nothing does not lock or write. `unmarkTopics` reads the ledger first, and returns without the lock when none of the topics is recorded, so a damaged ledger is never moved aside by a no-op.
+- The lock wait is an option passed in (`LedgerWriteOptions.lockWaitMs`), not module state. Tests pass it through `registerMarkCourseFilesSaved`.
+- **Network and device paths.** `isNetworkOrDevicePath` (`src/utils/sensitive-paths.ts`) is a string test for a leading `\\` or `//`, so it covers UNC and `\\?\`/`\\.\` paths on every platform.
+  - It is applied to a mark's `path`, to the `syncFolder` argument, and to ledger entries and remembered sync folders when the ledger is loaded (the entry is dropped).
+  - **Why:** the ledger paths are statted on every `get_unsaved_course_files` call, and statting a UNC path on Windows makes the machine authenticate to that host.
+  - A mapped drive letter is allowed: the string cannot tell it from a local drive, and the person mapped it.
 
 **Why a per-user ledger, and not the nearest `.brightspace-sync.json`:**
 
@@ -383,7 +389,9 @@ The answer is text. Its first line reads "Course N saved to D: X downloaded, Y a
   - The tool text says unsaved means "no record of saving", and tells the agent to ask before downloading everything again.
 - **Counters add up.** `planFiles` counts every module and topic it reads (`modulesSeen`, `topicsSeen`), every entry that was not an object (`unreadEntries`) and topics by `TypeIdentifier/TopicType` (`typeCounts`). Each topic seen is a file in the plan or one of `link`, `media`, `broken`, `other`, so `topicsSeen` = files + those four. `get_unsaved_course_files` returns them as `tableOfContents`, and the sync summary prints the total.
   - A live course (5.2.16) reported 138 files and 4 links for a table that `get_course_content` counted as 153 topics, with 12 quiz quickLinks in one module. Every topic the walk reads lands in a counter, so the missing topics were not in the `/content/toc` response, or were in a shape the walk does not read. The code and the fake cannot say which, or why. `tableOfContents` lets the next live run show it: `topicTypes` names what the table holds, and `unreadEntries` counts what it could not read.
-  - The note in the answer says that a topic missing from the table is in none of the lists. It does not claim a cause.
+  - The note in the answer says that a topic missing from the table is in none of the lists. It does not claim a cause. With `moduleId` the counters cover that module only, and the note says so.
+  - `topicTypes` keys come from the course: only strings and numbers are used, each part is reduced to word characters, spaces, dots and dashes, `TypeIdentifier` is cut to 40 characters and `TopicType` to 10, and past 50 distinct keys the rest count under `other`.
+  - The mark tool takes its file ids and its other ids from the same `planFiles` reading (`Plan.topicIds`), so a file topic past the cut-off is not refused as "not a file topic".
 - The tool leaves out the `unavailable` count that the sync reports: it does not read each topic's release state, so it would always be 0. Its text says a listed topic may not be open yet, and that `download_file` explains why.
 - **Why by topic id:** a file uploaded weeks before release keeps its old `lastModified`, and un-hiding does not change it. A `modifiedSince` filter on `get_course_content` missed a homework PDF that way. No date can find it, so the tool descriptions (`FIND_NEW_FILES_GUIDANCE` in `src/tools/tool-helpers.ts`) tell the agent to use this tool and never to conclude a file is absent from `modifiedSince`.
 - Tests: `tests/sync/saved-topics.test.ts`. The test setup (`tests/setup/ledger-isolation.ts`) points the home directory at a temporary folder, and removes it afterwards, so no test writes the real ledger.

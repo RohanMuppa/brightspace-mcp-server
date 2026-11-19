@@ -425,13 +425,14 @@ Tools are registered in `src/tools/index.ts`, and their input schemas are in `sr
 - Arguments:
   - `courseId` (required).
   - `moduleId` (optional). Only that module and the modules inside it.
-  - `syncFolder` (optional). An absolute path to a folder a sync ran into that the server has not synced into itself (for example before this version). Only `<folder>/.brightspace-sync.json` is read, for this call only: the folder is not remembered, so pass it on every call. It must exist, or the call is an `invalidInput` error. No file contents are ever returned.
+  - `syncFolder` (optional). An absolute local path (a network or device path is refused) to a folder a sync ran into that the server has not synced into itself (for example before this version). Only `<folder>/.brightspace-sync.json` is read, for this call only: the folder is not remembered, so pass it on every call. It must exist, or the call is an `invalidInput` error. No file contents are ever returned.
 - It reads `/content/toc` fresh (never cached), the same table `download_course_files` plans from. It is read-only and writes nothing.
 - A topic counts as saved when the ledger (a `download_file` save) or a sync manifest (a `download_course_files` or `sync` save) records it **and** the recorded file is still on disk. "On disk" means something regular exists at the recorded path; its size is not compared.
 - Result fields:
   - `complete`: `false` when anything below could not be read or checked. Never read an empty `unsaved` as "nothing new" unless it is `true`.
   - `fileTopicCount`, `savedCount`. `savedCount` includes topics marked saved.
-  - `markedSavedCount`: of `savedCount`, the topics the student marked saved with [`mark_course_files_saved`](#mark_course_files_saved) and no path. The server never checked a file for them. A notice says so.
+  - `markedSavedCount`: of `savedCount`, the topics the student marked saved with [`mark_course_files_saved`](#mark_course_files_saved), with or without a path. Without a path the server never checked a file for them; with one it still checks the file. A notice says so.
+  - `markedTopicIds`: those topics' ids, at most 500 (`markedTopicIdsTruncated: true` when there are more).
   - `unsavedNote`: one sentence on what `unsaved` means: the server has no record of saving the topic. A file the student already has from before this version, or saved another way (browser, manual copy), appears there too, so ask before downloading everything again. A listed topic may not be open yet; `download_file` says why when it can.
   - `unsaved`: file topics with no record. Each has `topicId`, `fileName`, `title`, `modulePath` and `downloadArgs` (`courseId`, `topicId`) for `download_file`, plus `lastModified` when the table of contents gives it. `savedFileMissing` and `couldNotCheck` entries carry `title` and `lastModified` too.
   - `savedFileMissing`: recorded as saved, but the file is no longer at `savedTo`. Counts as not saved. Download it again.
@@ -445,8 +446,8 @@ Tools are registered in `src/tools/index.ts`, and their input schemas are in `sr
     - `topics`: every topic it lists. `topics` equals `fileTopicCount` plus the four `nonFileCounts`.
     - `modules`: the modules it lists.
     - `unreadEntries`: entries that were not objects, or a list that was not a list. They are in no counter, so `complete` is `false` when this is above 0.
-    - `topicTypes`: topics by `TypeIdentifier/TopicType` (`?` when missing), for example `Link/3`.
-    - `note`: if `get_course_content` shows more topics than `topics`, Brightspace's table of contents does not include them.
+    - `topicTypes`: topics by `TypeIdentifier/TopicType` (`?` when missing or not a string or number), for example `Link/3`. The names come from the course, so each part is cut to plain characters and a short length, and past 50 distinct keys the rest count under `other`.
+    - `note`: for the whole table, if `get_course_content` shows more topics than `topics`, Brightspace's table of contents does not include them. With `moduleId`, it says the counts are for that module only.
   - `notice`: what to tell the user when any of the above is set.
 - A course tree that cannot be read is an error answer (with sign-in guidance when that is the cause), never an empty list. An unknown `moduleId` is `invalidInput`.
 - `readOnlyHint` is set.
@@ -460,12 +461,15 @@ Tools are registered in `src/tools/index.ts`, and their input schemas are in `sr
 - Arguments (`courseId` required, then exactly one of these; naming none, or more than one, is an `invalidInput` error and writes nothing):
   - `topics`: a list of `{ topicId, path? }`, 1 to 1000.
     - `path` is the absolute path of the student's own copy. It must exist and be a file now, or that item is refused.
+    - A network or device path (starting with `\\` or `//`, including `\\?\` and `\\.\`) is refused without being opened, so a prompt-injected request cannot make Windows contact another host. This is a string test, the same on every platform. A mapped drive letter (`Z:\`) is allowed: a string cannot tell it from a local drive.
     - Without `path`, the topic is marked saved with no file behind it.
   - `allUnsaved: true`: marks every topic that is unsaved right now. Never a default, and the agent must ask the student first. It is refused, with nothing marked, when the saved records or the table of contents could not be read in full, because "unsaved" is then unknown.
   - `unmarkTopicIds`: forgets the ledger's record for these topics, whoever made it. It never deletes a file. A topic saved by `download_course_files` or `sync` lives in that folder's manifest and is not affected.
 - Each item is checked against the course's current table of contents. A topic that is not a file topic, or is not in the course, or has a bad `path`, is refused with a `reason` in `refused`, and the other items still go through.
-- A topic that already has a record with a path is not downgraded by a mark without a path: it is listed in `alreadyRecorded`.
-- Result: `marked` (`topicId`, and `path` when given), `refused`, `alreadyRecorded`. Undo returns `unmarked` and `notRecorded`.
+- A record that has a path is kept, and listed in `alreadyRecorded` with its `path`, when the mark has no path, or when `download_file` made the record and its file is still there. A record whose file is gone can be replaced by a mark with a path; a known `lastModified` is kept.
+- A call that records nothing (every item refused, or `unmarkTopicIds` finds nothing recorded) does not take the lock or write the ledger, and never moves a damaged ledger aside. The refusals are returned as they are, not as "Marking failed".
+- The table is read once for both the file ids and the other ids. If it was cut off or had unreadable entries, a refusal for an id not found says so (`not found in the part of the table of contents that was read`), and the response has `tocTruncated` or `tocUnreadEntries` and a `notice`. `allUnsaved` is refused in those cases.
+- Result: `marked` (`topicId`, and `path` when given), `refused`, `alreadyRecorded`. Undo returns `unmarked` (ids), `unmarkedRecords` (per topic: `was` is `mark` or `download`, plus the `path` when there was one) and `notRecorded`.
 - **A failed write is reported.** If the ledger cannot be read or written, or another process holds its lock past the wait, the answer is an error that begins "Marking failed, nothing was recorded". Unlike the bookkeeping after a download, the record is the whole point here.
 - Later, a marked topic with a `path` behaves like any recorded save (`savedFileMissing` or `couldNotCheck` if the file goes). A marked topic without one counts as saved and is shown in `markedSavedCount`.
 

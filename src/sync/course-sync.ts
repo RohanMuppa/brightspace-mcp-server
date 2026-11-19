@@ -170,9 +170,16 @@ export interface Plan {
   topicsSeen: number;
   /** Entries in a Modules or Topics list that were not objects (or a list that was not a list): not read, so not in any counter. */
   unreadEntries: number;
-  /** Topics seen, by `TypeIdentifier/TopicType` (a missing one is `?`), to show what the table holds. */
+  /** Topics seen, by `TypeIdentifier/TopicType` (a missing or non-primitive one is `?`), to show what the table holds. At most 50 keys, then `other`. */
   typeCounts: Record<string, number>;
+  /** The id of every topic seen, of any type: with `files`, it tells "not a file topic" from "not in the table". */
+  topicIds: Set<number>;
 }
+
+const MAX_TYPE_KEYS = 50;
+/** A course controls these strings: only primitives, only plain characters, and short. */
+const typePart = (value: unknown, max: number): string =>
+  typeof value === "string" || typeof value === "number" ? String(value).replace(/[^\w.\- ]/g, "_").slice(0, max) || "?" : "?";
 
 /** The table of contents as folders and files, every name made safe and unique, each within its record's cap in `caps`. */
 export function planFiles(toc: unknown, moduleId: number | undefined, caps: NameCaps): Plan {
@@ -185,6 +192,7 @@ export function planFiles(toc: unknown, moduleId: number | undefined, caps: Name
   let topicsSeen = 0;
   let unreadEntries = 0;
   const typeCounts: Record<string, number> = Object.create(null);
+  const topicIds = new Set<number>();
 
   const addTopics = (topics: unknown, segments: string[], sources: object[], names: NameSet): void => {
     if (!Array.isArray(topics)) {
@@ -202,10 +210,12 @@ export function planFiles(toc: unknown, moduleId: number | undefined, caps: Name
         continue;
       }
       topicsSeen++;
-      const typeKey = `${typeof topic.TypeIdentifier === "string" && topic.TypeIdentifier !== "" ? topic.TypeIdentifier : "?"}/${topic.TopicType ?? "?"}`;
+      const rawKey = `${typePart(topic.TypeIdentifier, 40)}/${typeof topic.TopicType === "number" ? typePart(topic.TopicType, 10) : "?"}`;
+      const typeKey = rawKey in typeCounts || Object.keys(typeCounts).filter((key) => key !== "other").length < MAX_TYPE_KEYS ? rawKey : "other";
       typeCounts[typeKey] = (typeCounts[typeKey] ?? 0) + 1;
       const kind = classify(topic);
       const topicId = topicIdOf(topic);
+      if (topicId !== null) topicIds.add(topicId);
       if (kind !== "file" || topicId === null) {
         nonFiles[kind === "file" ? "broken" : kind]++;
         continue;
@@ -263,7 +273,7 @@ export function planFiles(toc: unknown, moduleId: number | undefined, caps: Name
     if (!found) throw new SyncInputError(`Module ${moduleId} is not in this course's table of contents.`);
     walk({ Modules: [found] }, [], [], 0);
   }
-  return { files, nonFiles, truncated, modulesSeen, topicsSeen, unreadEntries, typeCounts };
+  return { files, nonFiles, truncated, modulesSeen, topicsSeen, unreadEntries, typeCounts, topicIds };
 }
 
 /**

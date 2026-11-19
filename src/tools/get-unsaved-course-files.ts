@@ -12,6 +12,7 @@ import { GetUnsavedCourseFilesSchema } from "./schemas.js";
 import { errorResponse, sanitizeError, toolResponse, FIND_NEW_FILES_GUIDANCE } from "./tool-helpers.js";
 import { log } from "../utils/logger.js";
 import { validateContentId } from "../utils/file-validator.js";
+import { isNetworkOrDevicePath } from "../utils/sensitive-paths.js";
 import { SyncInputError, planFiles, type Plan } from "../sync/course-sync.js";
 import { readSavedState, type SavedCandidate, type SavedState } from "../sync/saved-topics.js";
 
@@ -25,7 +26,7 @@ export type Listed = {
 };
 
 type Presence =
-  | { kind: "present"; path: string }
+  | { kind: "present"; path: string; marked: boolean }
   | { kind: "marked" }
   | { kind: "missing"; path: string }
   | { kind: "unchecked"; path: string; reason: string };
@@ -47,7 +48,7 @@ async function presenceOf(candidates: SavedCandidate[]): Promise<Presence> {
       continue;
     }
     try {
-      if ((await fs.stat(candidate.path)).isFile()) return { kind: "present", path: candidate.path };
+      if ((await fs.stat(candidate.path)).isFile()) return { kind: "present", path: candidate.path, marked: candidate.marked === true };
       missing ??= { kind: "missing", path: candidate.path };
     } catch (error) {
       const code = (error as NodeJS.ErrnoException)?.code;
@@ -72,9 +73,13 @@ export interface CourseDiff {
   couldNotCheck: Array<Listed & { savedTo: string; reason: string }>;
   /** Saved, counting both a file found at its recorded path and a topic marked saved without one. */
   savedCount: number;
-  /** Of those, topics the student marked saved without a file: the server never checked one. */
+  /** Of those, topics the student marked saved (with or without a path). Without a path the server never checked a file. */
   markedSavedCount: number;
+  /** The marked topics' ids, at most MAX_MARKED_IDS. */
+  markedTopicIds: number[];
 }
+
+const MAX_MARKED_IDS = 500;
 
 /** The course's current file topics, set against everything recorded as saved. Shared with mark_course_files_saved. */
 export async function diffCourse(apiClient: D2LApiClient, courseId: number, moduleId: number | undefined, extraRoots: string[]): Promise<CourseDiff> {
@@ -84,7 +89,7 @@ export async function diffCourse(apiClient: D2LApiClient, courseId: number, modu
   const plan = planFiles(toc, moduleId, new Map());
   const state = await readSavedState(apiClient.origin, courseId, extraRoots);
 
-  const diff: CourseDiff = { plan, state, unsaved: [], savedFileMissing: [], couldNotCheck: [], savedCount: 0, markedSavedCount: 0 };
+  const diff: CourseDiff = { plan, state, unsaved: [], savedFileMissing: [], couldNotCheck: [], savedCount: 0, markedSavedCount: 0, markedTopicIds: [] };
   for (const file of plan.files) {
     const listed: Listed = {
       topicId: file.topicId,
@@ -100,10 +105,12 @@ export async function diffCourse(apiClient: D2LApiClient, courseId: number, modu
       continue;
     }
     const presence = await presenceOf(candidates);
-    if (presence.kind === "present") diff.savedCount++;
-    else if (presence.kind === "marked") {
+    if (presence.kind === "present" || presence.kind === "marked") {
       diff.savedCount++;
-      diff.markedSavedCount++;
+      if (presence.kind === "marked" || presence.marked) {
+        diff.markedSavedCount++;
+        if (diff.markedTopicIds.length < MAX_MARKED_IDS) diff.markedTopicIds.push(file.topicId);
+      }
     } else if (presence.kind === "missing") diff.savedFileMissing.push({ ...listed, savedTo: presence.path });
     else diff.couldNotCheck.push({ ...listed, savedTo: presence.path, reason: presence.reason });
   }
@@ -113,8 +120,13 @@ export async function diffCourse(apiClient: D2LApiClient, courseId: number, modu
 const UNSAVED_NOTE =
   "unsaved lists topics the server has no record of saving. A file the student already has from before this version, or saved another way (browser download, manual copy), appears here too, so ask before downloading everything again. For files the student says they already have, ask which ones and record them with mark_course_files_saved instead of downloading them. A listed topic may not be open yet (locked, hidden or outside its release dates); download_file says why when it can.";
 
-const TOC_NOTE =
-  "topics is every topic the table of contents lists: fileTopicCount plus link, media, broken and other in nonFileCounts. If get_course_content shows more topics than this, Brightspace's table of contents does not include them (they are in none of these lists); use get_course_content to see them.";
+/** What the counters cover: the whole table, or only the module asked for. */
+function tocNote(moduleId: number | undefined): string {
+  const sum = "topics is every topic counted: fileTopicCount plus link, media, broken and other in nonFileCounts.";
+  return moduleId === undefined
+    ? `${sum} If get_course_content shows more topics than this, Brightspace's table of contents does not include them (they are in none of these lists); use get_course_content to see them.`
+    : `${sum} These counts are for module ${moduleId} and the modules inside it only, not the whole course. Compare them with get_course_content for that module, and leave moduleId out to count the whole table.`;
+}
 
 /**
  * Register get_unsaved_course_files tool
@@ -136,6 +148,7 @@ export function registerGetUnsavedCourseFiles(server: McpServer, apiClient: D2LA
         const { courseId, moduleId, syncFolder } = GetUnsavedCourseFilesSchema.parse(args);
         validateContentId(courseId);
         if (syncFolder !== undefined) {
+          if (isNetworkOrDevicePath(syncFolder)) return errorResponse("syncFolder is a network or device path (starting with \\\\ or //), which is never opened. Use a local folder or a mapped drive letter.", "invalidInput");
           if (!path.isAbsolute(syncFolder)) return errorResponse("syncFolder must be an absolute path.", "invalidInput");
           try {
             if (!(await fs.stat(syncFolder)).isDirectory()) return errorResponse(`syncFolder is not a folder: ${syncFolder}`, "invalidInput");
@@ -157,7 +170,7 @@ export function registerGetUnsavedCourseFiles(server: McpServer, apiClient: D2LA
           if (error instanceof SyncInputError) return errorResponse(error.message, "invalidInput");
           throw error;
         }
-        const { plan, state, unsaved, savedFileMissing, couldNotCheck, savedCount, markedSavedCount } = diff;
+        const { plan, state, unsaved, savedFileMissing, couldNotCheck, savedCount, markedSavedCount, markedTopicIds } = diff;
 
         const notices: string[] = [];
         if (state.unreadable.length > 0) {
@@ -170,7 +183,7 @@ export function registerGetUnsavedCourseFiles(server: McpServer, apiClient: D2LA
           notices.push("The saved-topic ledger was damaged and set aside, so earlier saves are unknown: files saved before then are listed in unsaved even if the student has them.");
         }
         if (markedSavedCount > 0) {
-          notices.push(`${markedSavedCount} topic${markedSavedCount === 1 ? " is" : "s are"} marked saved (the student said they have them) and counted in savedCount, but the server never checked a file for them.`);
+          notices.push(`${markedSavedCount} topic${markedSavedCount === 1 ? " is" : "s are"} marked saved (the student said they have them) and counted in savedCount, but the server never checked a file for the ones marked without a path. Their ids are in markedTopicIds.`);
         }
         if (savedFileMissing.length > 0) {
           notices.push("savedFileMissing lists topics recorded as saved whose file is no longer at that path. They count as not saved: download them again.");
@@ -197,6 +210,8 @@ export function registerGetUnsavedCourseFiles(server: McpServer, apiClient: D2LA
           fileTopicCount: plan.files.length,
           savedCount,
           markedSavedCount,
+          ...(markedTopicIds.length > 0 ? { markedTopicIds } : {}),
+          ...(markedSavedCount > markedTopicIds.length ? { markedTopicIdsTruncated: true } : {}),
           unsavedNote: UNSAVED_NOTE,
           unsaved,
           savedFileMissing,
@@ -209,7 +224,7 @@ export function registerGetUnsavedCourseFiles(server: McpServer, apiClient: D2LA
             topics: plan.topicsSeen,
             unreadEntries: plan.unreadEntries,
             topicTypes: plan.typeCounts,
-            note: TOC_NOTE,
+            note: tocNote(moduleId),
           },
           ...(notices.length > 0 ? { notice: notices.join(" ") } : {}),
         });
