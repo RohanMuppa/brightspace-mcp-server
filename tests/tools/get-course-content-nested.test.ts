@@ -198,3 +198,63 @@ describe("get_course_content moduleTitle at any depth", () => {
     expect(body.notice).toMatch(/couldn't be read/);
   });
 });
+
+describe("get_course_content moduleTitle notices stay honest", () => {
+  it("says an unreadable module may hold the match when nothing matched", async () => {
+    const { call } = setup(
+      { 1: new ApiError(403, "/x", "no"), 4: [mod(5, "Other")] },
+      [mod(1, "Homeworks"), mod(4, "Labs")]
+    );
+    const body = await call({ courseId: COURSE_ID, moduleTitle: "HW12" });
+
+    expect(body.contentTree).toEqual([]);
+    expect(body.notice).toMatch(/1 module\(s\) couldn't be read/);
+    expect(body.notice).toMatch(/match may be inside/i);
+    expect(body.notice).toMatch(/try again/i);
+  });
+
+  it("flags an unreadable module that was walked past when other matches were found", async () => {
+    const { call } = setup(
+      { 1: new ApiError(500, "/x", "boom"), 4: [mod(5, "HW12")] },
+      [mod(1, "Homeworks"), mod(4, "Labs")]
+    );
+    const body = await call({ courseId: COURSE_ID, moduleTitle: "HW12" });
+
+    expect(body.contentTree.map((m: any) => m.path)).toEqual(["Labs > HW12"]);
+    expect(body.notice).toMatch(/1 module\(s\) couldn't be read/);
+    expect(body.notice).toMatch(/match may be inside/i);
+  });
+
+  it("counts an unreadable module inside a match once", async () => {
+    const { call } = setup(
+      { 1: [mod(2, "HW12")], 2: new ApiError(403, "/x", "no") },
+      [mod(1, "Homeworks")]
+    );
+    const body = await call({ courseId: COURSE_ID, moduleTitle: "HW12" });
+
+    expect(body.notice).toMatch(/1 module\(s\) couldn't be read/);
+    expect(body.notice).not.toMatch(/match may be inside/i);
+  });
+
+  it("says only the first N levels were checked when maxDepth is set and nothing matched", async () => {
+    const { call } = setup({ 1: [mod(2, "Sub")] }, [mod(1, "Homeworks")]);
+    const body = await call({ courseId: COURSE_ID, moduleTitle: "HW12", maxDepth: 1 });
+
+    expect(body.contentTree).toEqual([]);
+    expect(body.notice).toMatch(/only the first 1 level/i);
+    expect(body.notice).toMatch(/without maxDepth/i);
+    expect(body.notice).not.toMatch(/at any level/i);
+  });
+});
+
+describe("get_course_content modifiedSince notice wording", () => {
+  it("does not claim every hidden topic is listed", async () => {
+    const { call } = hw12Course();
+    const body = await call({ courseId: COURSE_ID, modifiedSince: BETWEEN });
+
+    expect(body.notice).not.toMatch(/modules list them/i);
+    expect(body.notice).toMatch(/hiddenModulesByFilter/);
+    expect(body.notice).toMatch(/left out/i);
+    expect(body.notice).toMatch(/never conclude a file is absent/i);
+  });
+});

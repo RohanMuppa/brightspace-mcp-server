@@ -267,7 +267,10 @@ Tools are registered in `src/tools/index.ts`, and their input schemas are in `sr
   - `modifiedSince` (optional). See [lastModified and modifiedSince](#lastmodified-and-modifiedsince).
 - Modules and topics carry `lastModified`.
 - A module is kept when any descendant topic matches, even if the module's own timestamp does not match. The module's `children` array shows only the topics that matched.
-- A kept module that lost children to `modifiedSince` says so. `hiddenByFilter` is `[{ id, title, type, lastModified }]`, one entry per dropped direct-child topic (`type` is the topic's `topicType`, such as `file` or `link`). `hiddenModulesByFilter` is the number of dropped direct-child modules. Modules are only counted, to keep the response bounded. Both fields are absent when nothing was dropped.
+- A kept module that lost children to `modifiedSince` says so. `hiddenByFilter` is `[{ id, title, type, lastModified }]`, one entry per dropped direct-child topic (`type` is the topic's `topicType`, such as `file` or `link`). `hiddenModulesByFilter` is the number of dropped direct-child modules. Modules are only counted, to keep the response bounded.
+  - Both fields are absent when nothing was dropped.
+  - A module with nothing newer is left out entirely.
+  - The topics inside a dropped module are listed nowhere. Only the parent's `hiddenModulesByFilter` counts it, or just `filteredOut` for a root module.
   **Why:** `lastModified` is when the instructor last edited an item, not when it became visible. A PDF uploaded weeks before release, then un-hidden, keeps its old date and no `startDate`, so no date filter can return it. An agent told a student HW12 had no problems PDF (course 1632232, 2026-11-19). The tool description and the response `notice` tell an agent never to conclude a file is absent from a `modifiedSince` result.
 - `ContentService` topics (embedded video) carry `embeddedMedia: true` and a `note`. The note says `download_file` cannot fetch them.
 - Module descriptions are Markdown. Embedded links are kept, with a plain-text fallback.
@@ -284,7 +287,8 @@ Tools are registered in `src/tools/index.ts`, and their input schemas are in `sr
 - Each module whose title matches is returned in `contentTree` with its full subtree and a `path` such as `Homeworks > HW12`. A top-level match has `path` equal to its title and is returned as before.
 - The walk does not descend into a match, so a matching module inside another match is listed once, within its parent.
 - Matching needs the tree below the root modules, so the call builds the full tree (the same fetches and cache entries as a call without `moduleTitle`) and then picks matches. A `moduleTitle` call therefore costs what the full tree costs, not less.
-- When nothing matches, `contentTree` is `[]` and a `notice` says no module title matched at any level, that the module is not empty or missing because of that, and to try `search_course`.
+- When nothing matches, `contentTree` is `[]` and a `notice` says no module title matched at any level, that the module is not empty or missing because of that, and to try `search_course`. With `maxDepth` set, the notice says only the first N levels were checked and to retry without `maxDepth`.
+- A module whose contents could not be read may hold the match. The notice counts every unreadable module in the full tree that is not inside a returned match, says a match may be inside one, and says to try again. This also applies when other matches were found.
   **Why:** `moduleTitle: "HW12"` returned an empty tree although "Homeworks > HW12" existed, because only root modules were matched (course 1632232, 2026-11-19).
 
 ### search_course

@@ -465,11 +465,23 @@ export function registerGetCourseContent(
         // root modules. It reads the tree just built (the same fetches, and
         // cache entries, a call without moduleTitle makes): no extra calls.
         let titleNotice: string | undefined;
+        let unreadableOutsideMatches = 0;
         if (moduleTitle) {
+          // Count on the full tree first: a module that couldn't be read may
+          // hold the match, and would vanish from the count once the tree is
+          // cut down to the matches.
+          const unreadableInFullTree = countUnreadableModules(contentTree);
           contentTree = findModulesByTitle(contentTree, moduleTitle.toLowerCase());
+          unreadableOutsideMatches = unreadableInFullTree - countUnreadableModules(contentTree);
           if (contentTree.length === 0) {
+            const scope = maxDepth !== undefined
+              ? `Only the first ${maxDepth} level(s) of the tree were checked, so a deeper module could match: retry without maxDepth. `
+              : "";
             titleNotice =
-              `No module title matched at any level of the tree for "${moduleTitle}". Do not report ` +
+              (maxDepth !== undefined
+                ? `No module title matched within the first ${maxDepth} level(s) for "${moduleTitle}". ${scope}`
+                : `No module title matched at any level of the tree for "${moduleTitle}". `) +
+              `Do not report ` +
               "the module as empty or missing: it is not empty just because no title matched, and its title may be worded differently" +
               (typeFilter !== 'all' ? `, or its items may not be of type "${typeFilter}"` : "") +
               ". Try search_course to find the item by keyword.";
@@ -494,6 +506,12 @@ export function registerGetCourseContent(
 
         const notices: string[] = [];
         if (titleNotice) notices.push(titleNotice);
+        if (unreadableOutsideMatches > 0) {
+          notices.push(
+            `${unreadableOutsideMatches} module(s) couldn't be read while looking for the title, so a match may be inside ` +
+            "one of them. Try again."
+          );
+        }
         if (unreadable > 0) {
           notices.push(
             `The contents of ${unreadable} module(s) couldn't be read; they have children null and a ` +
@@ -503,7 +521,9 @@ export function registerGetCourseContent(
         }
         if (modifiedSince && filteredOut > 0) {
           notices.push(
-            `modifiedSince hid ${filteredOut} topic(s); modules list them in hiddenByFilter. lastModified is when ` +
+            `modifiedSince hid ${filteredOut} topic(s). Kept modules list the direct topics they lost in hiddenByFilter ` +
+            "and count dropped sub-modules in hiddenModulesByFilter; modules with nothing newer are left out entirely, " +
+            "with the topics inside them listed nowhere. lastModified is when " +
             "the instructor last edited an item, not when it became visible to the student, so a file uploaded " +
             "early and released later is missed. Never conclude a file is absent from this filtered result: call " +
             "without modifiedSince or use search_course."
