@@ -398,3 +398,73 @@ describe("sync folders in the ledger (review item 10)", () => {
     expect(roots[19]).toBe(path.join(dir, "r24"));
   });
 });
+
+/** A course-sync module whose ledger is this test's file (earlier tests reset the module registry). */
+async function freshSync() {
+  vi.resetModules();
+  (await import("../../src/sync/saved-topics.js")).useLedgerFile(ledger);
+  return import("../../src/sync/course-sync.js");
+}
+
+describe("recording a sync folder never delays the sync (release fix)", () => {
+  it("downloads before a blocked ledger lock is released, and records the folder afterwards", async () => {
+    fake = await fakeBrightspace(toc, bodies);
+    const slow = fake.client.getRaw.getMockImplementation()!;
+    fake.client.getRaw.mockImplementation(async (p: string) => {
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      return slow(p);
+    });
+    // Another process holds the ledger lock (a live owner, so it is not taken over).
+    await fs.writeFile(`${ledger}.lock`, JSON.stringify({ pid: process.pid, startedAt: Date.now(), token: "other" }));
+    setTimeout(() => void fs.rm(`${ledger}.lock`, { force: true }), 500);
+    const root = path.join(dir, "course");
+    await fs.mkdir(root);
+
+    const { syncCourse } = await freshSync();
+    const started = Date.now();
+    const result = await syncCourse(fake.client as never, { courseId: COURSE, destination: root, deadlineMs: 200 });
+    expect(result.downloaded.length).toBeGreaterThan(0);
+    // The wait for the lock comes after the downloads, and is bounded.
+    expect(Date.now() - started).toBeLessThan(3500);
+    const roots = JSON.parse(await fs.readFile(ledger, "utf8")).schools[ORIGIN].syncRoots[String(COURSE)];
+    expect(roots).toHaveLength(1);
+  });
+
+  it("does not remember a folder where nothing was saved", async () => {
+    fake = await fakeBrightspace(toc, {});
+    const root = path.join(dir, "empty");
+    await fs.mkdir(root);
+    const { syncCourse } = await freshSync();
+    const result = await syncCourse(fake.client as never, { courseId: COURSE, destination: root, retryDelaysMs: [], sleep: async () => {} });
+    expect(result.downloaded).toEqual([]);
+    await expect(fs.stat(ledger)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("remembers the folder when a cancel stops the run", async () => {
+    fake = await fakeBrightspace(toc, bodies);
+    const root = path.join(dir, "course");
+    await fs.mkdir(root);
+    const controller = new AbortController();
+    const { syncCourse } = await freshSync();
+    await syncCourse(fake.client as never, { courseId: COURSE, destination: root, signal: controller.signal, onProgress: (e) => { if (e.done === 1) controller.abort(); } });
+    expect(JSON.parse(await fs.readFile(ledger, "utf8")).schools[ORIGIN].syncRoots[String(COURSE)]).toHaveLength(1);
+  });
+});
+
+describe("recording a download_file save never holds up the answer", () => {
+  it("answers promptly while the ledger lock is held, and records once it is free", async () => {
+    fake = await fakeBrightspace(toc, bodies);
+    await fs.writeFile(`${ledger}.lock`, JSON.stringify({ pid: process.pid, startedAt: Date.now(), token: "other" }));
+    setTimeout(() => void fs.rm(`${ledger}.lock`, { force: true }), 2000);
+    const target = path.join(dir, "out");
+    await fs.mkdir(target);
+    const started = Date.now();
+    const response = await downloadFile().call({ courseId: COURSE, topicId: 12, downloadPath: target });
+    expect(Date.now() - started).toBeLessThan(1500);
+    expect(json(response).success).toBe(true);
+    expect((await fs.readdir(target)).length).toBe(1);
+    // The record still lands once the lock is free.
+    for (let i = 0; i < 60 && !(await readSavedState(ORIGIN, COURSE)).topics.has(12); i++) await new Promise((resolve) => setTimeout(resolve, 100));
+    expect((await readSavedState(ORIGIN, COURSE)).topics.has(12)).toBe(true);
+  });
+});

@@ -33,6 +33,16 @@ import { officeDocumentText } from "../utils/zip-extract.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 
+/** How long an answer waits for the saved-topic ledger before it goes out without it. */
+const RECORD_WAIT_MS = 500;
+
+/** Resolves when `work` does or after `ms`, whichever is first; `work` keeps running either way. */
+async function waitAtMost(work: Promise<unknown>, ms: number): Promise<void> {
+  let timer: NodeJS.Timeout | undefined;
+  await Promise.race([work, new Promise<void>((resolve) => { timer = setTimeout(resolve, ms); })]);
+  clearTimeout(timer);
+}
+
 /** The size cap for a download: inline mode buffers the file, disk mode streams it. */
 function maxFileSize(downloadPath: string | undefined): number {
   return downloadPath === undefined ? MAX_FILE_SIZE : DISK_MAX_FILE_SIZE;
@@ -286,7 +296,9 @@ async function finishDownload(
 
   if (topic) {
     // Bookkeeping only: it logs its own failures and never throws, so a save that worked stays a success.
-    await recordSavedTopic({ ...topic, path: result.path, size: result.size });
+    // The file is already saved, so the answer waits for the ledger only briefly: a busy lock (another server
+    // or the sync command writing) must not hold it up. The record still lands in the background.
+    await waitAtMost(recordSavedTopic({ ...topic, path: result.path, size: result.size }), RECORD_WAIT_MS);
   }
 
   return toolResponse({
