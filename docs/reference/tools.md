@@ -66,7 +66,7 @@ Tools are registered in `src/tools/index.ts`, and their input schemas are in `sr
 - Code: `src/tools/get-upcoming-due-dates.ts`.
 - Arguments: `daysAhead` (1 to 90, default 7) and `courseId` (optional, one course only).
 - Items come from four sources:
-  - Assignments: `DueDate`.
+  - Assignments: `DueDate ?? Availability.EndDate`. An instructor may set only an end date, and the folder stops taking submissions then. `endDate` is `Availability.EndDate`. **Why:** #460.
   - Quizzes: `DueDate ?? EndDate`.
   - Discussion topics: `DueDate`, with `type: "discussion"`. A topic with no `DueDate` is an ungraded forum and is left out.
   - Calendar events: `type: "event"`. `dueDate` is the event start. `endDate` and `location` are added when set.

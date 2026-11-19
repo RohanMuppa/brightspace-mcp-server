@@ -25,6 +25,8 @@ interface DropboxFolder {
   Name: string;
   DueDate: string | null;
   IsHidden: boolean;
+  /** When the folder opens and stops taking submissions. */
+  Availability?: { StartDate: string | null; EndDate: string | null } | null;
 }
 
 interface QuizReadData {
@@ -203,11 +205,18 @@ async function fetchCourseDueItems(
   if (dropboxResult.status === "fulfilled") {
     for (const folder of unwrapList<DropboxFolder>(dropboxResult.value)) {
       if (folder.IsHidden === true) continue;
-      if (!folder.DueDate) continue;
+      // An instructor who sets only an availability end date still has a
+      // deadline: the folder stops taking submissions then. Quizzes get the
+      // same fallback below.
+      // **Why:** #460, such an assignment was missing or showed up only as a
+      // generic calendar event.
+      const endDate = folder.Availability?.EndDate ?? null;
+      const dueDate = folder.DueDate ?? endDate;
+      if (!dueDate) continue;
       // Check the window before resolving the link: a group folder's link
       // costs group-membership requests, wasted on an item the handler's
       // window filter would drop anyway (issue #230).
-      const due = new Date(folder.DueDate).getTime();
+      const due = new Date(dueDate).getTime();
       if (!Number.isFinite(due) || due < from || due > to) continue;
       const link = await assignmentLink(folder);
 
@@ -217,10 +226,10 @@ async function fetchCourseDueItems(
         title: folder.Name,
         courseId: course.id,
         courseName: course.name,
-        dueDate: folder.DueDate,
-        dueIn: dueIn(folder.DueDate),
+        dueDate,
+        dueIn: dueIn(dueDate),
         startDate: null,
-        endDate: null,
+        endDate,
         ...link,
         url: link.url!,
       });
