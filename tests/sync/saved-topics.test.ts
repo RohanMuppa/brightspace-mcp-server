@@ -325,7 +325,7 @@ describe("keys from a file on disk cannot reach Object.prototype (review item 4)
   it("ignores __proto__ course, topic and sync-folder keys in the ledger", async () => {
     const entry = JSON.stringify({ path: path.join(dir, "x.pdf"), size: 1, savedAt: "2026-01-01T00:00:00Z" });
     // JSON.stringify would drop a literal __proto__ key, so the text is written raw.
-    await fs.writeFile(ledger, `{"version":1,"schools":{"${ORIGIN}":{"courses":{"__proto__":{"7":${entry}},"${COURSE}":{"__proto__":${entry}}},"syncRoots":{"__proto__":["${dir}"]}}}}`);
+    await fs.writeFile(ledger, `{"version":1,"schools":{"${ORIGIN}":{"courses":{"__proto__":{"7":${entry}},"${COURSE}":{"__proto__":${entry}}},"syncRoots":{"__proto__":[${JSON.stringify(dir)}]}}}}`);
     const state = await readSavedState(ORIGIN, COURSE);
     expect(state.unreadable).toEqual([]);
     expect(({} as any)[7]).toBeUndefined();
