@@ -50,7 +50,7 @@ describe("every topic in the table of contents lands in exactly one counter", ()
     expect(counted).toBe(8);
     expect(result.tableOfContents.modules).toBe(2);
     expect(result.nonFileCounts).toMatchObject({ link: 3, media: 1, broken: 1, other: 1 });
-    expect(result.tableOfContents.topicTypes).toMatchObject({ "Link/3": 3, "File/1": 3, "ContentService/?": 1, "Discussion/5": 1 });
+    expect(result.tableOfContents.topicTypes).toMatchObject({ "Link/3": 3, "File/1": 3, "ContentService": 1, "Discussion/5": 1 });
     expect(result.tableOfContents.unreadEntries).toBe(0);
     expect(result.tableOfContents.note).toMatch(/does not include them/i);
   });
@@ -126,6 +126,22 @@ describe("the table-of-contents note and counters stay honest", () => {
     expect(one.tableOfContents.note).not.toMatch(/does not include them/i);
   });
 
+  it("labels a missing part plainly: the identifier alone, or 'unknown', never a trailing '/?'", async () => {
+    const topics = [
+      { TopicId: 1, Title: "a", TypeIdentifier: "File" },
+      { TopicId: 2, Title: "b", TypeIdentifier: "Link" },
+      { TopicId: 3, Title: "c", TopicType: 5 },
+      { TopicId: 4, Title: "d" },
+      { TopicId: 5, Title: "e", TypeIdentifier: "", TopicType: 2 },
+    ];
+    fake = await fakeBrightspace({ Modules: [module_(1, "M", topics)] }, {});
+    const result = json(await tool(registerGetUnsavedCourseFiles as never)({ courseId: COURSE }));
+    expect(result.tableOfContents.topicTypes).toEqual({ File: 1, Link: 1, "unknown/5": 1, unknown: 1, "unknown/2": 1 });
+    expect(JSON.stringify(result.tableOfContents)).not.toContain("?");
+    expect(result.tableOfContents.note).toMatch(/TypeIdentifier/);
+    expect(result.tableOfContents.note).toMatch(/TopicType/);
+  });
+
   it("keeps course-controlled type names bounded and primitive", async () => {
     const odd = [
       { TopicId: 1, Title: "a", TypeIdentifier: { evil: "object" }, TopicType: { x: 1 } },
@@ -139,7 +155,7 @@ describe("the table-of-contents note and counters stay honest", () => {
     expect(keys).toContain("other");
     for (const key of keys) {
       expect(key.length).toBeLessThanOrEqual(60);
-      expect(key).not.toMatch(/[\n\r{}]/);
+      expect(key).not.toMatch(/[\n\r{}?]/);
     }
     expect(Object.values(types).reduce((a, b) => a + b, 0)).toBe(202);
   });

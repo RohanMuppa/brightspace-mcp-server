@@ -446,7 +446,7 @@ Tools are registered in `src/tools/index.ts`, and their input schemas are in `sr
     - `topics`: every topic it lists. `topics` equals `fileTopicCount` plus the four `nonFileCounts`.
     - `modules`: the modules it lists.
     - `unreadEntries`: entries that were not objects, or a list that was not a list. They are in no counter, so `complete` is `false` when this is above 0.
-    - `topicTypes`: topics by `TypeIdentifier/TopicType` (`?` when missing or not a string or number), for example `Link/3`. The names come from the course, so each part is cut to plain characters and a short length, and past 50 distinct keys the rest count under `other`.
+    - `topicTypes`: topics by Brightspace's `TypeIdentifier` (the kind of item, such as `File` or `Link`) and its numeric `TopicType`. The key is `File/1` when the table gives both, `File` when it gives only the identifier, and `unknown` (or `unknown/5`) when it gives no identifier. A value that is not a string or number counts as missing. The names come from the course, so each part is cut to plain characters and a short length, and past 50 distinct keys the rest count under `other`.
     - `note`: for the whole table, if `get_course_content` shows more topics than `topics`, Brightspace's table of contents does not include them. With `moduleId`, it says the counts are for that module only.
   - `notice`: what to tell the user when any of the above is set.
 - A course tree that cannot be read is an error answer (with sign-in guidance when that is the cause), never an empty list. An unknown `moduleId` is `invalidInput`.

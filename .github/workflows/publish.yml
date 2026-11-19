@@ -168,16 +168,33 @@ jobs:
             exit 1
           fi
 
+      # The registry's ownership check downloads the package, and npm can serve the version's
+      # metadata minutes before its tarball (5.2.14: gave up after 2 minutes and the publish got a
+      # 400; 5.2.16: the tarball URL answered 404 for about 5 minutes). So wait for both, and fail
+      # this job, rather than go on to a publish that will be refused, if npm never serves it.
       - name: Wait for the npm registry to serve the new version
         run: |
+          NAME=$(jq -r '.name' package.json)
           VERSION=$(jq -r '.version' package.json)
-          for i in $(seq 1 12); do
-            if [ "$(npm view "brightspace-mcp-server@$VERSION" version 2>/dev/null)" = "$VERSION" ]; then
-              echo "npm serves $VERSION"; exit 0
+          URL="https://registry.npmjs.org/${NAME}/${VERSION}"
+          ATTEMPTS=45
+          INTERVAL=20
+          for i in $(seq 1 "$ATTEMPTS"); do
+            TARBALL=$(curl -sS --max-time 30 "$URL" 2>/dev/null | jq -r '.dist.tarball // empty' 2>/dev/null || true)
+            if [ -z "$TARBALL" ]; then
+              echo "attempt $i of $ATTEMPTS: npm has no metadata for $NAME@$VERSION yet"
+            else
+              CODE=$(curl -sSL --max-time 120 -o /dev/null -w '%{http_code}' "$TARBALL" 2>/dev/null || true)
+              if [ "$CODE" = "200" ]; then
+                echo "npm serves $NAME@$VERSION and its tarball ($TARBALL)"
+                exit 0
+              fi
+              echo "attempt $i of $ATTEMPTS: metadata is there but the tarball answered ${CODE:-no response}"
             fi
-            sleep 10
+            sleep "$INTERVAL"
           done
-          echo "::warning::npm did not serve $VERSION within 2 minutes; the registry's ownership check may fail"
+          echo "::error::npm did not serve both the metadata and the tarball of $NAME@$VERSION within 15 minutes, so the MCP Registry publish was not attempted (it would be refused). Re-run this job once npm serves the tarball."
+          exit 1
 
       - name: Install mcp-publisher
         run: |

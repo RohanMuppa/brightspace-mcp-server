@@ -122,7 +122,7 @@ const UNSAVED_NOTE =
 
 /** What the counters cover: the whole table, or only the module asked for. */
 function tocNote(moduleId: number | undefined): string {
-  const sum = "topics is every topic counted: fileTopicCount plus link, media, broken and other in nonFileCounts.";
+  const sum = "topics is every topic counted: fileTopicCount plus link, media, broken and other in nonFileCounts. topicTypes counts topics by Brightspace's TypeIdentifier (the kind of item, such as File or Link), followed by a slash and its numeric TopicType only when Brightspace gives one; unknown means it gave no TypeIdentifier.";
   return moduleId === undefined
     ? `${sum} If get_course_content shows more topics than this, Brightspace's table of contents does not include them (they are in none of these lists); use get_course_content to see them.`
     : `${sum} These counts are for module ${moduleId} and the modules inside it only, not the whole course. Compare them with get_course_content for that module, and leave moduleId out to count the whole table.`;
