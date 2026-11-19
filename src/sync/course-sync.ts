@@ -170,7 +170,7 @@ export interface Plan {
   topicsSeen: number;
   /** Entries in a Modules or Topics list that were not objects (or a list that was not a list): not read, so not in any counter. */
   unreadEntries: number;
-  /** Topics seen, by `TypeIdentifier/TopicType` (a missing or non-primitive one is `?`), to show what the table holds. At most 50 keys, then `other`. */
+  /** Topics seen, by `TypeIdentifier` or `TypeIdentifier/TopicType` (`unknown` when there is no identifier), to show what the table holds. At most 50 keys, then `other`. */
   typeCounts: Record<string, number>;
   /** The id of every topic seen, of any type: with `files`, it tells "not a file topic" from "not in the table". */
   topicIds: Set<number>;
@@ -179,7 +179,7 @@ export interface Plan {
 const MAX_TYPE_KEYS = 50;
 /** A course controls these strings: only primitives, only plain characters, and short. */
 const typePart = (value: unknown, max: number): string =>
-  typeof value === "string" || typeof value === "number" ? String(value).replace(/[^\w.\- ]/g, "_").slice(0, max) || "?" : "?";
+  typeof value === "string" || typeof value === "number" ? String(value).replace(/[^\w.\- ]/g, "_").slice(0, max) : "";
 
 /** The table of contents as folders and files, every name made safe and unique, each within its record's cap in `caps`. */
 export function planFiles(toc: unknown, moduleId: number | undefined, caps: NameCaps): Plan {
@@ -210,7 +210,10 @@ export function planFiles(toc: unknown, moduleId: number | undefined, caps: Name
         continue;
       }
       topicsSeen++;
-      const rawKey = `${typePart(topic.TypeIdentifier, 40)}/${typeof topic.TopicType === "number" ? typePart(topic.TopicType, 10) : "?"}`;
+      // "File" or "File/1": the identifier, then the numeric TopicType only when the table gives one. Neither is "unknown".
+      const identifier = typePart(topic.TypeIdentifier, 40) || "unknown";
+      const topicType = typeof topic.TopicType === "number" ? typePart(topic.TopicType, 10) : "";
+      const rawKey = topicType ? `${identifier}/${topicType}` : identifier;
       const typeKey = rawKey in typeCounts || Object.keys(typeCounts).filter((key) => key !== "other").length < MAX_TYPE_KEYS ? rawKey : "other";
       typeCounts[typeKey] = (typeCounts[typeKey] ?? 0) + 1;
       const kind = classify(topic);

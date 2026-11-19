@@ -98,3 +98,46 @@ describe("publish workflow", () => {
     });
   });
 });
+
+describe("publish workflow: waiting for npm before the registry publish", () => {
+  const start = workflow.indexOf("- name: Wait for the npm registry to serve the new version");
+  const end = workflow.indexOf("- name: Install mcp-publisher");
+  const step = workflow.slice(start, end);
+  const script = /run: \|\n([\s\S]*)$/.exec(step)?.[1].replace(/^ {10}/gm, "");
+
+  it("has a wait step before mcp-publisher", () => {
+    expect(start).toBeGreaterThan(0);
+    expect(end).toBeGreaterThan(start);
+  });
+
+  it("needs both the version's metadata and a 200 from its tarball URL", () => {
+    expect(step).toContain("registry.npmjs.org");
+    expect(step).toContain(".dist.tarball");
+    expect(step).toContain("%{http_code}");
+    expect(step).toMatch(/= "200"/);
+  });
+
+  it("waits about 15 minutes, and fails the job instead of warning when npm never serves it", () => {
+    const attempts = Number(/ATTEMPTS=(\d+)/.exec(step)?.[1]);
+    const interval = Number(/INTERVAL=(\d+)/.exec(step)?.[1]);
+    expect(attempts * interval).toBeGreaterThanOrEqual(14 * 60);
+    expect(attempts * interval).toBeLessThanOrEqual(20 * 60);
+    expect(step).toContain("::error::");
+    expect(step).not.toContain("::warning::");
+    expect(step).toMatch(/exit 1/);
+  });
+
+  it("does not move the publish triggers or the release rule", () => {
+    expect(workflow).toMatch(/^on:\n {2}push:\n {4}branches: \[main\]$/m);
+    expect(workflow).toMatch(/github-release:\n {4}needs: publish\n {4}if: needs\.publish\.outputs\.published == 'true'/);
+  });
+
+  it.runIf(posix)("is valid bash", () => {
+    expect(script).toBeTruthy();
+    const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "wait-step-")), "wait.sh");
+    fs.writeFileSync(file, script!);
+    const result = spawnSync("bash", ["-n", file], { encoding: "utf8" });
+    expect(result.stderr).toBe("");
+    expect(result.status).toBe(0);
+  });
+});
