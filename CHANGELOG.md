@@ -6,6 +6,10 @@ A change that can break something a caller relied on is marked **Changed behavio
 
 Entries up to 5.2.1 were generated from the merged PR titles. Versions before 5.0.0 are in the [GitHub releases](https://github.com/RohanMuppa/brightspace-mcp-server/releases) and the git history.
 
+## 5.2.14 (2026-11-19)
+
+- fix: `get_course_content` with `moduleTitle` now finds modules nested inside other modules, such as "HW12" inside "Homeworks". Each match comes back with its full contents and a `path`. When no title matches, a notice says so and points to `search_course`. With `modifiedSince`, each module now lists the topics the filter dropped in `hiddenByFilter` (and counts dropped sub-modules in `hiddenModulesByFilter`), and a notice and the tool description say a file uploaded early and released later is missed, so the filter must not be used to conclude a file is absent.
+
 ## 5.2.13 (2026-11-19)
 
 - fix: `get_upcoming_due_dates` now lists an assignment whose instructor set only an availability end date and no due date. It shows as `type: "assignment"` with that end date as `dueDate` and as `endDate`. Before, it was missing from the list, or showed up only as a generic "Availability Ends" calendar event when the course calendar could be read. This matches how quizzes already fall back to their end date (#460).

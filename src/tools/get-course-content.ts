@@ -311,14 +311,52 @@ function filterTreeByModifiedSince(tree: any[], cutoff: Date): any[] {
         result.push(item);
         continue;
       }
-      const filteredChildren = filterTreeByModifiedSince(item.children ?? [], cutoff);
+      const allChildren: any[] = item.children ?? [];
+      const filteredChildren = filterTreeByModifiedSince(allChildren, cutoff);
       const moduleMatches = matchesModifiedSince(item.lastModified, cutoff);
       if (moduleMatches || filteredChildren.length > 0) {
-        result.push({ ...item, children: filteredChildren });
+        // Say what this module lost. lastModified is when the instructor last
+        // edited an item, not when it became visible, so a file uploaded early
+        // and released later falls on the wrong side of the cutoff (HW12,
+        // course 1632232, 2026-11-19). Topics are named; dropped child modules
+        // are only counted, which keeps the response bounded.
+        const keptTopicIds = new Set(filteredChildren.filter(c => c.type === 'topic').map(c => c.id));
+        const hiddenTopics = allChildren
+          .filter(c => c.type === 'topic' && !keptTopicIds.has(c.id))
+          .map(c => ({ id: c.id, title: c.title, type: c.topicType, lastModified: c.lastModified ?? null }));
+        const keptModuleIds = new Set(filteredChildren.filter(c => c.type === 'module').map(c => c.id));
+        const hiddenModules = allChildren.filter(c => c.type === 'module' && !keptModuleIds.has(c.id)).length;
+        result.push({
+          ...item,
+          children: filteredChildren,
+          ...(hiddenTopics.length > 0 ? { hiddenByFilter: hiddenTopics } : {}),
+          ...(hiddenModules > 0 ? { hiddenModulesByFilter: hiddenModules } : {}),
+        });
       }
     }
   }
   return result;
+}
+
+/**
+ * Find modules whose title contains the search term, at any depth. A match is
+ * returned with its full subtree and a `path` ("Homeworks > HW12"); the walk
+ * does not descend into a match, so a matching descendant is never listed a
+ * second time. Modules that matched nothing are walked through to find the
+ * nested ones.
+ */
+function findModulesByTitle(tree: any[], searchTerm: string, parents: string[] = []): any[] {
+  const found: any[] = [];
+  for (const item of tree) {
+    if (item.type !== 'module') continue;
+    const path = [...parents, item.title].join(' > ');
+    if (String(item.title).toLowerCase().includes(searchTerm)) {
+      found.push({ ...item, path });
+    } else if (item.children) {
+      found.push(...findModulesByTitle(item.children, searchTerm, [...parents, item.title]));
+    }
+  }
+  return found;
 }
 
 /**
@@ -379,7 +417,7 @@ export function registerGetCourseContent(
       title: "Get Course Content",
       annotations: { readOnlyHint: true },
       description:
-        "Fetch the content tree for a course showing modules, topics, files, and links. Use this when the user asks about course materials, lecture slides, uploaded files, content structure, or what's in a course module. Use moduleTitle to filter to a specific module (e.g. 'Labs', 'Staff', 'Homeworks') instead of fetching the entire tree. Use maxDepth to limit recursion depth for a table-of-contents view. A module or topic that isn't currently available carries isAvailable/availabilityStatus/availabilityMessage (and startDate/endDate when known) explaining why; absence of these fields means it's available now.",
+        "Fetch the content tree for a course showing modules, topics, files, and links. Use this when the user asks about course materials, lecture slides, uploaded files, content structure, or what's in a course module. Use moduleTitle to filter to a specific module at any depth (e.g. 'Labs', 'Staff', 'HW12') instead of fetching the entire tree. Do not use modifiedSince to decide whether a file exists: it filters on when the instructor last edited an item, so early-uploaded files are missed (see its description). Use maxDepth to limit recursion depth for a table-of-contents view. A module or topic that isn't currently available carries isAvailable/availabilityStatus/availabilityMessage (and startDate/endDate when known) explaining why; absence of these fields means it's available now.",
       inputSchema: GetCourseContentSchema,
     },
     async (args: any) => {
@@ -390,15 +428,7 @@ export function registerGetCourseContent(
         const { courseId, typeFilter = 'all', moduleTitle, maxDepth, modifiedSince } = GetCourseContentSchema.parse(args);
 
         // Fetch root modules
-        let rootModules = await fetchRootContent(apiClient, courseId);
-
-        // Filter root modules by title if specified
-        if (moduleTitle) {
-          const searchTerm = moduleTitle.toLowerCase();
-          rootModules = rootModules.filter(m =>
-            m.Title.toLowerCase().includes(searchTerm)
-          );
-        }
+        const rootModules = await fetchRootContent(apiClient, courseId);
 
         // Fetch user progress for the course (graceful degradation). 403/404
         // means this course has no progress data for the user. Any other
@@ -431,6 +461,21 @@ export function registerGetCourseContent(
           maxDepth
         );
 
+        // moduleTitle matches at any depth, so it needs the tree below the
+        // root modules. It reads the tree just built (the same fetches, and
+        // cache entries, a call without moduleTitle makes): no extra calls.
+        let titleNotice: string | undefined;
+        if (moduleTitle) {
+          contentTree = findModulesByTitle(contentTree, moduleTitle.toLowerCase());
+          if (contentTree.length === 0) {
+            titleNotice =
+              `No module title matched at any level of the tree for "${moduleTitle}". Do not report ` +
+              "the module as empty or missing: it is not empty just because no title matched, and its title may be worded differently" +
+              (typeFilter !== 'all' ? `, or its items may not be of type "${typeFilter}"` : "") +
+              ". Try search_course to find the item by keyword.";
+          }
+        }
+
         // Apply modifiedSince filter, if requested, after the tree is built:
         // a module's own timestamp may not change when a child topic does, so
         // filtering has to see the whole tree to know which modules to keep.
@@ -446,6 +491,24 @@ export function registerGetCourseContent(
         const moduleCount = countModules(contentTree);
 
         const unreadable = countUnreadableModules(contentTree);
+
+        const notices: string[] = [];
+        if (titleNotice) notices.push(titleNotice);
+        if (unreadable > 0) {
+          notices.push(
+            `The contents of ${unreadable} module(s) couldn't be read; they have children null and a ` +
+            "childrenUnavailable reason. topicCount leaves out whatever they hold. Do not report " +
+            "those modules as empty."
+          );
+        }
+        if (modifiedSince && filteredOut > 0) {
+          notices.push(
+            `modifiedSince hid ${filteredOut} topic(s); modules list them in hiddenByFilter. lastModified is when ` +
+            "the instructor last edited an item, not when it became visible to the student, so a file uploaded " +
+            "early and released later is missed. Never conclude a file is absent from this filtered result: call " +
+            "without modifiedSince or use search_course."
+          );
+        }
 
         log("INFO", `get_course_content: Retrieved ${moduleCount} modules and ${topicCount} topics for course ${courseId} (filter: ${typeFilter})${unreadable > 0 ? `, ${unreadable} module(s) unreadable` : ""}`);
 
@@ -463,14 +526,7 @@ export function registerGetCourseContent(
                   "Do not report topics as not completed; try again later.",
               }
             : {}),
-          ...(unreadable > 0
-            ? {
-                notice:
-                  `The contents of ${unreadable} module(s) couldn't be read; they have children null and a ` +
-                  "childrenUnavailable reason. topicCount leaves out whatever they hold. Do not report " +
-                  "those modules as empty.",
-              }
-            : {}),
+          ...(notices.length > 0 ? { notice: notices.join(" ") } : {}),
         });
       } catch (error) {
         return sanitizeError(error);

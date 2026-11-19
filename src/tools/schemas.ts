@@ -63,11 +63,11 @@ export const GetCourseContentSchema = z.object({
   typeFilter: z.enum(["file", "link", "html", "video", "all"]).default("all").optional()
     .describe("Optional filter to narrow results by content type."),
   moduleTitle: z.string().optional()
-    .describe("Case-insensitive substring match on module titles. Only returns modules whose title contains this string (e.g. 'Labs', 'Staff', 'Homeworks'). Children of matching modules are included in full."),
+    .describe("Case-insensitive substring match on module titles at any depth, including modules nested inside other modules (e.g. 'Labs', 'Staff', 'HW12'). Each matching module is returned with its full subtree and a path such as 'Homeworks > HW12'; a module inside a match is not listed again. If no title matches, the response says so: that does not mean the module is empty, try search_course."),
   maxDepth: z.coerce.number().int().min(1).max(10).optional()
-    .describe("Limit recursive depth of the content tree. Depth 1 returns top-level modules with direct children only. Useful for getting a table of contents without all nested content."),
+    .describe("Limit recursive depth of the content tree, counted from the course root even when moduleTitle is set. Depth 1 returns top-level modules with direct children only. Useful for getting a table of contents without all nested content."),
   modifiedSince: z.string().datetime({ offset: true, message: "modifiedSince must be an ISO 8601 datetime, e.g. 2026-01-15T00:00:00Z" }).optional()
-    .describe("Only return topics last modified at or after this ISO 8601 datetime (e.g. 2026-01-15T00:00:00Z), plus any module that contains a matching topic. Topics with no modified timestamp are always included. When set, the response reports how many topics were filtered out."),
+    .describe("Only return topics last modified at or after this ISO 8601 datetime (e.g. 2026-01-15T00:00:00Z), plus any module that contains a matching topic. Topics with no modified timestamp are always included. When set, the response reports how many topics were filtered out, and each kept module lists the topics it lost in hiddenByFilter. lastModified is when the instructor last edited the item, not when it became visible to the student, so files uploaded early and released later are missed. Never use this filter to conclude a file is absent: to check one assignment's files, call without modifiedSince or use search_course."),
 });
 
 export const GetClasslistEmailsSchema = z.object({
