@@ -120,12 +120,17 @@ export interface SyncResult {
   authError?: string;
   /** The table of contents was larger than the sync reads; the rest of it was ignored. */
   tocTruncated?: boolean;
+  /** Topics the table of contents lists: the files in the plan plus every counter in `nonFiles` (except `unavailable`, which is a subset of the files). */
+  tocTopicCount?: number;
 }
 
 export interface PlannedFile {
   segments: string[];
   name: string;
   topicId: number;
+  /** The topic's own title and last-modified time, when the table gives them. */
+  title: string;
+  lastModified?: string;
   /** The table-of-contents records its folders and its own name came from, outermost first. */
   sources: object[];
 }
@@ -160,7 +165,21 @@ export interface Plan {
   files: PlannedFile[];
   nonFiles: NonFileCounts;
   truncated: boolean;
+  /** Every module and topic the walk read, so counters can be checked against a total. Files + the non-file counters = topicsSeen. */
+  modulesSeen: number;
+  topicsSeen: number;
+  /** Entries in a Modules or Topics list that were not objects (or a list that was not a list): not read, so not in any counter. */
+  unreadEntries: number;
+  /** Topics seen, by `TypeIdentifier/TopicType` (a missing or non-primitive one is `?`), to show what the table holds. At most 50 keys, then `other`. */
+  typeCounts: Record<string, number>;
+  /** The id of every topic seen, of any type: with `files`, it tells "not a file topic" from "not in the table". */
+  topicIds: Set<number>;
 }
+
+const MAX_TYPE_KEYS = 50;
+/** A course controls these strings: only primitives, only plain characters, and short. */
+const typePart = (value: unknown, max: number): string =>
+  typeof value === "string" || typeof value === "number" ? String(value).replace(/[^\w.\- ]/g, "_").slice(0, max) || "?" : "?";
 
 /** The table of contents as folders and files, every name made safe and unique, each within its record's cap in `caps`. */
 export function planFiles(toc: unknown, moduleId: number | undefined, caps: NameCaps): Plan {
@@ -169,18 +188,34 @@ export function planFiles(toc: unknown, moduleId: number | undefined, caps: Name
   const nonFiles: NonFileCounts = { link: 0, media: 0, broken: 0, other: 0, unavailable: 0 };
   let nodes = 0;
   let truncated = false;
+  let modulesSeen = 0;
+  let topicsSeen = 0;
+  let unreadEntries = 0;
+  const typeCounts: Record<string, number> = Object.create(null);
+  const topicIds = new Set<number>();
 
   const addTopics = (topics: unknown, segments: string[], sources: object[], names: NameSet): void => {
-    if (!Array.isArray(topics)) return;
+    if (!Array.isArray(topics)) {
+      if (topics !== undefined && topics !== null) unreadEntries++;
+      return;
+    }
     for (const raw of topics) {
       if (++nodes > MAX_TOC_NODES) {
         truncated = true;
         return;
       }
       const topic = record(raw);
-      if (!topic) continue;
+      if (!topic) {
+        unreadEntries++;
+        continue;
+      }
+      topicsSeen++;
+      const rawKey = `${typePart(topic.TypeIdentifier, 40)}/${typeof topic.TopicType === "number" ? typePart(topic.TopicType, 10) : "?"}`;
+      const typeKey = rawKey in typeCounts || Object.keys(typeCounts).filter((key) => key !== "other").length < MAX_TYPE_KEYS ? rawKey : "other";
+      typeCounts[typeKey] = (typeCounts[typeKey] ?? 0) + 1;
       const kind = classify(topic);
       const topicId = topicIdOf(topic);
+      if (topicId !== null) topicIds.add(topicId);
       if (kind !== "file" || topicId === null) {
         nonFiles[kind === "file" ? "broken" : kind]++;
         continue;
@@ -188,13 +223,21 @@ export function planFiles(toc: unknown, moduleId: number | undefined, caps: Name
       const title = typeof topic.Title === "string" ? topic.Title : "";
       const cap = capOf(topic);
       const name = names.add(sanitizeComponent(fileNameFromTopic(topic.Url as string, title, `File ${topicId}`), `File ${topicId}`, cap), false, cap);
-      files.push({ segments, name, topicId, sources: [...sources, topic] });
+      files.push({
+        segments,
+        name,
+        topicId,
+        title,
+        ...(typeof topic.LastModifiedDate === "string" && topic.LastModifiedDate !== "" ? { lastModified: topic.LastModifiedDate } : {}),
+        sources: [...sources, topic],
+      });
     }
   };
 
   const walk = (container: Record<string, unknown>, segments: string[], sources: object[], depth: number): void => {
     const names = new NameSet(FULL_NAME_CHARS);
     const children: Array<{ module: Record<string, unknown>; segments: string[] }> = [];
+    if (container.Modules !== undefined && container.Modules !== null && !Array.isArray(container.Modules)) unreadEntries++;
     if (Array.isArray(container.Modules)) {
       // Only a level that really holds modules past the limit is cut off, not one that ends in an empty list.
       if (depth >= MAX_DEPTH) truncated ||= container.Modules.length > 0;
@@ -205,7 +248,11 @@ export function planFiles(toc: unknown, moduleId: number | undefined, caps: Name
             break;
           }
           const module = record(raw);
-          if (!module) continue;
+          if (!module) {
+            unreadEntries++;
+            continue;
+          }
+          modulesSeen++;
           const title = typeof module.Title === "string" ? module.Title : "";
           const cap = capOf(module);
           const folder = names.add(sanitizeComponent(title, sanitizeComponent(`Module ${String(module.ModuleId ?? module.Id ?? "")}`.trim(), "Module", cap), cap), true, cap);
@@ -226,7 +273,7 @@ export function planFiles(toc: unknown, moduleId: number | undefined, caps: Name
     if (!found) throw new SyncInputError(`Module ${moduleId} is not in this course's table of contents.`);
     walk({ Modules: [found] }, [], [], 0);
   }
-  return { files, nonFiles, truncated };
+  return { files, nonFiles, truncated, modulesSeen, topicsSeen, unreadEntries, typeCounts, topicIds };
 }
 
 /**
@@ -515,6 +562,7 @@ async function runSync(
     const plan = planWithinBudget(toc, moduleId, root.length, budget);
     result.nonFiles = plan.nonFiles;
     if (plan.truncated) result.tocTruncated = true;
+    result.tocTopicCount = plan.topicsSeen;
     const manifest = await SyncManifest.load(root);
 
     const total = plan.files.length;

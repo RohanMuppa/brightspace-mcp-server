@@ -6,6 +6,10 @@ A change that can break something a caller relied on is marked **Changed behavio
 
 Entries up to 5.2.1 were generated from the merged PR titles. Versions before 5.0.0 are in the [GitHub releases](https://github.com/RohanMuppa/brightspace-mcp-server/releases) and the git history.
 
+## 5.2.17 (2026-11-19)
+
+- feat: tell the server which course files you already have. The new `mark_course_files_saved` tool records topics as saved without downloading them (with the path of your copy if you know it, or just the topic), can mark everything currently unsaved when you say so, and can undo a mark. `get_unsaved_course_files` counts these in `savedCount` and shows them in `markedSavedCount`, since the server never checked a file for them. It also now gives each entry's `title` and `lastModified`, and a `tableOfContents` block (`topics`, `modules`, `unreadEntries`, `topicTypes`) so the counts can be checked: the topics listed in `nonFileCounts` plus `fileTopicCount` add up to `tableOfContents.topics`, and if `get_course_content` shows more topics than that, Brightspace's table of contents does not include them. `download_course_files` prints the same total. A network path (`\\host\share` or `//host/share`) is refused for a mark and for `syncFolder`, and dropped from the saved record, so a request cannot make the computer contact another host. A mark with a path is shown as marked and its file is still checked, a mark never replaces a download's record while its file exists, and a mark or unmark that changes nothing no longer rewrites the saved record.
+
 ## 5.2.16 (2026-11-19)
 
 - fix: `download_course_files` and `sync` no longer wait for the saved-files record before downloading. 5.2.15 took a lock on that record first, which on a slow or busy computer could use up a short time limit so that nothing downloaded. The folder is now remembered when the run ends, and only if it holds saved files. `download_file` also no longer waits more than half a second for that record before answering.

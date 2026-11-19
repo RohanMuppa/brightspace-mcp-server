@@ -51,6 +51,10 @@ export function summarizeSync(result: SyncResult): string {
   if (nonFiles.unavailable) skipped.push(`${plural(nonFiles.unavailable, "file")} locked or not yet released`);
   if (skipped.length > 0) lines.push(`Not files, so not downloaded: ${skipped.join("; ")}. These are not missing from the sync.`);
 
+  if (result.tocTopicCount !== undefined) {
+    const files = result.tocTopicCount - nonFiles.link - nonFiles.media - nonFiles.broken - nonFiles.other;
+    lines.push(`The table of contents lists ${result.tocTopicCount} topics: ${files} files and ${result.tocTopicCount - files} that are not files. If the course page shows more topics than that, Brightspace's table of contents does not include them.`);
+  }
   if (result.tocTruncated) lines.push("This course's table of contents is larger than the sync reads, so part of it was ignored.");
 
   const listed = [

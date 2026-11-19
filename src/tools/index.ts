@@ -18,6 +18,7 @@ export { registerGetCourseContent } from "./get-course-content.js";
 export { registerDownloadFile, COURSE_FILE_NEEDS_COOKIE } from "./download-file.js";
 export { registerDownloadCourseFiles } from "./download-course-files.js";
 export { registerGetUnsavedCourseFiles } from "./get-unsaved-course-files.js";
+export { registerMarkCourseFilesSaved } from "./mark-course-files-saved.js";
 export { registerGetClasslistEmails } from "./get-classlist-emails.js";
 export { registerGetRoster } from "./get-roster.js";
 export { registerGetMyGroups } from "./get-my-groups.js";

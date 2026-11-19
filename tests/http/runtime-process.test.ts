@@ -104,7 +104,7 @@ describe.skipIf(!existsSync(entry))("brightspace-mcp-server default command (rea
     };
 
     const chats = await Promise.all([connect(), connect()]);
-    for (const list of await Promise.all(chats.map((chat) => chat.listTools()))) expect(list.tools).toHaveLength(30);
+    for (const list of await Promise.all(chats.map((chat) => chat.listTools()))) expect(list.tools).toHaveLength(31);
 
     const states = runtimeStates(home);
     expect(states).toHaveLength(1);
@@ -117,7 +117,7 @@ describe.skipIf(!existsSync(entry))("brightspace-mcp-server default command (rea
     expect(runtimeStates(home)).toHaveLength(0);
 
     // The next request starts a fresh one.
-    expect((await chats[1].listTools()).tools).toHaveLength(30);
+    expect((await chats[1].listTools()).tools).toHaveLength(31);
     const [restarted] = runtimeStates(home);
     pids.push(restarted.pid);
     expect(restarted.pid).not.toBe(pid);

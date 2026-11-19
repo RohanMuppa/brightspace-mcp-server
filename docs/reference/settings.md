@@ -70,7 +70,7 @@ More on `D2L_DOWNLOAD_ROOTS`:
 | Path | Contents | Permissions |
 |------|----------|-------------|
 | `~/.brightspace-mcp/config.json` | School URL, username, and public settings | 0600 |
-| `~/.brightspace-mcp/saved-topics.json` | Which content topics `download_file` saved to disk, with the absolute path, size and save time, and the folders a course sync wrote into. No file contents and no credentials. Delete it to forget them; see [downloads.md](../internals/downloads.md#what-is-already-saved) | 0600 |
+| `~/.brightspace-mcp/saved-topics.json` | Which content topics `download_file` saved to disk, with the absolute path, size and save time, and the folders a course sync wrote into. No file contents and no credentials. It also holds topics the student marked saved. Delete it to forget them; see [downloads.md](../internals/downloads.md#what-is-already-saved) | 0600 |
 | `~/.brightspace-mcp/saved-topics.json.lock` | Held for milliseconds while the ledger is rewritten, so two servers do not drop each other's entries. A leftover from a crash is taken over after 30 seconds or when its process is gone | 0600 |
 | `~/.brightspace-mcp/saved-topics.json.corrupt-<time>` | A ledger that was damaged, moved aside. While one exists, `get_unsaved_course_files` reports that earlier saves are unknown. Delete it once you have checked what is saved | 0600 |
 | `~/.d2l-session/accounts/<account-hash>/session.json` | Encrypted access token, session cookies, and XSRF token (AES-256-GCM) | 0600 |

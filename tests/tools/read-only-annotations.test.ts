@@ -22,6 +22,12 @@ const WRITES_TO_DISK = new Set(["download_file", "download_course_files", "downl
  */
 const DESTRUCTIVE = new Set(["sign_out"]);
 /**
+ * Writes only the server's own saved-topic record (a small file in its settings folder), never a course file.
+ * The one path it takes (a student's own copy) is only checked and recorded, never written or opened for content.
+ * Not read-only, and not destructive: unmarking forgets a record, no file.
+ */
+const WRITES_LEDGER = new Set(["mark_course_files_saved"]);
+/**
  * Changes sign-in state rather than reading Brightspace, so not read-only.
  * sign_in starts a sign-in: openWorldHint, because it reaches the school's
  * identity provider and may put a browser window on the user's screen. It is
@@ -45,10 +51,10 @@ function registrations(): Array<{ name: string; config: string }> {
 
 describe("read-only tool annotations", () => {
   it("finds every tool the server registers", () => {
-    expect(registrations().length).toBe(30);
+    expect(registrations().length).toBe(31);
   });
 
-  it.each(registrations().filter(({ name }) => !WRITES_TO_DISK.has(name) && !DESTRUCTIVE.has(name) && !SIGNS_IN.has(name)))("marks $name read-only", ({ config }) => {
+  it.each(registrations().filter(({ name }) => !WRITES_TO_DISK.has(name) && !WRITES_LEDGER.has(name) && !DESTRUCTIVE.has(name) && !SIGNS_IN.has(name)))("marks $name read-only", ({ config }) => {
     expect(config).toContain("readOnlyHint: true");
   });
 
@@ -67,6 +73,14 @@ describe("read-only tool annotations", () => {
     const registration = registrations().find((entry) => entry.name === name);
     expect(registration).toBeDefined();
     expect(registration!.config).not.toContain("readOnlyHint: true");
+  });
+
+  it.each([...WRITES_LEDGER])("marks %s as writing, but not destructive and not a disk writer", (name) => {
+    const registration = registrations().find((entry) => entry.name === name);
+    expect(registration).toBeDefined();
+    expect(registration!.config).toContain("readOnlyHint: false");
+    expect(registration!.config).toContain("destructiveHint: false");
+    expect(WRITES_TO_DISK.has(name)).toBe(false);
   });
 
   it.each([...SIGNS_IN])("marks %s open-world, not read-only, and not destructive", (name) => {

@@ -26,6 +26,7 @@ import {
   COURSE_FILE_NEEDS_COOKIE,
   registerDownloadCourseFiles,
   registerGetUnsavedCourseFiles,
+  registerMarkCourseFilesSaved,
   registerGetClasslistEmails,
   registerGetRoster,
   registerGetMyGroups,
@@ -155,6 +156,7 @@ export function createMcpServer(runtime: ServerRuntime): McpServer {
   );
   registerDownloadCourseFiles(server, apiClient);
   registerGetUnsavedCourseFiles(server, apiClient);
+  registerMarkCourseFilesSaved(server, apiClient);
   registerGetClasslistEmails(server, apiClient);
   registerGetRoster(server, apiClient);
   registerGetMyGroups(server, apiClient);

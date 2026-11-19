@@ -294,3 +294,19 @@ export const GetUnsavedCourseFilesSchema = z.object({
   syncFolder: z.string().min(1).optional()
     .describe("Absolute path of a folder the student ran download_course_files (or the sync command) into, that the server has not synced into itself: only that folder's .brightspace-sync.json is read, for this call only. It is not remembered, so pass it again on every call. It must exist. Not needed for files saved with download_file, or for folders the server synced into itself."),
 });
+
+export const MarkCourseFilesSavedSchema = z.object({
+  courseId: z.coerce.number().int().positive()
+    .describe("Course ID the topics belong to."),
+  topics: z.array(z.object({
+    topicId: z.coerce.number().int().positive()
+      .describe("Content topic ID, from get_unsaved_course_files."),
+    path: z.string().min(1).max(4096).optional()
+      .describe("Absolute path of the student's own copy, when known. It must exist now. Omit it when the student has the file but you do not know where."),
+  })).min(1).max(1000).optional()
+    .describe("Topics the student already has. Name exactly one of topics, allUnsaved or unmarkTopicIds."),
+  allUnsaved: z.boolean().optional()
+    .describe("true marks every topic that is unsaved right now. Only after the student has said they already have all of them; never a default. Refused when the saved records could not be read."),
+  unmarkTopicIds: z.array(z.coerce.number().int().positive()).min(1).max(1000).optional()
+    .describe("Topic IDs to forget the record for (undo). Never deletes a file."),
+});
