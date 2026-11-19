@@ -87,7 +87,7 @@ Everything not refused. The code's comments name `/tmp`, `/private/tmp`, `/var/f
   - The check is skipped when there is no Content-Length. It is also skipped when Content-Encoding is anything other than `identity`. `fetch` decodes the body, but the header counts the encoded bytes.
   **Why:** a dropped connection must not publish a truncated file that a later sync would take for the whole one.
 - **Empty file:** a body of 0 bytes fails with kind `empty`, "File is empty (0 bytes)". A response with no body at all fails with kind `undetectableType` instead.
-- **Recording:** after a content topic (`topicId`) is published, its absolute path and size go in the saved-topic ledger. See [What is already saved](#what-is-already-saved). Other targets record nothing.
+- **Recording:** after a content topic (`topicId`) is published, its absolute path and size go in the saved-topic ledger. The answer waits for the ledger for at most 500 ms (`RECORD_WAIT_MS`); if another process holds the lock, the answer goes out and the record lands when the lock is free. See [What is already saved](#what-is-already-saved). Other targets record nothing.
 
 ### Inline mode (`downloadPath` omitted)
 
@@ -335,7 +335,11 @@ The answer is text. Its first line reads "Course N saved to D: X downloaded, Y a
 
 - Shape: `version: 1`, then `schools`, then the school's origin, then `courses` (course id, then topic id) and `syncRoots` (course id, then a list of folders). Each topic entry has `path` (absolute), `size`, `savedAt` and, when the saver knew it, `lastModified`.
 - `download_file` writes an entry when it publishes a content topic to disk. It does not know the topic's `lastModified` without another request, so it leaves it out.
-- Each real run of `syncCourse` adds its destination folder to `syncRoots`, at most 20 per course. A dry run adds nothing.
+- `syncCourse` adds its destination folder to `syncRoots` at the end of a real run, next to the final manifest save, at most 20 per course.
+  - It runs however the run ends (done, deadline, cancel, an error), and never before the first download.
+  - A dry run adds nothing.
+  - Only a folder that holds saves is added: the run saved something, or the manifest already has entries for the course. A run that saved nothing into a folder with none would otherwise leave a folder that is later reported as not found.
+  **Why at the end:** taking the ledger lock can wait up to 3 seconds, and the run's deadline is already counting. Done first, it used up the time of a short deadline and a run downloaded nothing (the release verify on Windows, 5.2.15). The wait now comes after the downloads.
 - Entries are read back as untrusted input: a path that is not absolute, or holds a NUL byte, is dropped, and so is any course or topic key that is not digits.
 
 **Why a per-user ledger, and not the nearest `.brightspace-sync.json`:**

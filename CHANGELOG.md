@@ -6,6 +6,10 @@ A change that can break something a caller relied on is marked **Changed behavio
 
 Entries up to 5.2.1 were generated from the merged PR titles. Versions before 5.0.0 are in the [GitHub releases](https://github.com/RohanMuppa/brightspace-mcp-server/releases) and the git history.
 
+## 5.2.16 (2026-11-19)
+
+- fix: `download_course_files` and `sync` no longer wait for the saved-files record before downloading. 5.2.15 took a lock on that record first, which on a slow or busy computer could use up a short time limit so that nothing downloaded. The folder is now remembered when the run ends, and only if it holds saved files. `download_file` also no longer waits more than half a second for that record before answering.
+
 ## 5.2.15 (2026-11-19)
 
 - feat: a reliable "what don't I have yet" for a course, by Brightspace topic id instead of dates. The new `get_unsaved_course_files` tool lists the course's file topics you have not saved, treats files saved by `download_file` (into any folder, under any name) and by `download_course_files` or `sync` as saved, lists a saved file you deleted under `savedFileMissing`, and says so (`complete: false`, `stateUnreadable`, a notice) instead of returning "nothing new" when a record or the course's contents could not be read. `download_file` now records each content topic it saves to disk in `~/.brightspace-mcp/saved-topics.json`. The tool also says when records could not be trusted: a damaged ledger is set aside and reported (`stateUnreadable`, `complete: false`) until you delete the set-aside file, a sync folder or drive that is not found is not read as "not saved", and unsaved is described as "no record of saving", so a file you have from another source is not downloaded again without asking. The `get_course_content`, `download_file` and `download_course_files` descriptions now tell the agent to use it, and never to conclude a file is absent from `modifiedSince`, which cannot see a file uploaded before it was released.

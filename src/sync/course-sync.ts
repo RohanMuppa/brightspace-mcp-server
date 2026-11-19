@@ -516,8 +516,6 @@ async function runSync(
     result.nonFiles = plan.nonFiles;
     if (plan.truncated) result.tocTruncated = true;
     const manifest = await SyncManifest.load(root);
-    // So "what is not saved yet" reads this folder's manifest too. Bookkeeping: never throws.
-    if (!dryRun) await recordSyncRoot(apiClient.origin, courseId, root);
 
     const total = plan.files.length;
     let done = 0;
@@ -680,7 +678,17 @@ async function runSync(
       }
     }
     } finally {
-      await manifest.save();
+      try {
+        await manifest.save();
+      } finally {
+        // So "what is not saved yet" reads this folder's manifest too. Done when the run ends, however it ends,
+        // and never before the first download: it can wait for the ledger lock, and the deadline is already running.
+        // Only a folder that holds saves is remembered (this run's, or an earlier run's in the manifest): a folder
+        // that never held any would later be reported as a missing sync folder. Never throws.
+        if (!dryRun && (result.downloaded.length > 0 || manifest.entries(courseId).length > 0)) {
+          await recordSyncRoot(apiClient.origin, courseId, root);
+        }
+      }
     }
     log("INFO", `Course sync ${courseId}: ${result.downloaded.length} downloaded, ${result.skippedExisting} already present, ${result.failed.length} failed, ${result.notAttempted} not attempted`);
     return result;

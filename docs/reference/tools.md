@@ -415,7 +415,7 @@ Tools are registered in `src/tools/index.ts`, and their input schemas are in `sr
 - Text result: the answer counts downloaded, already on disk, failed and not attempted. It also says what was not a file (links, embedded media, broken, other).
 - A 0-byte file is counted as `emptyOnBrightspace`, not as a failure.
 - No `readOnlyHint` annotation is set. The tool writes files.
-- Each real run (not `dryRun`) remembers the folder, so `get_unsaved_course_files` reads its manifest.
+- A real run (not `dryRun`) that saved files, or whose folder already has a manifest for the course, remembers the folder when it ends, so `get_unsaved_course_files` reads its manifest.
 
 ### get_unsaved_course_files
 
