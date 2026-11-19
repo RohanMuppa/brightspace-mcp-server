@@ -117,6 +117,7 @@ What each tool takes and returns is in [docs/reference/tools.md](../reference/to
 | `src/tools/resolve-courses.ts` | Which courses a call covers, and their names |
 | `src/tools/download-file.ts` | Binary download and file-type detection; `openContentTopic` is the topic download the course sync reuses |
 | `src/tools/download-course-files.ts` | The `download_course_files` tool, a thin wrapper over `src/sync/course-sync.ts` |
+| `src/tools/get-unsaved-course-files.ts` | The `get_unsaved_course_files` tool: the course's file topics, minus what is recorded as saved |
 | `src/tools/attachment-reader.ts` | Reads an attached file as text, for assignments and announcements |
 | `src/tools/content-availability.ts` | Shared release-window logic (hidden, locked, not yet open, ended) |
 | `src/tools/topic-availability.ts` | Explains a `download_file` failure using topic and table-of-contents availability data |
@@ -130,6 +131,7 @@ Read [downloads.md](downloads.md) before changing anything here.
 | File | What it is |
 |------|------------|
 | `src/sync/course-sync.ts` | The whole-course download shared by `download_course_files` and `sync`: reads `/content/toc` once, plans folders and files, retries, stops on a lost session |
+| `src/sync/saved-topics.ts` | The per-user ledger of topics `download_file` saved, and the reader that joins it with sync manifests |
 | `src/sync/manifest.ts` | `.brightspace-sync.json`: what a sync wrote, by course and topic; the only files `replace` may overwrite |
 | `src/sync/lock.ts` | `.brightspace-sync.lock`: one sync at a time per destination |
 | `src/sync/names.ts` | Cross-platform name sanitising and duplicate numbering |

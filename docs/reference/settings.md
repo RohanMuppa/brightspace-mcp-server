@@ -70,6 +70,7 @@ More on `D2L_DOWNLOAD_ROOTS`:
 | Path | Contents | Permissions |
 |------|----------|-------------|
 | `~/.brightspace-mcp/config.json` | School URL, username, and public settings | 0600 |
+| `~/.brightspace-mcp/saved-topics.json` | Which content topics `download_file` saved to disk, with the absolute path, size and save time, and the folders a course sync wrote into. No file contents and no credentials. Delete it to forget them; see [downloads.md](../internals/downloads.md#what-is-already-saved) | 0600 |
 | `~/.d2l-session/accounts/<account-hash>/session.json` | Encrypted access token, session cookies, and XSRF token (AES-256-GCM) | 0600 |
 | `~/.d2l-session/accounts/<account-hash>/storage-state.encrypted.json` | Encrypted cookies and browser storage | 0600 |
 | `~/.d2l-session/accounts/<account-hash>/microsoft-session.json` | A plain summary of what Microsoft remembered. No cookie values | 0600 |

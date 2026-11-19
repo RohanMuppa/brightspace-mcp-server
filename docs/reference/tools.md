@@ -21,6 +21,7 @@ This file describes each tool the server registers: its arguments, the fields it
 | [`get_video_transcript`](#get_video_transcript) | Transcript of an embedded video, with timestamps |
 | [`download_file`](#download_file) | Get one file, inline or saved to disk |
 | [`download_course_files`](#download_course_files) | Download every file of a course into a folder |
+| [`get_unsaved_course_files`](#get_unsaved_course_files) | Which file topics of a course are not saved yet, by topic id |
 | [`get_roster`](#get_roster) | Classlist for a course |
 | [`get_my_groups`](#get_my_groups) | Your project and discussion groups, with members |
 | [`get_available_groups`](#get_available_groups) | Groups you can still join yourself |
@@ -378,6 +379,7 @@ Tools are registered in `src/tools/index.ts`, and their input schemas are in `sr
   - It never sends an MCP `EmbeddedResource`.
   - Limits: 10MB of file and 400,000 characters of extracted text. Each limit has an explicit truncation or oversize message. The message names `downloadPath` as the way to get the full file.
 - Disk result: a streamed download, up to 2GB.
+- A content topic (`topicId`) saved to disk is recorded by topic id, with its absolute path, in the saved-topic ledger, wherever `downloadPath` and `customFilename` put it. [`get_unsaved_course_files`](#get_unsaved_course_files) reads it. Recording never fails the download. Inline results, and every other target (`coursePath`, dropbox, announcements), record nothing.
 - Instructor handouts (`source: "assignmentAttachment"`):
   - Use `courseId`, `folderId`, `fileId` and `source: "assignmentAttachment"`.
   - `get_assignment_files` gives these arguments as `downloadArgs` on each attachment.
@@ -413,6 +415,31 @@ Tools are registered in `src/tools/index.ts`, and their input schemas are in `sr
 - Text result: the answer counts downloaded, already on disk, failed and not attempted. It also says what was not a file (links, embedded media, broken, other).
 - A 0-byte file is counted as `emptyOnBrightspace`, not as a failure.
 - No `readOnlyHint` annotation is set. The tool writes files.
+- Each real run (not `dryRun`) remembers the folder, so `get_unsaved_course_files` reads its manifest.
+
+### get_unsaved_course_files
+
+- Code: `src/tools/get-unsaved-course-files.ts`. How the saved state is kept: [downloads.md](../internals/downloads.md#what-is-already-saved).
+- Use it for "what's new", "what am I missing" and "pull from Brightspace". It compares by topic id, not by date, so it finds a file the instructor uploaded weeks before releasing it. `get_course_content`'s `modifiedSince` cannot: releasing a topic does not change its `lastModified`.
+- Arguments:
+  - `courseId` (required).
+  - `moduleId` (optional). Only that module and the modules inside it.
+  - `syncFolder` (optional). An absolute path to a folder a sync ran into before the server remembered folders: its `.brightspace-sync.json` is read too.
+- It reads `/content/toc` fresh (never cached), the same table `download_course_files` plans from. It is read-only and writes nothing.
+- A topic counts as saved when the ledger (a `download_file` save) or a sync manifest (a `download_course_files` or `sync` save) records it **and** the recorded file is still on disk.
+- Result fields:
+  - `complete`: `false` when anything below could not be read or checked. Never read an empty `unsaved` as "nothing new" unless it is `true`.
+  - `fileTopicCount`, `savedCount`.
+  - `unsaved`: file topics with no record. Each has `topicId`, `fileName`, `modulePath` and `downloadArgs` (`courseId`, `topicId`) for `download_file`.
+  - `savedFileMissing`: recorded as saved, but the file is no longer at `savedTo`. Counts as not saved. Download it again.
+  - `couldNotCheck`: recorded, but the file could not be checked (a drive that is not connected). Not reported as saved or missing.
+  - `stateUnreadable`: the ledger or a manifest exists but could not be read (`source`, `where`, `reason`). The `unsaved` topics may then already be saved.
+  - `tocTruncated`: the table of contents was cut off at the sync's limits.
+  - `nonFileCounts`: links, embedded media, broken and other topics, which are not files.
+  - `notice`: what to tell the user when any of the above is set.
+- A course tree that cannot be read is an error answer (with sign-in guidance when that is the cause), never an empty list. An unknown `moduleId` is `invalidInput`.
+- `readOnlyHint` is set.
+- A file saved by hand, or by a sync before the server kept the folder, shows as unsaved until it is recorded. Download it again, or pass `syncFolder`.
 
 ## People and groups
 

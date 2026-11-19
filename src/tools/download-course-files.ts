@@ -7,7 +7,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { D2LApiClient } from "../api/index.js";
 import { DownloadCourseFilesSchema } from "./schemas.js";
-import { errorResponse, sanitizeError, withUpdateNotice } from "./tool-helpers.js";
+import { errorResponse, sanitizeError, withUpdateNotice, FIND_NEW_FILES_GUIDANCE } from "./tool-helpers.js";
 import { log } from "../utils/logger.js";
 import { validateContentId } from "../utils/file-validator.js";
 import { SyncInputError, syncCourse } from "../sync/course-sync.js";
@@ -24,7 +24,7 @@ export function registerDownloadCourseFiles(server: McpServer, apiClient: D2LApi
     {
       title: "Download Course Files",
       description:
-        "Download every file in a course's Content area to a folder on the host computer, in sub-folders named after the course's modules. Use this when the user wants a whole course (or one module) saved, instead of calling download_file once per file. Ask the user where to save it before calling; never guess a directory. It is safe to run again: files already on disk are skipped by default, so a rerun fetches only what is new and never overwrites the user's annotated copies. Use dryRun first to preview a large course. The answer counts what was downloaded, skipped, failed and not attempted, and what was not a file (web links, embedded videos, broken items, locked items), so do not report those as missing. If the Brightspace session expires mid-run it stops with sign-in instructions and the files already saved are kept; sign in and call it again.",
+        "Download every file in a course's Content area to a folder on the host computer, in sub-folders named after the course's modules. Use this when the user wants a whole course (or one module) saved, instead of calling download_file once per file. Ask the user where to save it before calling; never guess a directory. It is safe to run again: files already on disk are skipped by default, so a rerun fetches only what is new and never overwrites the user's annotated copies. Use dryRun first to preview a large course. The answer counts what was downloaded, skipped, failed and not attempted, and what was not a file (web links, embedded videos, broken items, locked items), so do not report those as missing. If the Brightspace session expires mid-run it stops with sign-in instructions and the files already saved are kept; sign in and call it again. This tool saves in a folder layout that mirrors the modules; if the student keeps their own layout (they saved with download_file and customFilename), do not use it to pull what is new. " + FIND_NEW_FILES_GUIDANCE,
       inputSchema: DownloadCourseFilesSchema,
     },
     async (args: any, extra?: any) => {

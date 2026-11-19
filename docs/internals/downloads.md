@@ -87,6 +87,7 @@ Everything not refused. The code's comments name `/tmp`, `/private/tmp`, `/var/f
   - The check is skipped when there is no Content-Length. It is also skipped when Content-Encoding is anything other than `identity`. `fetch` decodes the body, but the header counts the encoded bytes.
   **Why:** a dropped connection must not publish a truncated file that a later sync would take for the whole one.
 - **Empty file:** a body of 0 bytes fails with kind `empty`, "File is empty (0 bytes)". A response with no body at all fails with kind `undetectableType` instead.
+- **Recording:** after a content topic (`topicId`) is published, its absolute path and size go in the saved-topic ledger. See [What is already saved](#what-is-already-saved). Other targets record nothing.
 
 ### Inline mode (`downloadPath` omitted)
 
@@ -326,6 +327,38 @@ The answer is text. Its first line reads "Course N saved to D: X downloaded, Y a
   - 2: a usage error, a refused destination, a sync already running into the folder, or an unknown module.
   - 130: interrupted by SIGINT or SIGTERM.
 
+## What is already saved
+
+`get_unsaved_course_files` (`src/tools/get-unsaved-course-files.ts`) answers "which content topics do I not have yet?" by topic id. Its state comes from two places, joined in `readSavedState` (`src/sync/saved-topics.ts`).
+
+**The ledger** is `saved-topics.json` next to `config.json`, in `~/.brightspace-mcp/`. It is written atomically with mode `0600`.
+
+- Shape: `version: 1`, then `schools`, then the school's origin, then `courses` (course id, then topic id) and `syncRoots` (course id, then a list of folders). Each topic entry has `path` (absolute), `size`, `savedAt` and, when the saver knew it, `lastModified`.
+- `download_file` writes an entry when it publishes a content topic to disk. It does not know the topic's `lastModified` without another request, so it leaves it out.
+- Each real run of `syncCourse` adds its destination folder to `syncRoots`, at most 20 per course. A dry run adds nothing.
+- Entries are read back as untrusted input: a path that is not absolute, or holds a NUL byte, is dropped.
+
+**Why a per-user ledger, and not the nearest `.brightspace-sync.json`:**
+
+- A student who saves with `download_file`, `downloadPath` and `customFilename` has no sync folder at all. The manifest is rooted in a destination folder and holds paths relative to it, so there is nothing "nearest" to find, and a later `downloadPath` elsewhere would never see the entry.
+- A manifest entry means "this sync wrote the file", and `existing: replace` may overwrite such a file. A file the student named and filed by hand must never become one. Writing into the manifest would widen what `replace` can overwrite, which is a safety rule (see [Existing files](#existing-files-existing)).
+- The ledger is keyed by school as well as course, because two schools can reuse a course id. A manifest sits in one folder and cannot say which school wrote it.
+- **Why not copy sync results into the ledger:** a sync's files are already in its manifest, in the format and code that exist. The ledger remembers the folder and reads the manifest in place (`SyncManifest.load`, with `entries()`), so there is one record of each fact and an old sync is found as soon as its folder is passed as `syncFolder`.
+
+**Never fails a download:**
+
+- `recordSavedTopic` and `recordSyncRoot` catch every error and log a warning. The save is reported as it happened.
+- Writers in one process take turns, so two saves finishing together keep both entries. A second process could still overwrite an entry; the ledger is then missing one topic, which shows as unsaved, and the cost is one extra download.
+- A ledger that is not valid JSON is moved aside to `saved-topics.json.corrupt-<time>` and a new one starts. A ledger that cannot be read for another reason (permissions) is left alone and not written.
+
+**Reading it: "could not read" is never "there is none":**
+
+- A missing ledger or manifest is empty. One that exists and cannot be read goes in `stateUnreadable`, `complete` is `false`, and the notice says the unsaved topics may already be saved. `SyncManifest.unreadable` carries this for a manifest; before, `load` treated every failure as empty.
+- The course tree is read fresh with `GET /content/toc`, as the sync does, and planned with the sync's own `planFiles`, so both tools agree on what a file topic is. A failed read is an error answer, never an empty list. A table cut off at the sync's limits sets `tocTruncated`.
+- A recorded file counts as saved only if `stat` finds a regular file there. `ENOENT` and `ENOTDIR` put the topic in `savedFileMissing`. Any other error (a drive not connected) puts it in `couldNotCheck`, so a missing mount is not reported as a deleted file. A topic recorded in several places is saved when any copy exists.
+- **Why by topic id:** a file uploaded weeks before release keeps its old `lastModified`, and un-hiding does not change it. A `modifiedSince` filter on `get_course_content` missed a homework PDF that way. No date can find it, so the tool descriptions (`FIND_NEW_FILES_GUIDANCE` in `src/tools/tool-helpers.ts`) tell the agent to use this tool and never to conclude a file is absent from `modifiedSince`.
+- Tests: `tests/sync/saved-topics.test.ts`. The test setup (`tests/setup/ledger-isolation.ts`) points the home directory at a temporary folder so no test writes the real ledger.
+
 ## Limits at a glance
 
 | Limit | Value | Set in |
@@ -345,6 +378,7 @@ The answer is text. Its first line reads "Course N saved to D: X downloaded, Y a
 | Shortest shortened name | 16 characters | `MIN_NAME_CHARS` in `src/sync/course-sync.ts` |
 | Windows full path | 250 characters (Windows only) | `WINDOWS_PATH_BUDGET` in `src/sync/course-sync.ts` |
 | Manifest save | Every 25 files or 2 seconds, and at the end | `MANIFEST_BATCH_FILES`, `MANIFEST_BATCH_MS` in `src/sync/course-sync.ts` |
+| Sync folders remembered per course | 20 | `MAX_SYNC_ROOTS` in `src/sync/saved-topics.ts` |
 | Manifest path length | 4096 characters | `validRelativePath` in `src/sync/manifest.ts` |
 | Manifest mtime match | 1 ms | `unchangedSinceSync` in `src/sync/manifest.ts` |
 | Stale lock | 1 hour | `STALE_LOCK_MS` in `src/sync/lock.ts` |

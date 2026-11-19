@@ -285,3 +285,12 @@ export const DownloadDropboxSubmissionFileSchema = z.object({
   customFilename: z.string().max(255).optional()
     .describe("Custom filename for the downloaded file (include extension). If omitted, uses the original submission filename."),
 });
+
+export const GetUnsavedCourseFilesSchema = z.object({
+  courseId: z.coerce.number().int().positive()
+    .describe("Course ID to compare against what has been saved."),
+  moduleId: z.coerce.number().int().positive().optional()
+    .describe("Only compare this module and the modules inside it. Use a module id from get_course_content."),
+  syncFolder: z.string().min(1).optional()
+    .describe("Absolute path of a folder the student ran download_course_files (or the sync command) into, when it may not be known to the server yet: its .brightspace-sync.json is read too. Not needed for files saved with download_file, or for folders the server has synced into before."),
+});

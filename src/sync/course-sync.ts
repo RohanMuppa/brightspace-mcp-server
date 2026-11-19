@@ -23,6 +23,7 @@ import { SyncInputError } from "./errors.js";
 import { removeStalePartials } from "./cleanup.js";
 import { acquireSyncLock } from "./lock.js";
 import { SyncManifest, unchangedSinceSync, type ManifestEntry } from "./manifest.js";
+import { recordSyncRoot } from "./saved-topics.js";
 import { NameSet, fileNameFromTopic, sanitizeComponent, splitExtension } from "./names.js";
 
 export { SyncInputError } from "./errors.js";
@@ -121,7 +122,7 @@ export interface SyncResult {
   tocTruncated?: boolean;
 }
 
-interface PlannedFile {
+export interface PlannedFile {
   segments: string[];
   name: string;
   topicId: number;
@@ -130,7 +131,7 @@ interface PlannedFile {
 }
 
 /** Longest name a synced file or folder gets before any path budget applies. */
-const FULL_NAME_CHARS = 150;
+export const FULL_NAME_CHARS = 150;
 /** The name cap for each table-of-contents record; a record not in the map gets FULL_NAME_CHARS. */
 type NameCaps = ReadonlyMap<object, number>;
 
@@ -155,14 +156,14 @@ const topicIdOf = (topic: Record<string, unknown>): number | null => {
   return Number.isInteger(id) && id > 0 ? id : null;
 };
 
-interface Plan {
+export interface Plan {
   files: PlannedFile[];
   nonFiles: NonFileCounts;
   truncated: boolean;
 }
 
 /** The table of contents as folders and files, every name made safe and unique, each within its record's cap in `caps`. */
-function planFiles(toc: unknown, moduleId: number | undefined, caps: NameCaps): Plan {
+export function planFiles(toc: unknown, moduleId: number | undefined, caps: NameCaps): Plan {
   const capOf = (source: object): number => caps.get(source) ?? FULL_NAME_CHARS;
   const files: PlannedFile[] = [];
   const nonFiles: NonFileCounts = { link: 0, media: 0, broken: 0, other: 0, unavailable: 0 };
@@ -515,6 +516,8 @@ async function runSync(
     result.nonFiles = plan.nonFiles;
     if (plan.truncated) result.tocTruncated = true;
     const manifest = await SyncManifest.load(root);
+    // So "what is not saved yet" reads this folder's manifest too. Bookkeeping: never throws.
+    if (!dryRun) await recordSyncRoot(apiClient.origin, courseId, root);
 
     const total = plan.files.length;
     let done = 0;

@@ -25,6 +25,7 @@ import {
   registerDownloadFile,
   COURSE_FILE_NEEDS_COOKIE,
   registerDownloadCourseFiles,
+  registerGetUnsavedCourseFiles,
   registerGetClasslistEmails,
   registerGetRoster,
   registerGetMyGroups,
@@ -153,6 +154,7 @@ export function createMcpServer(runtime: ServerRuntime): McpServer {
     config.envSessionCookie ? ENV_COOKIE_REJECTED : config.envAccessToken ? COURSE_FILE_NEEDS_COOKIE : undefined,
   );
   registerDownloadCourseFiles(server, apiClient);
+  registerGetUnsavedCourseFiles(server, apiClient);
   registerGetClasslistEmails(server, apiClient);
   registerGetRoster(server, apiClient);
   registerGetMyGroups(server, apiClient);

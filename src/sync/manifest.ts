@@ -48,6 +48,8 @@ function validRelativePath(value: unknown): value is string {
 export class SyncManifest {
   private courses: Record<string, Record<string, ManifestEntry>> = {};
   private changed = false;
+  /** Set when the file exists but could not be read: "reads as empty" is then not the same as "records nothing". */
+  unreadable?: string;
   /** Course id to folded path to topic id, so a lookup by path does not scan every entry. */
   private owners = new Map<string, Map<string, number>>();
 
@@ -73,6 +75,7 @@ export class SyncManifest {
       }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        manifest.unreadable = error instanceof SyntaxError ? "it is not valid JSON" : ((error as NodeJS.ErrnoException).code ?? "it could not be opened");
         log("WARN", `Course sync: ${MANIFEST_NAME} could not be read; treating it as empty`, error);
       }
     }
@@ -81,6 +84,11 @@ export class SyncManifest {
 
   get(courseId: number, topicId: number): ManifestEntry | undefined {
     return this.courses[String(courseId)]?.[String(topicId)];
+  }
+
+  /** Every topic recorded for a course, with the entry kept for it. */
+  entries(courseId: number): Array<[number, ManifestEntry]> {
+    return Object.entries(this.courses[String(courseId)] ?? {}).map(([topicId, entry]) => [Number(topicId), entry]);
   }
 
   /** The topic a recorded path belongs to, compared the way the dedupe compares names (foldKey). */
