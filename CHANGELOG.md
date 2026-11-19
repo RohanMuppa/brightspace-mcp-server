@@ -6,6 +6,10 @@ A change that can break something a caller relied on is marked **Changed behavio
 
 Entries up to 5.2.1 were generated from the merged PR titles. Versions before 5.0.0 are in the [GitHub releases](https://github.com/RohanMuppa/brightspace-mcp-server/releases) and the git history.
 
+## 5.2.13 (2026-11-19)
+
+- fix: `get_upcoming_due_dates` now lists an assignment whose instructor set only an availability end date and no due date. It shows as `type: "assignment"` with that end date as `dueDate` and as `endDate`. Before, it was missing from the list, or showed up only as a generic "Availability Ends" calendar event when the course calendar could be read. This matches how quizzes already fall back to their end date (#460).
+
 ## 5.2.11 (2026-11-17)
 
 - fix: `get_announcements` across all courses no longer lets "couldn't read this course" pass for "no new announcements". A course whose announcements Brightspace refused or failed to return is now named in `unreadCourses` (with its name and HTTP status) and in a notice telling the agent not to report it as empty, instead of appearing only as a bare id in `pagination.unavailableCourseIds` (#456).
