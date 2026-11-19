@@ -4,6 +4,7 @@ export default defineConfig({
   test: {
     globals: true,
     environment: "node",
+    setupFiles: ["tests/setup/ledger-isolation.ts"],
     include: ["tests/**/*.test.ts"],
     coverage: {
       provider: "v8",

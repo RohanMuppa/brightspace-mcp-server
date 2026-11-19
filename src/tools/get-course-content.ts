@@ -7,7 +7,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { D2LApiClient, DEFAULT_CACHE_TTLS } from "../api/index.js";
 import { GetCourseContentSchema } from "./schemas.js";
-import { toolResponse, sanitizeError, isAuthUnavailable } from "./tool-helpers.js";
+import { toolResponse, sanitizeError, isAuthUnavailable, FIND_NEW_FILES_GUIDANCE } from "./tool-helpers.js";
 import { convertHtmlToMarkdown } from "../utils/html-converter.js";
 import { matchesModifiedSince } from "../utils/modified-since.js";
 import { log } from "../utils/logger.js";
@@ -417,7 +417,7 @@ export function registerGetCourseContent(
       title: "Get Course Content",
       annotations: { readOnlyHint: true },
       description:
-        "Fetch the content tree for a course showing modules, topics, files, and links. Use this when the user asks about course materials, lecture slides, uploaded files, content structure, or what's in a course module. Use moduleTitle to filter to a specific module at any depth (e.g. 'Labs', 'Staff', 'HW12') instead of fetching the entire tree. Do not use modifiedSince to decide whether a file exists: it filters on when the instructor last edited an item, so early-uploaded files are missed (see its description). Use maxDepth to limit recursion depth for a table-of-contents view. A module or topic that isn't currently available carries isAvailable/availabilityStatus/availabilityMessage (and startDate/endDate when known) explaining why; absence of these fields means it's available now.",
+        "Fetch the content tree for a course showing modules, topics, files, and links. Use this when the user asks about course materials, lecture slides, uploaded files, content structure, or what's in a course module. Use moduleTitle to filter to a specific module at any depth (e.g. 'Labs', 'Staff', 'HW12') instead of fetching the entire tree. Do not use modifiedSince to decide whether a file exists: it filters on when the instructor last edited an item, so early-uploaded files are missed (see its description). Use maxDepth to limit recursion depth for a table-of-contents view. A module or topic that isn't currently available carries isAvailable/availabilityStatus/availabilityMessage (and startDate/endDate when known) explaining why; absence of these fields means it's available now. " + FIND_NEW_FILES_GUIDANCE,
       inputSchema: GetCourseContentSchema,
     },
     async (args: any) => {

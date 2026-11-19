@@ -6,6 +6,10 @@ A change that can break something a caller relied on is marked **Changed behavio
 
 Entries up to 5.2.1 were generated from the merged PR titles. Versions before 5.0.0 are in the [GitHub releases](https://github.com/RohanMuppa/brightspace-mcp-server/releases) and the git history.
 
+## 5.2.15 (2026-11-19)
+
+- feat: a reliable "what don't I have yet" for a course, by Brightspace topic id instead of dates. The new `get_unsaved_course_files` tool lists the course's file topics you have not saved, treats files saved by `download_file` (into any folder, under any name) and by `download_course_files` or `sync` as saved, lists a saved file you deleted under `savedFileMissing`, and says so (`complete: false`, `stateUnreadable`, a notice) instead of returning "nothing new" when a record or the course's contents could not be read. `download_file` now records each content topic it saves to disk in `~/.brightspace-mcp/saved-topics.json`. The tool also says when records could not be trusted: a damaged ledger is set aside and reported (`stateUnreadable`, `complete: false`) until you delete the set-aside file, a sync folder or drive that is not found is not read as "not saved", and unsaved is described as "no record of saving", so a file you have from another source is not downloaded again without asking. The `get_course_content`, `download_file` and `download_course_files` descriptions now tell the agent to use it, and never to conclude a file is absent from `modifiedSince`, which cannot see a file uploaded before it was released.
+
 ## 5.2.14 (2026-11-19)
 
 - fix: `get_course_content` with `moduleTitle` now finds modules nested inside other modules, such as "HW12" inside "Homeworks". Each match comes back with its full contents and a `path`. When no title matches, a notice says so and points to `search_course`. With `modifiedSince`, each module now lists the topics the filter dropped in `hiddenByFilter` (and counts dropped sub-modules in `hiddenModulesByFilter`), and a notice and the tool description say a file uploaded early and released later is missed, so the filter must not be used to conclude a file is absent.

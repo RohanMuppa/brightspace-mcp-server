@@ -16,7 +16,7 @@ import { SyncInputError } from "./errors.js";
 /** A lock older than this is a sync that died without cleaning up. */
 export const STALE_LOCK_MS = 60 * 60 * 1000;
 
-function alive(pid: unknown): boolean {
+export function alive(pid: unknown): boolean {
   if (typeof pid !== "number" || !Number.isInteger(pid) || pid <= 0) return false;
   try {
     process.kill(pid, 0);

@@ -22,6 +22,16 @@ import {
 import { tagErrorKind, withErrorKind, type ErrorKind } from "../utils/error-kind.js";
 
 /**
+ * What an agent must do to find what is new or missing from a student's saved
+ * files. Shared by every tool description that mentions pulling or syncing,
+ * because the agent reads only tool text.
+ * Why: a file uploaded weeks before release and un-hidden later keeps its old
+ * lastModified, so a modifiedSince filter missed a homework PDF.
+ */
+export const FIND_NEW_FILES_GUIDANCE =
+  "To find what is new or missing from the student's saved files (\"pull from Brightspace\", \"what don't I have yet\"), call get_unsaved_course_files: it compares the course's content topics by topic id with what download_file and download_course_files saved, then download each listed topic with download_file (topicId). Never conclude a file is absent or not new from get_course_content's modifiedSince: an instructor can upload a file weeks before releasing it, and releasing it does not change its lastModified.";
+
+/**
  * Append an available-update notice to an already-built content array and
  * wrap it as a CallToolResult. This is the one place an update notice can
  * reach a user regardless of which tool (or which response mode within a

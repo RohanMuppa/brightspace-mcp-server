@@ -38,6 +38,9 @@ export function unchangedSinceSync(entry: ManifestEntry, stat: { size: number; m
   return entry.size !== undefined && entry.mtimeMs !== undefined && stat.size === entry.size && Math.abs(stat.mtimeMs - entry.mtimeMs) < 1;
 }
 
+/** A course or topic id as a key: digits only. */
+const ID_KEY = /^\d+$/;
+
 /** A recorded path is read back from disk, so it is checked like any other input. */
 function validRelativePath(value: unknown): value is string {
   if (typeof value !== "string" || value === "" || value.length > 4096) return false;
@@ -46,8 +49,11 @@ function validRelativePath(value: unknown): value is string {
 }
 
 export class SyncManifest {
-  private courses: Record<string, Record<string, ManifestEntry>> = {};
+  // No prototype: a course or topic key read from a file must never reach Object.prototype.
+  private courses: Record<string, Record<string, ManifestEntry>> = Object.create(null);
   private changed = false;
+  /** Set when the file exists but could not be read: "reads as empty" is then not the same as "records nothing". */
+  unreadable?: string;
   /** Course id to folded path to topic id, so a lookup by path does not scan every entry. */
   private owners = new Map<string, Map<string, number>>();
 
@@ -61,8 +67,10 @@ export class SyncManifest {
       const courses = parsed?.courses;
       if (courses && typeof courses === "object" && !Array.isArray(courses)) {
         for (const [courseId, topics] of Object.entries(courses as Record<string, unknown>)) {
-          if (!topics || typeof topics !== "object" || Array.isArray(topics)) continue;
+          // Ids are numbers: any other key ("__proto__", "constructor") is not a course.
+          if (!ID_KEY.test(courseId) || !topics || typeof topics !== "object" || Array.isArray(topics)) continue;
           for (const [topicId, entry] of Object.entries(topics as Record<string, unknown>)) {
+            if (!ID_KEY.test(topicId)) continue;
             const { path: rel, bytes, size, mtimeMs } = (entry ?? {}) as Partial<ManifestEntry>;
             if (validRelativePath(rel) && typeof bytes === "number" && Number.isFinite(bytes)) {
               const state = Number.isFinite(size) && Number.isFinite(mtimeMs) ? { size, mtimeMs } : {};
@@ -70,9 +78,13 @@ export class SyncManifest {
             }
           }
         }
+      } else {
+        // It parsed, but it is not a manifest: the sync still starts from empty, but a caller must not take it for "nothing saved".
+        manifest.unreadable = "it does not hold a course record";
       }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        manifest.unreadable = error instanceof SyntaxError ? "it is not valid JSON" : ((error as NodeJS.ErrnoException).code ?? "it could not be opened");
         log("WARN", `Course sync: ${MANIFEST_NAME} could not be read; treating it as empty`, error);
       }
     }
@@ -81,6 +93,11 @@ export class SyncManifest {
 
   get(courseId: number, topicId: number): ManifestEntry | undefined {
     return this.courses[String(courseId)]?.[String(topicId)];
+  }
+
+  /** Every topic recorded for a course, with the entry kept for it. */
+  entries(courseId: number): Array<[number, ManifestEntry]> {
+    return Object.entries(this.courses[String(courseId)] ?? {}).map(([topicId, entry]) => [Number(topicId), entry]);
   }
 
   /** The topic a recorded path belongs to, compared the way the dedupe compares names (foldKey). */

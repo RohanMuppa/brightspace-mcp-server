@@ -8,9 +8,10 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { D2LApiClient, ApiError } from "../api/index.js";
 import { DownloadFileSchema } from "./schemas.js";
-import { toolResponse, sanitizeError, errorResponse, withUpdateNotice } from "./tool-helpers.js";
+import { toolResponse, sanitizeError, errorResponse, withUpdateNotice, FIND_NEW_FILES_GUIDANCE } from "./tool-helpers.js";
 import { log } from "../utils/logger.js";
 import { checkTopicAvailability, type UnavailableTopic } from "./topic-availability.js";
+import { recordSavedTopic } from "../sync/saved-topics.js";
 // Path containment checks belong to secureStreamDownload, which disk-mode downloads
 // go through; importing it here only made it look as though this file
 // validated anything itself. Inline mode never writes to disk, so it calls
@@ -236,7 +237,9 @@ async function finishDownload(
   originalFilename: string,
   downloadPath: string | undefined,
   customFilename: string | undefined,
-  sourceLabel: string
+  sourceLabel: string,
+  /** Set for a content topic: where it lands is remembered, so a later "what is new" can tell it is saved. */
+  topic?: { origin: string; courseId: number; topicId: number }
 ): Promise<CallToolResult> {
   // Check Content-Length BEFORE reading the body (prevent memory exhaustion)
   const contentLength = parseInt(response.headers.get("Content-Length") ?? "0", 10);
@@ -280,6 +283,11 @@ async function finishDownload(
     "INFO",
     `${sourceLabel} downloaded successfully: ${result.path} (${result.size} bytes, ${result.mime})`
   );
+
+  if (topic) {
+    // Bookkeeping only: it logs its own failures and never throws, so a save that worked stays a success.
+    await recordSavedTopic({ ...topic, path: result.path, size: result.size });
+  }
 
   return toolResponse({
     mode: "disk",
@@ -338,7 +346,7 @@ export function registerDownloadFile(
     {
       title: "Download File",
       description:
-        "Download a file from course content, files linked by path inside a module description (coursePath, from get_course_content's quickLink URLs with type=coursefile), instructor assignment attachments (source: assignmentAttachment with folderId + fileId), assignment submissions, or an announcement's attachments. Use this when the user wants a file from Brightspace course content, dropbox submissions, or an announcement (newsId + fileId, from get_announcements). Two response modes: (1) INLINE (default — omit downloadPath): the file comes back directly in the tool response — extracted text for PDFs and Office documents, an image block for jpeg/png/gif/webp, or a short description for anything else — so it can be read immediately without touching any filesystem. This is the right choice in clients like Claude Desktop, whose analysis/sandbox tools cannot see a file the MCP server writes to its own host filesystem. (2) DISK (set downloadPath to an absolute path on the HOST filesystem the MCP server runs on): the file is saved there. The directory must already exist; it is not created for you. Ask the user where to save it before using disk mode — never guess a directory. After identifying the file, suggest a clean readable filename (e.g., 'Lecture 7 - Memory Management.pdf' instead of 'L07_CS251_2026SP_v2.pdf') and pass it as customFilename, or omit it to keep the original. If a content-topic download fails because the file isn't released yet, the response explains why when Brightspace's module/topic metadata supports it (not yet open, ended, locked, or hidden).",
+        "Download a file from course content, files linked by path inside a module description (coursePath, from get_course_content's quickLink URLs with type=coursefile), instructor assignment attachments (source: assignmentAttachment with folderId + fileId), assignment submissions, or an announcement's attachments. Use this when the user wants a file from Brightspace course content, dropbox submissions, or an announcement (newsId + fileId, from get_announcements). Two response modes: (1) INLINE (default — omit downloadPath): the file comes back directly in the tool response — extracted text for PDFs and Office documents, an image block for jpeg/png/gif/webp, or a short description for anything else — so it can be read immediately without touching any filesystem. This is the right choice in clients like Claude Desktop, whose analysis/sandbox tools cannot see a file the MCP server writes to its own host filesystem. (2) DISK (set downloadPath to an absolute path on the HOST filesystem the MCP server runs on): the file is saved there. The directory must already exist; it is not created for you. Ask the user where to save it before using disk mode — never guess a directory. After identifying the file, suggest a clean readable filename (e.g., 'Lecture 7 - Memory Management.pdf' instead of 'L07_CS251_2026SP_v2.pdf') and pass it as customFilename, or omit it to keep the original. If a content-topic download fails because the file isn't released yet, the response explains why when Brightspace's module/topic metadata supports it (not yet open, ended, locked, or hidden). A content topic saved with downloadPath is remembered by topic id (wherever you put it and whatever you name it), so get_unsaved_course_files can later tell what is not saved yet. " + FIND_NEW_FILES_GUIDANCE,
       inputSchema: DownloadFileSchema,
     },
     async (args: any) => {
@@ -588,7 +596,7 @@ async function downloadContentFile(
 
   const originalFilename = filename;
 
-  return finishDownload(response, originalFilename, downloadPath, customFilename, "Content file");
+  return finishDownload(response, originalFilename, downloadPath, customFilename, "Content file", { origin: apiClient.origin, courseId, topicId });
 }
 
 /**
