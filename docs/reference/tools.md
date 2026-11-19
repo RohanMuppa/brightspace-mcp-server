@@ -424,22 +424,25 @@ Tools are registered in `src/tools/index.ts`, and their input schemas are in `sr
 - Arguments:
   - `courseId` (required).
   - `moduleId` (optional). Only that module and the modules inside it.
-  - `syncFolder` (optional). An absolute path to a folder a sync ran into before the server remembered folders: its `.brightspace-sync.json` is read too.
+  - `syncFolder` (optional). An absolute path to a folder a sync ran into that the server has not synced into itself (for example before this version). Only `<folder>/.brightspace-sync.json` is read, for this call only: the folder is not remembered, so pass it on every call. It must exist, or the call is an `invalidInput` error. No file contents are ever returned.
 - It reads `/content/toc` fresh (never cached), the same table `download_course_files` plans from. It is read-only and writes nothing.
-- A topic counts as saved when the ledger (a `download_file` save) or a sync manifest (a `download_course_files` or `sync` save) records it **and** the recorded file is still on disk.
+- A topic counts as saved when the ledger (a `download_file` save) or a sync manifest (a `download_course_files` or `sync` save) records it **and** the recorded file is still on disk. "On disk" means something regular exists at the recorded path; its size is not compared.
 - Result fields:
   - `complete`: `false` when anything below could not be read or checked. Never read an empty `unsaved` as "nothing new" unless it is `true`.
   - `fileTopicCount`, `savedCount`.
+  - `unsavedNote`: one sentence on what `unsaved` means: the server has no record of saving the topic. A file the student already has from before this version, or saved another way (browser, manual copy), appears there too, so ask before downloading everything again. A listed topic may not be open yet; `download_file` says why when it can.
   - `unsaved`: file topics with no record. Each has `topicId`, `fileName`, `modulePath` and `downloadArgs` (`courseId`, `topicId`) for `download_file`.
   - `savedFileMissing`: recorded as saved, but the file is no longer at `savedTo`. Counts as not saved. Download it again.
-  - `couldNotCheck`: recorded, but the file could not be checked (a drive that is not connected). Not reported as saved or missing.
-  - `stateUnreadable`: the ledger or a manifest exists but could not be read (`source`, `where`, `reason`). The `unsaved` topics may then already be saved.
+  - `couldNotCheck`: recorded, but the file could not be checked, or the folder it was saved in is not found (a drive that is not connected, a moved folder). Not reported as saved or missing.
+  - `stateUnreadable`: something that records saves could not be read. Each has `source` (`ledger`, `manifest` or `syncFolder`), `where` and `reason`. The `unsaved` topics may then already be saved.
+    - A damaged or newer-version ledger, a manifest that is not valid JSON or has no `courses` object, or a remembered sync folder that is not found.
+    - A ledger that was damaged and set aside appears here with `lostRecords: true`. It stays until the student deletes the `saved-topics.json.corrupt-<time>` file in `~/.brightspace-mcp/`. Earlier saves are unknown until then.
   - `tocTruncated`: the table of contents was cut off at the sync's limits.
-  - `nonFileCounts`: links, embedded media, broken and other topics, which are not files.
+  - `nonFileCounts`: `link`, `media`, `broken` and `other` topics, which are not files. There is no `unavailable` count here (the tool does not read release state).
   - `notice`: what to tell the user when any of the above is set.
 - A course tree that cannot be read is an error answer (with sign-in guidance when that is the cause), never an empty list. An unknown `moduleId` is `invalidInput`.
 - `readOnlyHint` is set.
-- A file saved by hand, or by a sync before the server kept the folder, shows as unsaved until it is recorded. Download it again, or pass `syncFolder`.
+- A file saved by hand, in a browser, or by a sync before the server kept the folder, shows as unsaved. So does a file `download_course_files` skipped under `existing: skip` because it was already on disk with no manifest entry (the sync does not claim it). Pass `syncFolder` for an older sync, or download the topic once.
 
 ## People and groups
 

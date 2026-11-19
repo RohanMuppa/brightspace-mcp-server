@@ -6,7 +6,8 @@ import { registerDownloadCourseFiles } from "../../src/tools/download-course-fil
 import { registerGetCourseContent } from "../../src/tools/get-course-content.js";
 import { registerGetUnsavedCourseFiles } from "../../src/tools/get-unsaved-course-files.js";
 import { FIND_NEW_FILES_GUIDANCE } from "../../src/tools/tool-helpers.js";
-import { readSavedState, useLedgerFile } from "../../src/sync/saved-topics.js";
+import { readSavedState, recordSyncRoot, useLedgerFile } from "../../src/sync/saved-topics.js";
+import { SyncManifest } from "../../src/sync/manifest.js";
 import { ApiError } from "../../src/api/errors.js";
 import { fakeBrightspace, fileTopic, module_, pdf, tempRoot, type Fake } from "./harness.js";
 
@@ -25,6 +26,7 @@ beforeEach(async () => {
   useLedgerFile(ledger);
 });
 afterEach(async () => {
+  useLedgerFile();
   vi.restoreAllMocks();
   await fake?.close();
   await fs.rm(dir, { recursive: true, force: true });
@@ -223,5 +225,176 @@ describe("agent-facing descriptions", () => {
       expect(config.description).toContain("get_unsaved_course_files");
       expect(config.description).toMatch(/never conclude a file is absent/i);
     }
+  });
+});
+
+const syncArgs = { existing: "skip", maxFiles: 300, maxMinutes: 8, maxTotalMB: 100 };
+
+describe("a damaged ledger stays visible (review item 1)", () => {
+  it("reports the set-aside ledger as unreadable state until the student removes it", async () => {
+    fake = await fakeBrightspace(toc, bodies);
+    await saveOwnLayout(12, "mine", "HW12.pdf");
+    await fs.writeFile(ledger, "{ not json");
+    await saveOwnLayout(10, "mine", "HW11.pdf");
+
+    const result = json(await unsaved().call({ courseId: COURSE }));
+    expect(result.complete).toBe(false);
+    const aside = result.stateUnreadable.find((s: any) => s.where.includes(".corrupt-"));
+    expect(aside).toMatchObject({ source: "ledger" });
+    expect(aside.reason).toMatch(/earlier saves are unknown/i);
+    expect(result.notice).toMatch(/earlier saves are unknown/i);
+    expect(result.unsaved.map((t: any) => t.topicId)).toEqual([12]);
+
+    await fs.rm(aside.where);
+    const cleared = json(await unsaved().call({ courseId: COURSE }));
+    expect(cleared.complete).toBe(true);
+    expect(cleared.stateUnreadable).toBeUndefined();
+  });
+
+  it("leaves a ledger from a newer version alone, and reports it, without moving it aside", async () => {
+    fake = await fakeBrightspace(toc, bodies);
+    const future = JSON.stringify({ version: 2, schools: {} });
+    await fs.writeFile(ledger, future);
+    const target = path.join(dir, "out");
+    await fs.mkdir(target);
+    await downloadFile().call({ courseId: COURSE, topicId: 12, downloadPath: target });
+    expect(await fs.readFile(ledger, "utf8")).toBe(future);
+    expect((await fs.readdir(path.dirname(ledger))).filter((n) => n.includes(".corrupt-"))).toEqual([]);
+    const result = json(await unsaved().call({ courseId: COURSE }));
+    expect(result.complete).toBe(false);
+    expect(result.stateUnreadable).toEqual([expect.objectContaining({ source: "ledger", reason: expect.stringMatching(/version/) })]);
+  });
+});
+
+describe("several writers keep every entry (review item 2)", () => {
+  it("loses nothing when many independent copies of the module write at once", async () => {
+    // Each fresh import has its own in-process queue, as a separate server process would.
+    const writers: Array<typeof import("../../src/sync/saved-topics.js")> = [];
+    for (let i = 0; i < 12; i++) {
+      vi.resetModules();
+      const copy = await import("../../src/sync/saved-topics.js");
+      copy.useLedgerFile(ledger);
+      writers.push(copy);
+    }
+    await Promise.all(writers.map((w, i) => w.recordSavedTopic({ origin: ORIGIN, courseId: COURSE, topicId: 100 + i, path: path.join(dir, `f${i}.pdf`), size: i })));
+    const state = await readSavedState(ORIGIN, COURSE);
+    expect([...state.topics.keys()].sort((a, b) => a - b)).toEqual(Array.from({ length: 12 }, (_, i) => 100 + i));
+  });
+
+  it("takes over a lock left by a process that died", async () => {
+    await fs.writeFile(`${ledger}.lock`, JSON.stringify({ pid: 2 ** 22 + 12345, startedAt: Date.now(), token: "dead" }));
+    vi.resetModules();
+    const { recordSavedTopic, useLedgerFile: use } = await import("../../src/sync/saved-topics.js");
+    use(ledger);
+    await recordSavedTopic({ origin: ORIGIN, courseId: COURSE, topicId: 5, path: path.join(dir, "a.pdf"), size: 1 });
+    expect((await readSavedState(ORIGIN, COURSE)).topics.has(5)).toBe(true);
+  });
+});
+
+describe("a folder that is not there is not a deleted file (review item 3)", () => {
+  it("reports a remembered sync folder that is gone as unreadable state", async () => {
+    fake = await fakeBrightspace(toc, bodies);
+    const root = path.join(dir, "course");
+    await fs.mkdir(root);
+    await tool(registerDownloadCourseFiles as never).call({ courseId: COURSE, downloadPath: root, ...syncArgs });
+    await fs.rm(root, { recursive: true });
+    const result = json(await unsaved().call({ courseId: COURSE }));
+    expect(result.complete).toBe(false);
+    expect(result.stateUnreadable).toEqual([expect.objectContaining({ source: "syncFolder", where: expect.stringMatching(/course$/) })]);
+  });
+
+  it("refuses a syncFolder that does not exist", async () => {
+    fake = await fakeBrightspace(toc, bodies);
+    const response = await unsaved().call({ courseId: COURSE, syncFolder: path.join(dir, "nope") });
+    expect(response.isError).toBe(true);
+    expect(response.content[0].text).toMatch(/syncFolder/);
+  });
+
+  it("puts a saved file whose folder is gone in couldNotCheck, not savedFileMissing", async () => {
+    fake = await fakeBrightspace(toc, bodies);
+    await saveOwnLayout(12, "usb/ECE", "HW12.pdf");
+    await fs.rm(path.join(dir, "usb"), { recursive: true });
+    const result = json(await unsaved().call({ courseId: COURSE }));
+    expect(result.savedFileMissing).toEqual([]);
+    expect(result.couldNotCheck).toEqual([expect.objectContaining({ topicId: 12 })]);
+    expect(result.complete).toBe(false);
+  });
+});
+
+describe("keys from a file on disk cannot reach Object.prototype (review item 4)", () => {
+  it("ignores __proto__ course, topic and sync-folder keys in the ledger", async () => {
+    const entry = JSON.stringify({ path: path.join(dir, "x.pdf"), size: 1, savedAt: "2026-01-01T00:00:00Z" });
+    // JSON.stringify would drop a literal __proto__ key, so the text is written raw.
+    await fs.writeFile(ledger, `{"version":1,"schools":{"${ORIGIN}":{"courses":{"__proto__":{"7":${entry}},"${COURSE}":{"__proto__":${entry}}},"syncRoots":{"__proto__":["${dir}"]}}}}`);
+    const state = await readSavedState(ORIGIN, COURSE);
+    expect(state.unreadable).toEqual([]);
+    expect(({} as any)[7]).toBeUndefined();
+    expect(({} as any).path).toBeUndefined();
+    expect(state.topics.size).toBe(0);
+  });
+
+  it("ignores __proto__ keys in a manifest", async () => {
+    await fs.writeFile(path.join(dir, ".brightspace-sync.json"), '{"version":1,"courses":{"__proto__":{"7":{"path":"a.pdf","bytes":1}},"42":{"__proto__":{"path":"a.pdf","bytes":1}}}}');
+    const manifest = await SyncManifest.load(dir);
+    expect(({} as any)[7]).toBeUndefined();
+    expect(({} as any).path).toBeUndefined();
+    expect(manifest.entries(42)).toEqual([]);
+  });
+});
+
+describe("a manifest of the wrong shape is unreadable, not empty (review item 5)", () => {
+  it.each(["{}", "[]", "null", '{"courses":[]}', '{"courses":"x"}', '"text"'])("flags %s", async (text) => {
+    await fs.writeFile(path.join(dir, ".brightspace-sync.json"), text);
+    expect((await SyncManifest.load(dir)).unreadable).toBeTruthy();
+  });
+
+  it("does not flag an empty or missing one", async () => {
+    expect((await SyncManifest.load(dir)).unreadable).toBeUndefined();
+    await fs.writeFile(path.join(dir, ".brightspace-sync.json"), '{"version":1,"courses":{}}');
+    expect((await SyncManifest.load(dir)).unreadable).toBeUndefined();
+  });
+});
+
+describe("what the tool tells the agent (review items 7 and 8)", () => {
+  it("says what unsaved means, and carries no always-zero unavailable count", async () => {
+    fake = await fakeBrightspace(toc, bodies);
+    const { config, call } = unsaved();
+    expect(config.description).toMatch(/no record of saving/i);
+    expect(config.description).toMatch(/browser|manual copy/i);
+    expect(config.description).toMatch(/not be open yet/i);
+    const result = json(await call({ courseId: COURSE }));
+    expect(result.unsavedNote).toMatch(/no record of saving/i);
+    expect(result.unsavedNote).toMatch(/ask before downloading everything again/i);
+    expect(result.nonFileCounts).not.toHaveProperty("unavailable");
+    expect(result.nonFileCounts.link).toBe(1);
+  });
+
+  it("lists a file the sync skipped because it was already on disk, which no record claims", async () => {
+    fake = await fakeBrightspace(toc, bodies);
+    const root = path.join(dir, "course");
+    await fs.mkdir(path.join(root, "Homework"), { recursive: true });
+    await fs.writeFile(path.join(root, "Homework", "HW11.pdf"), "mine");
+    await tool(registerDownloadCourseFiles as never).call({ courseId: COURSE, downloadPath: root, ...syncArgs });
+    const result = json(await unsaved().call({ courseId: COURSE }));
+    expect(result.unsaved.map((t: any) => t.topicId)).toEqual([10]);
+    expect(result.savedCount).toBe(1);
+  });
+});
+
+describe("sync folders in the ledger (review item 10)", () => {
+  it("records no folder for a dry run", async () => {
+    fake = await fakeBrightspace(toc, bodies);
+    const root = path.join(dir, "course");
+    await fs.mkdir(root);
+    await tool(registerDownloadCourseFiles as never).call({ courseId: COURSE, downloadPath: root, dryRun: true, ...syncArgs });
+    await expect(fs.stat(ledger)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("keeps the 20 most recent folders per course", async () => {
+    for (let i = 0; i < 25; i++) await recordSyncRoot(ORIGIN, COURSE, path.join(dir, `r${i}`));
+    const roots = JSON.parse(await fs.readFile(ledger, "utf8")).schools[ORIGIN].syncRoots[String(COURSE)];
+    expect(roots).toHaveLength(20);
+    expect(roots[0]).toBe(path.join(dir, "r5"));
+    expect(roots[19]).toBe(path.join(dir, "r24"));
   });
 });

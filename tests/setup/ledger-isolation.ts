@@ -9,3 +9,7 @@ import path from "node:path";
 const home = fsSync.mkdtempSync(path.join(os.tmpdir(), "test-home-"));
 process.env.HOME = home;
 process.env.USERPROFILE = home;
+
+afterAll(() => {
+  fsSync.rmSync(home, { recursive: true, force: true });
+});

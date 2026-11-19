@@ -292,5 +292,5 @@ export const GetUnsavedCourseFilesSchema = z.object({
   moduleId: z.coerce.number().int().positive().optional()
     .describe("Only compare this module and the modules inside it. Use a module id from get_course_content."),
   syncFolder: z.string().min(1).optional()
-    .describe("Absolute path of a folder the student ran download_course_files (or the sync command) into, when it may not be known to the server yet: its .brightspace-sync.json is read too. Not needed for files saved with download_file, or for folders the server has synced into before."),
+    .describe("Absolute path of a folder the student ran download_course_files (or the sync command) into, that the server has not synced into itself: only that folder's .brightspace-sync.json is read, for this call only. It is not remembered, so pass it again on every call. It must exist. Not needed for files saved with download_file, or for folders the server synced into itself."),
 });
