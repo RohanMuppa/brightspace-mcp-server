@@ -34,8 +34,14 @@ const ASIDE_MARK = ".corrupt-";
 const MAX_SYNC_ROOTS = 20;
 
 export interface SavedTopic {
-  /** Absolute path of the file as saved. */
-  path: string;
+  /** Absolute path of the file as saved. Absent on a topic the student marked saved without naming a file. */
+  path?: string;
+  /**
+   * Set when the student said "I already have this" (mark_course_files_saved) instead of the server saving it.
+   * Without a path the server never saw a file. Kept in the same version-1 shape: an older server skips an
+   * entry that has no path (the topic reads as unsaved there), and reads one with a path like any other.
+   */
+  marked?: true;
   size: number;
   /** ISO 8601 time of the save. */
   savedAt: string;
@@ -111,10 +117,12 @@ async function readLedgerFile(file: string): Promise<LedgerFile> {
       if (!ID_KEY.test(courseId) || !isRecord(topics)) continue;
       for (const [topicId, entry] of Object.entries(topics)) {
         if (!ID_KEY.test(topicId)) continue;
-        const { path: saved, size, savedAt, lastModified } = (isRecord(entry) ? entry : {}) as Partial<SavedTopic>;
-        if (typeof saved !== "string" || !path.isAbsolute(saved) || saved.includes("\u0000")) continue;
+        const { path: saved, marked, size, savedAt, lastModified } = (isRecord(entry) ? entry : {}) as Partial<SavedTopic>;
+        const markedOnly = saved === undefined && marked === true;
+        if (!markedOnly && (typeof saved !== "string" || !path.isAbsolute(saved) || saved.includes("\u0000"))) continue;
         (record.courses[courseId] ??= bare())[topicId] = {
-          path: saved,
+          ...(markedOnly ? {} : { path: saved }),
+          ...(marked === true ? { marked: true as const } : {}),
           size: typeof size === "number" && Number.isFinite(size) ? size : 0,
           savedAt: typeof savedAt === "string" ? savedAt : "",
           ...(typeof lastModified === "string" ? { lastModified } : {}),
@@ -137,7 +145,12 @@ async function readLedgerFile(file: string): Promise<LedgerFile> {
 // drop the other's entry. Same pattern as the sync's folder lock (lock.ts): an
 // exclusive create, a random token, and a stale owner (dead process, or too
 // old) removed only by the holder of a short-lived guard file.
-const LOCK_WAIT_MS = 3000;
+let lockWaitMs = 3000;
+
+/** Change how long a writer waits for the lock (tests), or back to the default with no argument. */
+export function useLedgerLockWait(ms?: number): void {
+  lockWaitMs = ms ?? 3000;
+}
 const LOCK_POLL_MS = 20;
 /** A write takes milliseconds: a lock this old belongs to a process that died holding it. */
 const LOCK_STALE_MS = 30_000;
@@ -169,7 +182,7 @@ async function withLedgerLock<T>(file: string, work: () => Promise<T>): Promise<
   const guard = `${lock}.takeover`;
   const token = randomBytes(12).toString("hex");
   const body = JSON.stringify({ pid: process.pid, startedAt: Date.now(), token });
-  const deadline = Date.now() + LOCK_WAIT_MS;
+  const deadline = Date.now() + lockWaitMs;
 
   for (;;) {
     try {
@@ -242,13 +255,81 @@ async function update(change: (school: SchoolRecord) => void, origin: string): P
   });
 }
 
+/** Run a change under the lock and report a failure to the caller. For writes where the record is the whole point. */
+function enqueueStrict(change: (school: SchoolRecord) => void, origin: string): Promise<void> {
+  const run = queue.then(() => update(change, origin));
+  queue = run.catch(() => undefined);
+  return run;
+}
+
+/** Bookkeeping that follows a save: a failure is logged and swallowed. */
 function enqueue(change: (school: SchoolRecord) => void, origin: string, what: string): Promise<void> {
-  const run = queue.then(() => update(change, origin)).catch((error) => {
+  return enqueueStrict(change, origin).catch((error) => {
     // The topic then shows as unsaved, which errs toward downloading it again, never toward claiming it is saved.
     log("WARN", `Could not record ${what} in the saved-topic ledger; the download itself is unaffected`, error);
   });
-  queue = run;
-  return run;
+}
+
+/** Why a ledger write failed, in words for the person (no paths). */
+export function ledgerFailureReason(error: unknown): string {
+  if (error instanceof LedgerUnreadable) return `the saved-topic ledger could not be read (${error.message})`;
+  const code = (error as NodeJS.ErrnoException)?.code;
+  if (typeof code === "string") return `the saved-topic ledger could not be written (${code})`;
+  return error instanceof Error ? error.message : "the saved-topic ledger could not be written";
+}
+
+export interface MarkItem {
+  topicId: number;
+  /** Absolute path of a file that exists, checked by the caller. */
+  path?: string;
+  size?: number;
+}
+
+/**
+ * Record topics the student already has. A mark without a path never replaces an existing record that has one
+ * (those are kept and reported). Throws if the ledger cannot be written: the caller must say so.
+ */
+export async function markTopics(origin: string, courseId: number, items: MarkItem[]): Promise<{ marked: number[]; keptExisting: number[] }> {
+  const marked: number[] = [];
+  const keptExisting: number[] = [];
+  await enqueueStrict((school) => {
+    marked.length = 0;
+    keptExisting.length = 0;
+    const topics = (school.courses[String(courseId)] ??= bare());
+    for (const item of items) {
+      const existing = topics[String(item.topicId)];
+      if (item.path === undefined && existing?.path !== undefined) {
+        keptExisting.push(item.topicId);
+        continue;
+      }
+      topics[String(item.topicId)] = {
+        ...(item.path !== undefined ? { path: path.resolve(item.path) } : {}),
+        marked: true,
+        size: item.size ?? 0,
+        savedAt: new Date().toISOString(),
+      };
+      marked.push(item.topicId);
+    }
+  }, origin);
+  return { marked, keptExisting };
+}
+
+/** Forget the ledger's record of topics, whoever made it. Never touches a file. Throws if the ledger cannot be written. */
+export async function unmarkTopics(origin: string, courseId: number, topicIds: number[]): Promise<{ removed: number[]; notRecorded: number[] }> {
+  const removed: number[] = [];
+  const notRecorded: number[] = [];
+  await enqueueStrict((school) => {
+    removed.length = 0;
+    notRecorded.length = 0;
+    const topics = school.courses[String(courseId)];
+    for (const id of topicIds) {
+      if (topics && topics[String(id)] !== undefined) {
+        delete topics[String(id)];
+        removed.push(id);
+      } else notRecorded.push(id);
+    }
+  }, origin);
+  return { removed, notRecorded };
 }
 
 export interface SavedTopicRecord {
@@ -284,8 +365,11 @@ export function recordSyncRoot(origin: string, courseId: number, root: string): 
 
 /** One place a topic was recorded as saved. */
 export interface SavedCandidate {
-  path: string;
+  /** Absent for a topic marked saved without a file: the server never saw one. */
+  path?: string;
   source: "download_file" | "download_course_files";
+  /** The student said they have it (mark_course_files_saved). */
+  marked?: true;
   size?: number;
   savedAt?: string;
 }
@@ -322,7 +406,7 @@ export async function readSavedState(origin: string, courseId: number, extraRoot
   try {
     const school = (await readLedgerFile(file)).schools[origin];
     for (const [topicId, entry] of Object.entries(school?.courses[String(courseId)] ?? {})) {
-      add(Number(topicId), { path: entry.path, source: "download_file", size: entry.size, savedAt: entry.savedAt });
+      add(Number(topicId), { ...(entry.path !== undefined ? { path: entry.path } : {}), source: "download_file", ...(entry.marked ? { marked: true as const } : {}), size: entry.size, savedAt: entry.savedAt });
     }
     for (const root of school?.syncRoots[String(courseId)] ?? []) roots.add(root);
   } catch (error) {

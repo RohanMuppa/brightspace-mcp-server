@@ -100,7 +100,7 @@ Every file in the course's Content area is saved into folders named after its mo
 | `--max-files <n>` | Most files per run (default 300). Run it again to continue |
 | `--json` | Print the result as JSON on stdout, for scripts |
 
-- **What's new since last time.** Ask your assistant "what don't I have yet?" (it uses `get_unsaved_course_files`). It compares the course's files with what the server saved, by Brightspace's own id for each file, not by date, so it also finds a file your instructor uploaded earlier and released later. This works for files you saved one at a time under your own folder names and for files the sync saved. A file you saved and later deleted is listed again, and a file you got another way (a browser download, a copy you made yourself) shows as not saved, so your assistant should ask before downloading everything again. The server keeps that record in `~/.brightspace-mcp/saved-topics.json`.
+- **What's new since last time.** Ask your assistant "what don't I have yet?" (it uses `get_unsaved_course_files`). It compares the course's files with what the server saved, by Brightspace's own id for each file, not by date, so it also finds a file your instructor uploaded earlier and released later. This works for files you saved one at a time under your own folder names and for files the sync saved. A file you saved and later deleted is listed again, and a file you got another way (a browser download, a copy you made yourself) shows as not saved, so your assistant should ask before downloading everything again. If you already have some of the files, tell your assistant which ones and it records them (`mark_course_files_saved`) so they stop being listed, with no download. The server keeps that record in `~/.brightspace-mcp/saved-topics.json`.
 - The sync keeps a `.brightspace-sync.json` manifest in the folder, which is how it knows which files are its own. Only one sync runs in a folder at a time. If a crashed run left its `.brightspace-sync.lock` behind, the next run takes it over.
 - Course names are made safe for your computer, and a course can't create dotfiles such as `.zshrc` in your folder.
 - Each run is capped at 300 files and 5 GB. The assistant's version also stops cleanly after 8 minutes. Ask it again to continue. Ctrl-C stops the CLI cleanly (exit 130) with no partial file left behind.
@@ -115,7 +115,7 @@ Every tool the server registers. Each tool's arguments and response fields are i
 - **Courses and grades:** `get_my_courses`, `get_my_grades`, `get_upcoming_due_dates`, `get_calendar_events`
 - **Assignments and rubrics:** `get_assignments`, `get_assignment_rubric`, `get_assignment_files`, `get_rubrics_for_object`
 - **Announcements and discussions:** `get_announcements`, `get_announcement_files`, `get_discussions`
-- **Course content:** `get_course_content`, `search_course`, `get_syllabus`, `get_video_transcript`, `download_file`, `download_course_files`, `get_unsaved_course_files`
+- **Course content:** `get_course_content`, `search_course`, `get_syllabus`, `get_video_transcript`, `download_file`, `download_course_files`, `get_unsaved_course_files`, `mark_course_files_saved`
 - **People and groups:** `get_roster`, `get_classlist_emails`, `get_my_groups`, `get_available_groups`
 - **Dropbox (instructors and TAs):** `get_dropbox_folders`, `get_dropbox_submissions`, `get_dropbox_user_submissions`, `get_dropbox_feedback`, `download_dropbox_submission_file`
 - **Account and sign-in:** `sign_in`, `sign_out`, `get_server_info`

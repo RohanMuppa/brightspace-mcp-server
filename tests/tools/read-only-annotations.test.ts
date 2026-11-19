@@ -20,6 +20,11 @@ const WRITES_TO_DISK = new Set(["download_file", "download_course_files", "downl
  * neither read-only nor a file writer, and it says so with destructiveHint so
  * clients ask the user before running it.
  */
+/**
+ * Writes only the server's own saved-topic record (a small file in its settings folder), never a course file and
+ * never a path the caller names. Not read-only, and not destructive: unmarking forgets a record, no file.
+ */
+const WRITES_LEDGER = new Set(["mark_course_files_saved"]);
 const DESTRUCTIVE = new Set(["sign_out"]);
 /**
  * Changes sign-in state rather than reading Brightspace, so not read-only.
@@ -45,10 +50,10 @@ function registrations(): Array<{ name: string; config: string }> {
 
 describe("read-only tool annotations", () => {
   it("finds every tool the server registers", () => {
-    expect(registrations().length).toBe(30);
+    expect(registrations().length).toBe(31);
   });
 
-  it.each(registrations().filter(({ name }) => !WRITES_TO_DISK.has(name) && !DESTRUCTIVE.has(name) && !SIGNS_IN.has(name)))("marks $name read-only", ({ config }) => {
+  it.each(registrations().filter(({ name }) => !WRITES_TO_DISK.has(name) && !WRITES_LEDGER.has(name) && !DESTRUCTIVE.has(name) && !SIGNS_IN.has(name)))("marks $name read-only", ({ config }) => {
     expect(config).toContain("readOnlyHint: true");
   });
 
@@ -67,6 +72,14 @@ describe("read-only tool annotations", () => {
     const registration = registrations().find((entry) => entry.name === name);
     expect(registration).toBeDefined();
     expect(registration!.config).not.toContain("readOnlyHint: true");
+  });
+
+  it.each([...WRITES_LEDGER])("marks %s as writing, but not destructive and not a disk writer", (name) => {
+    const registration = registrations().find((entry) => entry.name === name);
+    expect(registration).toBeDefined();
+    expect(registration!.config).toContain("readOnlyHint: false");
+    expect(registration!.config).toContain("destructiveHint: false");
+    expect(WRITES_TO_DISK.has(name)).toBe(false);
   });
 
   it.each([...SIGNS_IN])("marks %s open-world, not read-only, and not destructive", (name) => {

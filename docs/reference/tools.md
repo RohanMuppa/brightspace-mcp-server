@@ -22,6 +22,7 @@ This file describes each tool the server registers: its arguments, the fields it
 | [`download_file`](#download_file) | Get one file, inline or saved to disk |
 | [`download_course_files`](#download_course_files) | Download every file of a course into a folder |
 | [`get_unsaved_course_files`](#get_unsaved_course_files) | Which file topics of a course are not saved yet, by topic id |
+| [`mark_course_files_saved`](#mark_course_files_saved) | Record files the student already has, without downloading them |
 | [`get_roster`](#get_roster) | Classlist for a course |
 | [`get_my_groups`](#get_my_groups) | Your project and discussion groups, with members |
 | [`get_available_groups`](#get_available_groups) | Groups you can still join yourself |
@@ -429,9 +430,10 @@ Tools are registered in `src/tools/index.ts`, and their input schemas are in `sr
 - A topic counts as saved when the ledger (a `download_file` save) or a sync manifest (a `download_course_files` or `sync` save) records it **and** the recorded file is still on disk. "On disk" means something regular exists at the recorded path; its size is not compared.
 - Result fields:
   - `complete`: `false` when anything below could not be read or checked. Never read an empty `unsaved` as "nothing new" unless it is `true`.
-  - `fileTopicCount`, `savedCount`.
+  - `fileTopicCount`, `savedCount`. `savedCount` includes topics marked saved.
+  - `markedSavedCount`: of `savedCount`, the topics the student marked saved with [`mark_course_files_saved`](#mark_course_files_saved) and no path. The server never checked a file for them. A notice says so.
   - `unsavedNote`: one sentence on what `unsaved` means: the server has no record of saving the topic. A file the student already has from before this version, or saved another way (browser, manual copy), appears there too, so ask before downloading everything again. A listed topic may not be open yet; `download_file` says why when it can.
-  - `unsaved`: file topics with no record. Each has `topicId`, `fileName`, `modulePath` and `downloadArgs` (`courseId`, `topicId`) for `download_file`.
+  - `unsaved`: file topics with no record. Each has `topicId`, `fileName`, `title`, `modulePath` and `downloadArgs` (`courseId`, `topicId`) for `download_file`, plus `lastModified` when the table of contents gives it. `savedFileMissing` and `couldNotCheck` entries carry `title` and `lastModified` too.
   - `savedFileMissing`: recorded as saved, but the file is no longer at `savedTo`. Counts as not saved. Download it again.
   - `couldNotCheck`: recorded, but the file could not be checked, or the folder it was saved in is not found (a drive that is not connected, a moved folder). Not reported as saved or missing.
   - `stateUnreadable`: something that records saves could not be read. Each has `source` (`ledger`, `manifest` or `syncFolder`), `where` and `reason`. The `unsaved` topics may then already be saved.
@@ -439,10 +441,33 @@ Tools are registered in `src/tools/index.ts`, and their input schemas are in `sr
     - A ledger that was damaged and set aside appears here with `lostRecords: true`. It stays until the student deletes the `saved-topics.json.corrupt-<time>` file in `~/.brightspace-mcp/`. Earlier saves are unknown until then.
   - `tocTruncated`: the table of contents was cut off at the sync's limits.
   - `nonFileCounts`: `link`, `media`, `broken` and `other` topics, which are not files. There is no `unavailable` count here (the tool does not read release state).
+  - `tableOfContents`: what the table held, so the counters can be checked.
+    - `topics`: every topic it lists. `topics` equals `fileTopicCount` plus the four `nonFileCounts`.
+    - `modules`: the modules it lists.
+    - `unreadEntries`: entries that were not objects, or a list that was not a list. They are in no counter, so `complete` is `false` when this is above 0.
+    - `topicTypes`: topics by `TypeIdentifier/TopicType` (`?` when missing), for example `Link/3`.
+    - `note`: if `get_course_content` shows more topics than `topics`, Brightspace's table of contents does not include them.
   - `notice`: what to tell the user when any of the above is set.
 - A course tree that cannot be read is an error answer (with sign-in guidance when that is the cause), never an empty list. An unknown `moduleId` is `invalidInput`.
 - `readOnlyHint` is set.
 - A file saved by hand, in a browser, or by a sync before the server kept the folder, shows as unsaved. So does a file `download_course_files` skipped under `existing: skip` because it was already on disk with no manifest entry (the sync does not claim it). Pass `syncFolder` for an older sync, or download the topic once.
+
+### mark_course_files_saved
+
+- Code: `src/tools/mark-course-files-saved.ts`. Ledger format and rules: [downloads.md](../internals/downloads.md#what-is-already-saved).
+- Use it when the student already has files that `get_unsaved_course_files` lists as unsaved (saved before this version, in a browser, or by hand), so they stop being listed without a download.
+- **It writes, but only the server's own record** (`saved-topics.json`). It never writes, moves or deletes a course file, and takes no download folder. So it is not read-only (`readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: true`).
+- Arguments (`courseId` required, then exactly one of these; naming none, or more than one, is an `invalidInput` error and writes nothing):
+  - `topics`: a list of `{ topicId, path? }`, 1 to 1000.
+    - `path` is the absolute path of the student's own copy. It must exist and be a file now, or that item is refused.
+    - Without `path`, the topic is marked saved with no file behind it.
+  - `allUnsaved: true`: marks every topic that is unsaved right now. Never a default, and the agent must ask the student first. It is refused, with nothing marked, when the saved records or the table of contents could not be read in full, because "unsaved" is then unknown.
+  - `unmarkTopicIds`: forgets the ledger's record for these topics, whoever made it. It never deletes a file. A topic saved by `download_course_files` or `sync` lives in that folder's manifest and is not affected.
+- Each item is checked against the course's current table of contents. A topic that is not a file topic, or is not in the course, or has a bad `path`, is refused with a `reason` in `refused`, and the other items still go through.
+- A topic that already has a record with a path is not downgraded by a mark without a path: it is listed in `alreadyRecorded`.
+- Result: `marked` (`topicId`, and `path` when given), `refused`, `alreadyRecorded`. Undo returns `unmarked` and `notRecorded`.
+- **A failed write is reported.** If the ledger cannot be read or written, or another process holds its lock past the wait, the answer is an error that begins "Marking failed, nothing was recorded". Unlike the bookkeeping after a download, the record is the whole point here.
+- Later, a marked topic with a `path` behaves like any recorded save (`savedFileMissing` or `couldNotCheck` if the file goes). A marked topic without one counts as saved and is shown in `markedSavedCount`.
 
 ## People and groups
 
