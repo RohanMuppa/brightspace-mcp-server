@@ -20,11 +20,12 @@ const SHA = "a".repeat(40);
 const OTHER_SHA = "b".repeat(40);
 
 /**
- * A fake npm registry in a folder, with `npm` and `curl` stubs in front of it
- * on PATH. Files hold the state: `versions` (one per line), `tag.<name>`,
- * `githead`. Files named in `knobs` switch on a failure:
- *   refuse-dist-tag   `npm dist-tag add` and `rm` are refused
- *   refuse-rm         only `npm dist-tag rm` is refused
+ * A fake npm registry and git remote in a folder, with `npm`, `curl` and `git`
+ * stubs in front of them on PATH. Files hold the state: `versions` (one per
+ * line), `tag.<name>`, `githead`, `git-tags` (one per line). Files named in
+ * `knobs` switch on a failure:
+ *   refuse-dist-tag   `npm dist-tag add` is refused
+ *   git-broken        `git ls-remote` fails
  *   swallow-dist-tag  `npm dist-tag add` succeeds but the tag never shows
  *   view-broken       `npm view` fails with something other than E404
  *   tarball-code      the status the tarball URL answers (default 200)
@@ -78,6 +79,16 @@ case "$*" in
 esac
 `;
 
+// Only what the script asks git: `git ls-remote --tags origin refs/tags/<tag>`.
+const FAKE_GIT = `#!/bin/sh
+S="$FAKE_STATE"
+[ "$1" = "ls-remote" ] || { echo "fake git: unexpected $*" >&2; exit 2; }
+[ -f "$S/git-broken" ] && { echo "fatal: unable to access the remote" >&2; exit 128; }
+for last; do :; done
+grep -qx "\${last#refs/tags/}" "$S/git-tags" 2>/dev/null && echo "${"c".repeat(40)} $last"
+exit 0
+`;
+
 interface Registry {
   /** Versions npm has, oldest first. */
   versions?: string[];
@@ -85,6 +96,8 @@ interface Registry {
   staged?: string;
   /** The commit npm recorded for the version in package.json. */
   gitHead?: string;
+  /** Tags the repository has, like `v5.2.18`. */
+  gitTags?: string[];
   knobs?: Record<string, string>;
 }
 
@@ -102,11 +115,13 @@ function fakeRegistry(registry: Registry) {
   fs.mkdirSync(bin);
   fs.writeFileSync(path.join(bin, "npm"), FAKE_NPM, { mode: 0o755 });
   fs.writeFileSync(path.join(bin, "curl"), FAKE_CURL, { mode: 0o755 });
+  fs.writeFileSync(path.join(bin, "git"), FAKE_GIT, { mode: 0o755 });
   const put = (file: string, value: string) => fs.writeFileSync(path.join(state, file), `${value}\n`);
   if (registry.versions?.length) put("versions", registry.versions.join("\n"));
   if (registry.latest) put("tag.latest", registry.latest);
   if (registry.staged) put("tag.staged", registry.staged);
   if (registry.gitHead) put("githead", registry.gitHead);
+  if (registry.gitTags?.length) put("git-tags", registry.gitTags.join("\n"));
   for (const [knob, value] of Object.entries(registry.knobs ?? {})) put(knob, value);
 
   const tag = (name: string) => {
@@ -151,12 +166,14 @@ function fakeRegistry(registry: Registry) {
     };
   };
 
-  return { run, tag, knob: (name: string, value = "1") => put(name, value), unknob: (name: string) => fs.rmSync(path.join(state, name), { force: true }) };
+  /** What the github-release job does after a run that reported published=true. */
+  const createReleaseTag = (version: string) => fs.appendFileSync(path.join(state, "git-tags"), `v${version}\n`);
+
+  return { run, tag, createReleaseTag, knob: (name: string, value = "1") => put(name, value), unknob: (name: string) => fs.rmSync(path.join(state, name), { force: true }) };
 }
 
 const PUBLISH_STAGED = "npm publish --provenance --access public --tag staged";
 const PROMOTE = (version: string) => `npm dist-tag add ${NAME}@${version} latest`;
-const UNSTAGE = `npm dist-tag rm ${NAME} staged`;
 
 describe("publish workflow", () => {
   it("runs one publish at a time and never cancels one in progress", () => {
@@ -190,11 +207,13 @@ describe("npm-release.sh", () => {
     const staged = /^STAGED_TAG=(\S+)$/m.exec(release)?.[1];
     expect(staged).toBeTruthy();
     expect(["latest", "next"]).not.toContain(staged);
+    // The NPM_TOKEN secret may not delete a dist-tag (403 on 5.2.20), so nothing may depend on it.
+    expect(release).not.toMatch(/dist-tag rm/);
   });
 
   it("names the command that promotes by hand in every failure", () => {
     expect(release).toContain('PROMOTE_BY_HAND="npm dist-tag add $NAME@$CURRENT latest"');
-    const errors = release.split("\n").filter((line) => line.includes("::error::") && !line.includes("npm view $1"));
+    const errors = release.split("\n").filter((line) => line.includes("::error::") && !/npm view \$1|Could not ask the repository/.test(line));
     expect(errors).toHaveLength(3);
     for (const line of errors) expect(line).toContain("$PROMOTE_BY_HAND");
   });
@@ -277,17 +296,21 @@ describe("npm-release.sh", () => {
 
   // Each case runs the real script against a fake registry: no network.
   describe.runIf(canRun)("what it does to npm", () => {
-    const released = { versions: ["5.2.18"], latest: "5.2.18" };
+    const released = { versions: ["5.2.18"], latest: "5.2.18", staged: "5.2.18", gitTags: ["v5.2.18"] };
+    /** 5.2.19 is on npm, published from `gitHead`, and no run has created its tag yet. */
+    const untagged = (latest: string, gitHead: string, extra: string[] = []) =>
+      ({ versions: ["5.2.18", "5.2.19", ...extra], latest, staged: extra.at(-1) ?? "5.2.19", gitHead, gitTags: ["v5.2.18"] });
 
-    it("publishes a new stable version as staged, waits for the tarball, then moves latest and drops staged", () => {
+    it("publishes a new stable version as staged, waits for the tarball, then moves latest and leaves staged on it", () => {
       const npm = fakeRegistry(released);
       const result = npm.run("5.2.19");
       expect(result.status).toBe(0);
-      expect(result.writes).toEqual([PUBLISH_STAGED, PROMOTE("5.2.19"), UNSTAGE]);
+      expect(result.writes).toEqual([PUBLISH_STAGED, PROMOTE("5.2.19")]);
       expect(result.text).toContain("npm serves some-pkg@5.2.19 and its tarball");
+      expect(result.text).not.toContain("::warning::");
       expect(result).toMatchObject({ published: "true", version: "5.2.19" });
       expect(npm.tag("latest")).toBe("5.2.19");
-      expect(npm.tag("staged")).toBeUndefined();
+      expect(npm.tag("staged")).toBe("5.2.19");
     });
 
     it("leaves latest alone and fails, naming the state and the command, when the tarball never downloads", () => {
@@ -310,7 +333,7 @@ describe("npm-release.sh", () => {
       npm.knob("tarball-code", "200");
       const rerun = npm.run("5.2.19");
       expect(rerun.status).toBe(0);
-      expect(rerun.writes).toEqual([PROMOTE("5.2.19"), UNSTAGE]);
+      expect(rerun.writes).toEqual([PROMOTE("5.2.19")]);
       expect(rerun.published).toBe("true");
       expect(npm.tag("latest")).toBe("5.2.19");
     });
@@ -328,41 +351,77 @@ describe("npm-release.sh", () => {
       expect(result.text).toContain(PROMOTE("5.2.19"));
     });
 
-    it("finishes the release on a re-run after latest was moved by hand, even if staged cannot be removed", () => {
-      const npm = fakeRegistry({ versions: ["5.2.18", "5.2.19"], latest: "5.2.19", staged: "5.2.19", gitHead: SHA, knobs: { "refuse-dist-tag": "1" } });
+    it("finishes the release on a re-run when the version is latest but its tag does not exist yet", () => {
+      // `latest` was moved by hand, or an earlier run stopped right after moving it.
+      const npm = fakeRegistry(untagged("5.2.19", SHA));
       const result = npm.run("5.2.19");
       expect(result.status).toBe(0);
-      expect(result.writes).toEqual([UNSTAGE]);
+      expect(result.writes).toEqual([]);
       expect(result.published).toBe("true");
-      expect(result.text).toContain("::warning::");
-      expect(result.text).toContain(UNSTAGE);
+      expect(result.text).toContain("has no tag v5.2.19: finishing its release");
     });
 
-    it("skips a version whose release is finished: latest, and no staged tag", () => {
-      const npm = fakeRegistry(released);
+    it("skips a version that is latest and tagged, wherever staged sits", () => {
+      // After every release `staged` stays on the released version: it is not a marker.
+      for (const staged of ["5.2.18", undefined]) {
+        const npm = fakeRegistry({ ...released, staged, gitHead: SHA });
+        const result = npm.run("5.2.18");
+        expect(result.status).toBe(0);
+        expect(result.writes).toEqual([]);
+        expect(result.published).toBe("false");
+        expect(result.text).not.toContain("::warning::");
+      }
+    });
+
+    it("skips, without a warning, a later push that did not change a released version", () => {
+      const npm = fakeRegistry({ ...released, gitHead: OTHER_SHA });
       const result = npm.run("5.2.18");
       expect(result.status).toBe(0);
-      expect(result.writes).toEqual([]);
       expect(result.published).toBe("false");
+      expect(result.text).not.toContain("::warning::");
     });
 
     it("skips a full re-run of a release it already finished", () => {
       const npm = fakeRegistry(released);
       expect(npm.run("5.2.19").published).toBe("true");
+      npm.createReleaseTag("5.2.19");
       const rerun = npm.run("5.2.19");
+      expect(rerun.status).toBe(0);
       expect(rerun.writes).toEqual([]);
       expect(rerun.published).toBe("false");
     });
 
+    it("fails, and does not read it as no tag, when the repository cannot be asked for the tag", () => {
+      for (const registry of [untagged("5.2.19", SHA), { ...released, versions: ["5.2.18", "5.2.19"], latest: "5.2.19", gitTags: ["v5.2.18", "v5.2.19"] }]) {
+        const npm = fakeRegistry({ ...registry, knobs: { "git-broken": "1" } });
+        const result = npm.run("5.2.19");
+        expect(result.status).toBe(1);
+        expect(result.writes).toEqual([]);
+        expect(result.published).toBeUndefined();
+        expect(result.text).toContain("::error::Could not ask the repository whether the tag v5.2.19 exists");
+      }
+    });
+
     it("neither publishes nor promotes a version older than latest", () => {
       for (const versions of [["5.2.18", "5.2.19"], ["5.2.19"]]) {
-        const npm = fakeRegistry({ versions, latest: "5.2.19", gitHead: SHA });
+        const npm = fakeRegistry({ versions, latest: "5.2.19", staged: "5.2.19", gitHead: OTHER_SHA, gitTags: ["v5.2.18", "v5.2.19"] });
         const result = npm.run("5.2.18");
         expect(result.status).toBe(0);
         expect(result.writes).toEqual([]);
         expect(result.published).toBe("false");
+        expect(result.text).not.toContain("::warning::");
         expect(npm.tag("latest")).toBe("5.2.19");
       }
+    });
+
+    it("warns, and changes nothing, when its unfinished release was overtaken by a newer latest", () => {
+      const npm = fakeRegistry(untagged("5.2.20", SHA, ["5.2.20"]));
+      const result = npm.run("5.2.19");
+      expect(result.status).toBe(0);
+      expect(result.writes).toEqual([]);
+      expect(result.published).toBe("false");
+      expect(result.text).toContain("::warning::some-pkg@5.2.19 was published but its release was never finished");
+      expect(result.text).toContain("`latest` is now 5.2.20");
     });
 
     it("does not move latest backwards when a newer version became latest during the wait", () => {
@@ -375,34 +434,21 @@ describe("npm-release.sh", () => {
       expect(result.text).toContain("::warning::some-pkg@5.2.19 was not promoted");
     });
 
-    it("fails without dropping staged when npm accepts the move but never shows it, and a re-run recovers", () => {
+    it("fails when npm accepts the move but never shows it, and a re-run recovers", () => {
       const npm = fakeRegistry({ ...released, knobs: { "swallow-dist-tag": "1" } });
       const result = npm.run("5.2.19");
       expect(result.status).toBe(1);
       expect(result.writes).toEqual([PUBLISH_STAGED, PROMOTE("5.2.19")]);
       expect(result.published).toBeUndefined();
-      expect(npm.tag("staged")).toBe("5.2.19");
       expect(result.text).toContain("::error::npm accepted the move");
       npm.unknob("swallow-dist-tag");
       const rerun = npm.run("5.2.19");
-      expect(rerun.writes).toEqual([PROMOTE("5.2.19"), UNSTAGE]);
+      expect(rerun.writes).toEqual([PROMOTE("5.2.19")]);
       expect(rerun.published).toBe("true");
     });
 
-    it("does not fail the release when only removing staged fails", () => {
-      const npm = fakeRegistry({ ...released, knobs: { "refuse-rm": "1" } });
-      const result = npm.run("5.2.19");
-      expect(result.status).toBe(0);
-      expect(result.published).toBe("true");
-      expect(npm.tag("latest")).toBe("5.2.19");
-      expect(result.text).toContain("::warning::");
-      expect(result.text).toContain(UNSTAGE);
-    });
-
     it("leaves an unfinished release to the run of the commit it was published from", () => {
-      const stuck = fakeRegistry({ versions: ["5.2.18", "5.2.19"], latest: "5.2.18", staged: "5.2.19", gitHead: OTHER_SHA });
-      const handPromoted = fakeRegistry({ versions: ["5.2.18", "5.2.19"], latest: "5.2.19", staged: "5.2.19", gitHead: OTHER_SHA });
-      for (const npm of [stuck, handPromoted]) {
+      for (const npm of [fakeRegistry(untagged("5.2.18", OTHER_SHA)), fakeRegistry(untagged("5.2.19", OTHER_SHA))]) {
         const result = npm.run("5.2.19");
         expect(result.status).toBe(0);
         expect(result.writes).toEqual([]);
