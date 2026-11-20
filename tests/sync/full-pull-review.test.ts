@@ -381,3 +381,88 @@ describe("L1 to L3", () => {
     expect(ApiError).toBeDefined();
   });
 });
+
+describe("M8: Content keeps its names, the extras take the first free root", () => {
+  const module_ = (title: string, topics: unknown[]) => ({ ModuleId: 1, Title: title, Topics: topics, Modules: [] });
+  const toc = (...topics: unknown[]) => ({ Modules: [module_("Assignments", topics)], Topics: [] });
+
+  it("an existing sync with a module named Assignments keeps its files there when the option is turned on later", async () => {
+    await start({ ...essay(), toc: toc(fileTopic(10, url("Intro.pdf"))), topics: { 10: ok("a"), 11: ok("b") } });
+    const first = await sync({ includeSubmissions: false });
+    expect(await listTree(root)).toEqual(["Assignments/", "Assignments/Intro.pdf"]);
+    expect(first.assignments).toBeUndefined();
+
+    // The module gains a file, and the extras are turned on.
+    fake!.client.get.mockImplementation(async (p: string, options?: unknown) => {
+      if (p.endsWith("/content/toc")) return toc(fileTopic(10, url("Intro.pdf")), fileTopic(11, url("More.pdf")));
+      if (p in extras.routes) return extras.routes[p];
+      throw new ApiError(404, p, "not found");
+    });
+    const second = await sync({ includeSubmissions: true });
+    const tree = await listTree(root);
+    expect(tree).toContain("Assignments/Intro.pdf");
+    expect(tree).toContain("Assignments/More.pdf");
+    expect(tree).toContain("Assignments (2)/Essay 2/feedback.md");
+    expect(tree).not.toContain("Assignments (2)/Intro.pdf");
+    expect(second.assignments?.folder).toBe("Assignments (2)");
+    expect(summarizeSync(second)).toContain('Saved in the folder "Assignments (2)"');
+  });
+
+  it("the chosen root is recorded, so it stays the same on the next run", async () => {
+    await start({ ...essay(), toc: toc(fileTopic(10, url("Intro.pdf"))), topics: { 10: ok("a") } });
+    await sync();
+    // The module is gone from the course now: the recorded root still stands.
+    fake!.client.get.mockImplementation(async (p: string) => {
+      if (p.endsWith("/content/toc")) return { Modules: [], Topics: [] };
+      if (p in extras.routes) return extras.routes[p];
+      throw new ApiError(404, p, "not found");
+    });
+    const second = await sync();
+    expect(second.assignments?.folder).toBe("Assignments (2)");
+    expect(second.assignments?.feedbackUnchanged).toBe(1);
+    const manifest = JSON.parse(await fs.readFile(path.join(root, ".brightspace-sync.json"), "utf8"));
+    expect(manifest.extras["42"].assignmentsRoot).toBe("Assignments (2)");
+  });
+
+  it("without a clash the roots are plain Assignments and Announcements", async () => {
+    const result = await run(essay(), { includeAnnouncementFiles: true });
+    expect([result.assignments?.folder, result.announcements?.folder]).toEqual(["Assignments", "Announcements"]);
+  });
+
+  it("a Content module named Announcements pushes only the announcements root aside", async () => {
+    const result = await run({ ...essay(), toc: { Modules: [{ ModuleId: 2, Title: "Announcements", Topics: [fileTopic(10, url("A.pdf"))], Modules: [] }], Topics: [] }, topics: { 10: ok("a") } }, { includeAnnouncementFiles: true });
+    expect([result.assignments?.folder, result.announcements?.folder]).toEqual(["Assignments", "Announcements (2)"]);
+    const tree = await listTree(root);
+    expect(tree).toContain("Announcements/A.pdf");
+    expect(tree).toContain("Announcements (2)/2026-10-01 Slides/Slides.pdf");
+  });
+});
+
+describe("M7: extras names fit the path budget", () => {
+  it("shortens folder and file names instead of failing", async () => {
+    const budget = 0 + 70;
+    const long = "A".repeat(200);
+    const setup = essay({
+      [FOLDERS]: [folder(5, long, { Attachments: [{ FileId: 21, FileName: `${"P".repeat(200)}.pdf` }] })],
+      [subsRoute(5)]: [submission(3, [{ FileId: 11, FileName: `${"F".repeat(200)}.docx` }])],
+      [NEWS]: [news(8, "T".repeat(200), [{ FileId: 41, FileName: `${"S".repeat(200)}.pdf` }])],
+    });
+    await start(setup);
+    const real = await fs.realpath(root);
+    const limit = real.length + budget;
+    const result = await sync({ ...all, pathBudget: limit });
+    expect(result.failed).toEqual([]);
+    const files = (await listTree(root)).filter((e) => !e.endsWith("/"));
+    expect(files.filter((f) => f.endsWith(".docx") || f.endsWith(".pdf") || f.endsWith("feedback.md"))).toHaveLength(5);
+    for (const rel of files) expect(real.length + 1 + rel.length).toBeLessThanOrEqual(limit);
+    expect(files.some((f) => f.endsWith(".pdf") && f.includes("assignment files"))).toBe(true);
+    // The extension survives the shortening.
+    expect(files.filter((f) => f.includes("my files")).every((f) => f.endsWith(".docx"))).toBe(true);
+  });
+
+  it("a budget too small for any name still fails per file, naming the path", async () => {
+    const result = await run(essay(), { pathBudget: (await fs.realpath(root)).length + 12 });
+    expect(result.failed.length).toBeGreaterThan(0);
+    expect(result.failed[0].error).toMatch(/too long/);
+  });
+});

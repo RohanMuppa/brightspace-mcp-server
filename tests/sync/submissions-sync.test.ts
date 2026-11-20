@@ -132,12 +132,12 @@ describe("full course pull: assignments", () => {
     expect(fake!.rawRequests).toEqual([]);
   });
 
-  it("renames a Content module called Assignments instead of colliding, only when the option is on", async () => {
+  it("never renames a Content module called Assignments: the extras take Assignments (2)", async () => {
     const toc = { Modules: [module_(1, "Assignments", [fileTopic(10, url("Intro.pdf"))])], Topics: [] };
     await run({ ...essay(), toc, topics: { 10: ok("c") } });
     const tree = await listTree(root);
-    expect(tree).toContain("Assignments (2)/Intro.pdf");
-    expect(tree).toContain("Assignments/Essay 2/feedback.md");
+    expect(tree).toContain("Assignments/Intro.pdf");
+    expect(tree).toContain("Assignments (2)/Essay 2/feedback.md");
     await fs.rm(root, { recursive: true });
     await fs.mkdir(root);
     await fake?.close();
