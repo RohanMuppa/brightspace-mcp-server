@@ -466,3 +466,53 @@ describe("M7: extras names fit the path budget", () => {
     expect(result.failed[0].error).toMatch(/too long/);
   });
 });
+
+describe("a folder made by 5.2.21 re-syncs without loss", () => {
+  const withModule = (title: string) => ({ Modules: [{ ModuleId: 1, Title: title, Topics: [fileTopic(10, url("Intro.pdf"))], Modules: [] }], Topics: [] });
+
+  it("re-downloads nothing, moves nothing and still owns the extras", async () => {
+    // 5.2.21 saved the module called "Assignments" as "Assignments (2)" and put the extras in "Assignments", with no recorded root.
+    await start({ ...essay(), toc: withModule("Assignments (2)"), topics: { 10: ok("a") } });
+    await sync();
+    const file = path.join(root, ".brightspace-sync.json");
+    const parsed = JSON.parse(await fs.readFile(file, "utf8"));
+    delete parsed.extras["42"].assignmentsRoot;
+    delete parsed.extras["42"].announcementsRoot;
+    await fs.writeFile(file, JSON.stringify(parsed));
+    const before = await listTree(root);
+    const mdBefore = await read(mdPath);
+    const mtime = (await fs.stat(path.join(root, ...mdPath.split("/")))).mtimeMs;
+
+    // 5.2.22 plans the same module as "Assignments".
+    fake!.client.get.mockImplementation(async (p: string) => {
+      if (p.endsWith("/content/toc")) return withModule("Assignments");
+      if (p in extras.routes) return extras.routes[p];
+      throw new ApiError(404, p, "not found");
+    });
+    const result = await sync({ existing: "skip" });
+    expect(result.downloaded).toEqual([]);
+    expect(result.failed).toEqual([]);
+    expect(await listTree(root)).toEqual(before);
+    expect(before).toContain("Assignments (2)/Intro.pdf");
+    expect(before).not.toContain("Assignments/Intro.pdf");
+    expect(result.assignments).toMatchObject({ folder: "Assignments", feedbackUnchanged: 1, feedbackWritten: 0, unknown: [] });
+    expect(await read(mdPath)).toBe(mdBefore);
+    expect((await fs.stat(path.join(root, ...mdPath.split("/")))).mtimeMs).toBe(mtime);
+    const after = JSON.parse(await fs.readFile(file, "utf8"));
+    expect(after.extras["42"].assignmentsRoot).toBe("Assignments");
+    expect(Object.keys(after.extras["42"].assignments["5"].files).sort()).toEqual(["fb:31", "sub:3:11"]);
+  });
+
+  it("a later graded run still refreshes that feedback.md", async () => {
+    await start({ ...essay() });
+    await sync();
+    const file = path.join(root, ".brightspace-sync.json");
+    const parsed = JSON.parse(await fs.readFile(file, "utf8"));
+    delete parsed.extras["42"].assignmentsRoot;
+    await fs.writeFile(file, JSON.stringify(parsed));
+    extras.routes[fbRoute(5)] = { IsGraded: true, Score: 19, Feedback: { Text: "Regraded.", Html: "" }, Files: [] };
+    const result = await sync();
+    expect(result.assignments?.feedbackRefreshed).toBe(1);
+    expect(await read(mdPath)).toContain("- Score: 19 / 20");
+  });
+});
