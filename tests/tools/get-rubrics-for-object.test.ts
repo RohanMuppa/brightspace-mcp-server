@@ -107,4 +107,86 @@ describe("get_rubrics_for_object", () => {
     expect(parsed.rubrics).toEqual([]);
     expect(parsed.note).toContain("999");
   });
+
+  // The documented Valence shape: CriteriaGroups with shared Levels and per-criterion Cells (#458).
+  it("reads the documented CriteriaGroups/Cells rubric shape", async () => {
+    const { call } = setup(() => [{
+      Id: FOLDER_ID,
+      Name: "HW 1",
+      Assessment: {
+        ScoreDenominator: 10,
+        Rubrics: [{
+          RubricId: 9,
+          Name: "Essay rubric",
+          CriteriaGroups: [{
+            Name: "Writing",
+            Levels: [{ Id: 71, Name: "Excellent", Points: 5 }, { Id: 72, Name: "Weak", Points: 1 }],
+            Criteria: [{
+              Id: 81,
+              Name: "Clarity",
+              Cells: [
+                { LevelId: 71, Points: 5, Description: { Text: "", Html: "<p>Very <b>clear</b>.</p>" } },
+                { LevelId: 72, Points: null, Description: { Text: "Hard to follow.", Html: "" } },
+              ],
+            }],
+          }],
+        }],
+      },
+    }]);
+    const result = await call({ courseId: COURSE_ID, folderId: FOLDER_ID });
+
+    expect(result.isError).toBeUndefined();
+    expect(result.content).toHaveLength(1);
+    const parsed = body(result);
+    expect(parsed.rubrics[0].criteriaUnavailable).toBeUndefined();
+    expect(parsed.rubrics[0].criteria).toEqual([{
+      criterionId: 81,
+      name: "Clarity",
+      group: "Writing",
+      levels: [
+        { levelId: 71, name: "Excellent", points: 5, description: expect.stringContaining("clear") },
+        { levelId: 72, name: "Weak", points: 1, description: "Hard to follow." },
+      ],
+    }]);
+  });
+
+  it("matches cells to the group's levels by position when a cell has no LevelId", async () => {
+    const { call } = setup(() => [{
+      Id: FOLDER_ID,
+      Name: "HW 1",
+      Assessment: {
+        ScoreDenominator: 10,
+        Rubrics: [{
+          RubricId: 9,
+          Name: "Essay rubric",
+          CriteriaGroups: [{
+            Levels: [{ Id: 71, Name: "Excellent", Points: 5 }, { Id: 72, Name: "Weak", Points: 1 }],
+            Criteria: [{ Id: 81, Name: "Clarity", Cells: [{ Points: 5 }, { Points: 1 }] }],
+          }],
+        }],
+      },
+    }]);
+    const parsed = body(await call({ courseId: COURSE_ID, folderId: FOLDER_ID }));
+
+    expect(parsed.rubrics[0].criteria[0].group).toBeUndefined();
+    expect(parsed.rubrics[0].criteria[0].levels.map((l: any) => [l.levelId, l.name])).toEqual([
+      [71, "Excellent"],
+      [72, "Weak"],
+    ]);
+  });
+
+  it("flags a rubric listed without criteria instead of returning it as empty", async () => {
+    const { call } = setup(() => [{
+      Id: FOLDER_ID,
+      Name: "HW 1",
+      Assessment: { ScoreDenominator: 10, Rubrics: [{ RubricId: 9, Name: "Lab rubric" }] },
+    }]);
+    const result = await call({ courseId: COURSE_ID, folderId: FOLDER_ID });
+
+    const parsed = body(result);
+    expect(parsed.rubrics[0]).toMatchObject({ rubricId: 9, criteria: [], criteriaUnavailable: true });
+    const notice = result.content[1].text;
+    expect(notice).toContain("Lab rubric");
+    expect(notice).toContain("get_assignment_rubric");
+  });
 });

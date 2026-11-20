@@ -201,6 +201,10 @@ Tools are registered in `src/tools/index.ts`, and their input schemas are in `sr
 - Code: `src/tools/get-rubrics-for-object.ts`.
 - Arguments: `courseId` and `folderId`.
 - Returns the full rubric table for a dropbox folder: criteria, levels and points.
+- Each rubric has `rubricId`, `name` and `criteria`. Each criterion has `criterionId`, `name`, `levels` (`levelId`, `name`, `points`, `description`), and `group` when it sits in a named criteria group.
+- Reads both rubric shapes Brightspace sends: the documented one (`CriteriaGroups` with shared `Levels` and per-criterion `Cells`) and a flattened one (`Criteria` with their own `Levels`). A cell without `LevelId` is matched to the group's levels by position.
+  - **Why:** only the flattened shape was read, so the documented one came back as `criteria: []` (#458).
+- A rubric the folder listing names without criteria in either shape has `criteria: []` and `criteriaUnavailable: true`, plus a notice telling the agent not to call it empty and to use `get_assignment_rubric` instead.
 - Read-only.
 - A 404 on the folder listing returns `rubrics: []`, `folderName: null` and a note.
 - Gating: see [Instructor and TA access](#instructor-and-ta-access).
