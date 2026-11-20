@@ -6,6 +6,10 @@ A change that can break something a caller relied on is marked **Changed behavio
 
 Entries up to 5.2.1 were generated from the merged PR titles. Versions before 5.0.0 are in the [GitHub releases](https://github.com/RohanMuppa/brightspace-mcp-server/releases) and the git history.
 
+## 5.2.23 (2026-11-19)
+
+- fix: on Windows, starting the shared runtime no longer fails or hangs for 30 seconds when antivirus or another chat briefly has its address file open. It retries, and if the file still cannot be written the chat now says why straight away.
+
 ## 5.2.22 (2026-11-19)
 
 - fix: the whole-course options now say when they did not run (a stopped run, or a reached file cap, is "not checked", never "0 assignments"), treat a missing file list or a failed feedback lookup as unknown instead of none, stop reading further assignments once a cap is hit, never move existing Content (a module that would share the extras folder's name is saved under the next free name), fit extra names inside the Windows path limit, keep `feedback.md` text inert (no live links or images), and refresh `feedback.md` in place in every `existing` mode unless you edited it. A sync folder made by 5.2.21 with the options on keeps working: its assignment and announcement files are still recognised, so `feedback.md` is still refreshed and nothing is downloaded twice. `download_course_files` also accepts `everything`, the include options and `dryRun` sent as the text "true" or "false", which some clients do when they have an older tool list cached.

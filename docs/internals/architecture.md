@@ -29,6 +29,9 @@ AI app ──stdio──▶ relay (src/runtime-relay.ts)
 ```
 
 - **The relay and the runtime are separate processes.** Every chat window starts its own relay, and they all share one runtime, so closing one chat never interrupts another. Details for users: [docs/shared-server.md](../shared-server.md).
+- **The runtime publishes its address with `writeFileAtomic`.** `state.json` is written to a temp file and renamed over, retrying EPERM/EBUSY/EACCES. A publish that still fails stops the start with the reason.
+  - **Why:** a relay polls `state.json` every 50 ms, and on Windows a rename over a file another process has open can fail. The bare rename threw, the runtime exited, and the relay waited out its 30 s start timeout (Windows CI timeout, 2026-11-19, PR #474). Not reproduced locally; the cause is read from the code.
+- **A relay that cannot read `state.json` looks again.** `readRuntimeAddress` re-reads a locked or half-parsed file a few times before treating it as unreadable; a missing file is "no runtime yet". **Why:** the same replace race, seen from the reader (PR #474).
 - **Nothing signs in at startup.** `lp()` and `le()` in the API client return a path with a `{lp}` or `{le}` placeholder. `get()` and `getRaw()` fill it in on the first request, which is when API versions are discovered and sign-in happens.
 - **Sign-in runs in a child process** so a tool call can return within a client's timeout while the sign-in carries on, and so several server processes can share one sign-in. How that works, and every rule it obeys, is in [sign-in.md](sign-in.md).
 - **Tokens are re-minted without a browser** from the saved session cookie (`src/auth/token-manager.ts`, `src/auth/token-mint.ts`). A browser is needed only when that session has ended.
