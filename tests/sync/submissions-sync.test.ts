@@ -404,7 +404,7 @@ describe("full course pull: feedback.md refresh and reruns", () => {
     expect(result2.assignments?.feedbackEditedNotRefreshed).toBe(1);
   });
 
-  it("leaves a file that is on disk with no manifest record alone, as the student's own", async () => {
+  it("after an older server dropped the extras, what is on disk is left alone and the new run uses a free folder", async () => {
     await run(essay(), { includeAssignmentFiles: true });
     // What an older server does: it rewrites the manifest without the extras key.
     const file = path.join(root, ".brightspace-sync.json");
@@ -414,10 +414,10 @@ describe("full course pull: feedback.md refresh and reruns", () => {
     const result = await again((e) => {
       e.routes[fbRoute(5)] = { IsGraded: true, Score: 1, Feedback: { Text: "Different.", Html: "" } };
     }, { includeAssignmentFiles: true });
+    // Nothing recorded the root, and "Assignments" is already on disk, so the extras go to the next free name; the old folder is untouched.
     expect(await read(mdPath)).toBe(before);
-    expect(result.downloaded).toEqual([]);
+    expect(result.assignments?.folder).toBe("Assignments (2)");
     expect(result.failed).toEqual([]);
-    expect(result.assignments?.feedbackWritten).toBe(0);
   });
 
   it("follows an assignment renamed on Brightspace: same folder, no new one", async () => {
