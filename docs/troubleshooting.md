@@ -234,6 +234,8 @@ Then [open an issue](https://github.com/RohanMuppa/brightspace-mcp-server/issues
 
 ## Startup, browser and password-store problems
 
+**No notification appears (macOS):** notifications are sent through `osascript`, and macOS drops them quietly when Script Editor is not allowed to notify, even though the command succeeds. Open System Settings > Notifications > Script Editor and turn on Allow Notifications; also check that no Focus mode is on. `D2L_NOTIFY=0` turns them off on purpose.
+
 **The app says the server timed out while starting:** open the app's MCP server log. Each startup step prints a timestamped `Startup: ...` line before it begins and `done in N ms` when it ends, and a step still running after 10 seconds prints `Startup: still ...` once. The last such line names the step it was stuck in, often the saved-password lookup in your password store. These lines never include your username, password or cookies.
 
 **Browser removed during disk cleanup:** sign-in restores a missing Chromium download once and retries automatically. It uses the installed Playwright dependency's browser revision and keeps your saved credentials, MFA enrollment and sessions. Downloads have a two-minute limit; an offline or failed repair returns an installation error instead of asking you to reset credentials.
