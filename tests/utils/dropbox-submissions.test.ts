@@ -146,7 +146,7 @@ describe("readMyFeedback", () => {
 });
 
 describe("mySubmissionFileUrl", () => {
-  it("builds the documented download route", () => {
-    expect(mySubmissionFileUrl(fakeClient({}), 7, 5, 3, 11)).toBe("/le/7/dropbox/folders/5/submissions/3/files/11/download");
+  it("builds the documented route, with no download suffix", () => {
+    expect(mySubmissionFileUrl(fakeClient({}), 7, 5, 3, 11)).toBe("/le/7/dropbox/folders/5/submissions/3/files/11");
   });
 });

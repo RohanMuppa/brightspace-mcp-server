@@ -168,7 +168,10 @@ export async function readMyFeedback(
   return { feedback, status, source, ...(feedback === null && groupRouteSkipped ? { groupRouteSkipped } : {}) };
 }
 
-/** The download route of one file of one of the student's own submissions. */
+/**
+ * The route of one file of one of the student's own submissions (a file stream).
+ * **Why:** D2L documents it without a `/download` suffix, and the suffixed form 404s on a live school (2026-11-19).
+ */
 export function mySubmissionFileUrl(
   apiClient: D2LApiClient,
   courseId: number,
@@ -176,5 +179,5 @@ export function mySubmissionFileUrl(
   submissionId: number,
   fileId: number
 ): string {
-  return apiClient.le(courseId, `/dropbox/folders/${folderId}/submissions/${submissionId}/files/${fileId}/download`);
+  return apiClient.le(courseId, `/dropbox/folders/${folderId}/submissions/${submissionId}/files/${fileId}`);
 }

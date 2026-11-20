@@ -38,8 +38,39 @@ export function unchangedSinceSync(entry: ManifestEntry, stat: { size: number; m
   return entry.size !== undefined && entry.mtimeMs !== undefined && stat.size === entry.size && Math.abs(stat.mtimeMs - entry.mtimeMs) < 1;
 }
 
+/** The feedback.md the sync wrote for an assignment: what it looked like, so a rerun can tell a refresh from a student's edit. */
+export interface FeedbackEntry {
+  path: string;
+  size: number;
+  mtimeMs: number;
+  /** SHA-256 of the text the sync rendered. */
+  hash: string;
+}
+
+/** What a sync saved for one assignment folder, keyed by folder id. Additive: older servers ignore it. */
+export interface AssignmentRecord {
+  /** The assignment's folder, relative to the destination. */
+  dir: string;
+  feedback?: FeedbackEntry;
+  /** Keyed `sub:<submissionId>:<fileId>`, `asg:<fileId>` or `fb:<fileId>`. */
+  files: Record<string, ManifestEntry>;
+}
+
+/** What a sync saved for one announcement, keyed by news id; files by attachment id. */
+export interface AnnouncementRecord {
+  dir: string;
+  files: Record<string, ManifestEntry>;
+}
+
+interface CourseExtras {
+  assignments: Record<string, AssignmentRecord>;
+  announcements: Record<string, AnnouncementRecord>;
+}
+
 /** A course or topic id as a key: digits only. */
 const ID_KEY = /^\d+$/;
+/** A file key inside an extras record: an id, or a kind and ids. Nothing else, so never "__proto__". */
+const FILE_KEY = /^(?:[a-z]+:)?\d+(?::\d+)?$/;
 
 /** A recorded path is read back from disk, so it is checked like any other input. */
 function validRelativePath(value: unknown): value is string {
@@ -48,9 +79,40 @@ function validRelativePath(value: unknown): value is string {
   return value.split("/").every((part) => part !== "" && part !== "." && part !== "..");
 }
 
+const bare = <T>(): Record<string, T> => Object.create(null);
+
+const plainObject = (value: unknown): value is Record<string, unknown> =>
+  value !== null && typeof value === "object" && !Array.isArray(value);
+
+function readEntry(entry: unknown): ManifestEntry | null {
+  const { path: rel, bytes, size, mtimeMs } = (entry ?? {}) as Partial<ManifestEntry>;
+  if (!validRelativePath(rel) || typeof bytes !== "number" || !Number.isFinite(bytes)) return null;
+  return { path: rel, bytes, ...(Number.isFinite(size) && Number.isFinite(mtimeMs) ? { size, mtimeMs } : {}) };
+}
+
+function readFiles(value: unknown): Record<string, ManifestEntry> {
+  const files = bare<ManifestEntry>();
+  if (!plainObject(value)) return files;
+  for (const [key, entry] of Object.entries(value)) {
+    const read = FILE_KEY.test(key) ? readEntry(entry) : null;
+    if (read) files[key] = read;
+  }
+  return files;
+}
+
+function readFeedback(value: unknown): FeedbackEntry | undefined {
+  if (!plainObject(value)) return undefined;
+  const { path: rel, size, mtimeMs, hash } = value;
+  if (!validRelativePath(rel) || typeof size !== "number" || !Number.isFinite(size)) return undefined;
+  if (typeof mtimeMs !== "number" || !Number.isFinite(mtimeMs) || typeof hash !== "string" || !/^[0-9a-f]{64}$/i.test(hash)) return undefined;
+  return { path: rel, size, mtimeMs, hash };
+}
+
 export class SyncManifest {
   // No prototype: a course or topic key read from a file must never reach Object.prototype.
   private courses: Record<string, Record<string, ManifestEntry>> = Object.create(null);
+  /** What a full-course sync saved beyond the Content area. The Content code never reads it. */
+  private extras: Record<string, CourseExtras> = bare();
   private changed = false;
   /** Set when the file exists but could not be read: "reads as empty" is then not the same as "records nothing". */
   unreadable?: string;
@@ -82,6 +144,7 @@ export class SyncManifest {
         // It parsed, but it is not a manifest: the sync still starts from empty, but a caller must not take it for "nothing saved".
         manifest.unreadable = "it does not hold a course record";
       }
+      manifest.readExtras(parsed?.extras);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
         manifest.unreadable = error instanceof SyntaxError ? "it is not valid JSON" : ((error as NodeJS.ErrnoException).code ?? "it could not be opened");
@@ -89,6 +152,54 @@ export class SyncManifest {
       }
     }
     return manifest;
+  }
+
+  private readExtras(extras: unknown): void {
+    if (!plainObject(extras)) return;
+    for (const [courseId, record] of Object.entries(extras)) {
+      if (!ID_KEY.test(courseId) || !plainObject(record)) continue;
+      const mine = this.course(courseId);
+      if (plainObject(record.assignments)) {
+        for (const [folderId, raw] of Object.entries(record.assignments)) {
+          if (!ID_KEY.test(folderId) || !plainObject(raw) || !validRelativePath(raw.dir)) continue;
+          const feedback = readFeedback(raw.feedback);
+          mine.assignments[folderId] = { dir: raw.dir, ...(feedback ? { feedback } : {}), files: readFiles(raw.files) };
+        }
+      }
+      if (plainObject(record.announcements)) {
+        for (const [newsId, raw] of Object.entries(record.announcements)) {
+          if (!ID_KEY.test(newsId) || !plainObject(raw) || !validRelativePath(raw.dir)) continue;
+          mine.announcements[newsId] = { dir: raw.dir, files: readFiles(raw.files) };
+        }
+      }
+    }
+  }
+
+  private course(courseId: string | number): CourseExtras {
+    return (this.extras[String(courseId)] ??= { assignments: bare(), announcements: bare() });
+  }
+
+  /** What was saved for an assignment folder, or undefined. Read only. */
+  findAssignment(courseId: number, folderId: number): AssignmentRecord | undefined {
+    return this.extras[String(courseId)]?.assignments[String(folderId)];
+  }
+
+  findAnnouncement(courseId: number, newsId: number): AnnouncementRecord | undefined {
+    return this.extras[String(courseId)]?.announcements[String(newsId)];
+  }
+
+  /** The record for an assignment folder, created if need be. Edit it, then call touch(). */
+  assignment(courseId: number, folderId: number): AssignmentRecord {
+    return (this.course(courseId).assignments[String(folderId)] ??= { dir: "", files: bare() });
+  }
+
+  announcement(courseId: number, newsId: number): AnnouncementRecord {
+    return (this.course(courseId).announcements[String(newsId)] ??= { dir: "", files: bare() });
+  }
+
+  /** Mark the manifest as changed after editing an extras record. */
+  touch(): void {
+    this.changed = true;
   }
 
   get(courseId: number, topicId: number): ManifestEntry | undefined {
@@ -128,7 +239,12 @@ export class SyncManifest {
   async save(): Promise<void> {
     if (!this.changed) return;
     // Only the user reads it: it says which of their files the sync may overwrite.
-    await writeFileAtomic(this.file, `${JSON.stringify({ version: 1, courses: this.courses }, null, 1)}\n`, { mode: 0o600 });
+    // `extras` is written only when it holds something, so a Content-only manifest is byte-for-byte what it always was.
+    const extras = Object.fromEntries(
+      Object.entries(this.extras).filter(([, c]) => Object.keys(c.assignments).length + Object.keys(c.announcements).length > 0)
+    );
+    const body = Object.keys(extras).length > 0 ? { version: 1, courses: this.courses, extras } : { version: 1, courses: this.courses };
+    await writeFileAtomic(this.file, `${JSON.stringify(body, null, 1)}\n`, { mode: 0o600 });
     this.changed = false;
   }
 }
