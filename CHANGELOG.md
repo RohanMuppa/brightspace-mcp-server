@@ -9,6 +9,7 @@ Entries up to 5.2.1 were generated from the merged PR titles. Versions before 5.
 ## 5.2.21 (2026-11-19)
 
 - feat: `download_course_files` can now save the whole course in one call. New options `includeSubmissions` (your own submitted files, a `feedback.md` per assignment with the score, comments and rubric, and the feedback attachments Brightspace lists), `includeAssignmentFiles` (the instructor's attachments), `includeAnnouncementFiles`, and `everything: true` to turn all three on. They are all off by default, so a call without them behaves as before. Files go under `Assignments/` and `Announcements/` in the destination, and a rerun skips what is on disk and refreshes `feedback.md` after grading unless you edited it. Anything Brightspace did not answer is reported as unknown, never as none. The syllabus is still separate (`get_syllabus`).
+- fix: the whole-course options now say when they did not run (a stopped run, or a reached file cap, is "not checked", never "0 assignments"), treat a missing file list or a failed feedback lookup as unknown instead of none, stop reading further assignments once a cap is hit, keep a Content module called `Assignments` where it was (the extras use `Assignments (2)`), fit extra names inside the Windows path limit, keep `feedback.md` text inert (no live links or images), and refresh `feedback.md` in place in every `existing` mode unless you edited it.
 
 ## 5.2.20 (2026-11-19)
 

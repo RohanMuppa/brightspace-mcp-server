@@ -98,11 +98,32 @@ describe("download_course_files: pulling more than Content", () => {
 
   it("describes the options, the layout, the refresh and the unknown rule to the agent", async () => {
     const { config } = await register();
-    for (const word of ["everything", "includeSubmissions", "includeAssignmentFiles", "includeAnnouncementFiles", "feedback.md", "Assignments/", "Announcements/", "unknown"]) {
-      expect(config.description).toContain(word);
+    const d: string = config.description;
+    for (const word of ["everything", "includeSubmissions", "includeAssignmentFiles", "includeAnnouncementFiles", "feedback.md", "Assignments/", "Announcements/", "unknown", "get_syllabus"]) {
+      expect(d).toContain(word);
     }
-    expect(config.description).toMatch(/whole course|everything/i);
-    expect(config.description).toMatch(/saved when Brightspace lists them/);
-    expect(config.description).toContain("Content area only");
+    expect(d).toMatch(/saved when Brightspace lists them/);
+    expect(d).toContain("Content area only");
+  });
+
+  it("is consistent: it never tells the agent to fetch the extras with other tools after telling it to set everything", async () => {
+    const { config } = await register();
+    const d: string = config.description;
+    expect(d).not.toMatch(/also fetch those with the tools named/);
+    // The only tool named for something still not covered is the syllabus one; the others are named only as what the default leaves out.
+    expect(d).toMatch(/everything: true[^.]*\./);
+    expect(d).toMatch(/syllabus[^.]*never saved|never saves the syllabus|syllabus is not (saved|included)/i);
+    expect(d).toMatch(/lists only what/);
+    expect(d).toMatch(/stopped|stops/);
+    expect(d).toMatch(/call it again|run it again|call again/i);
+    expect(d).toMatch(/never report it as none|never report (them|it) as/);
+    expect(d.length).toBeLessThan(3800);
+  });
+
+  it("says how feedback.md behaves in each existing mode", async () => {
+    const { config } = await register();
+    const d: string = config.description;
+    expect(d).toContain("feedback (2).md");
+    expect(d).toMatch(/skip and replace leave/);
   });
 });
