@@ -516,3 +516,223 @@ describe("a folder made by 5.2.21 re-syncs without loss", () => {
     expect(await read(mdPath)).toContain("- Score: 19 / 20");
   });
 });
+
+const mkToc = (...modules: Array<[number, string, unknown[]]>) => ({
+  Modules: modules.map(([id, title, topics]) => ({ ModuleId: id, Title: title, Topics: topics, Modules: [] })),
+  Topics: [],
+});
+const swapToc = (toc: unknown) =>
+  fake!.client.get.mockImplementation(async (p: string, options?: unknown) => {
+    (options as { signal?: AbortSignal } | undefined)?.signal?.throwIfAborted();
+    if (p.endsWith("/content/toc")) return toc;
+    if (p in extras.routes) {
+      const hit = extras.routes[p];
+      if (hit instanceof Error) throw hit;
+      return hit;
+    }
+    throw new ApiError(404, p, "not found");
+  });
+
+describe("M-a: a stop on the table-of-contents read still marks the extras not run", () => {
+  it("after a lost sign-in", async () => {
+    await start(essay());
+    swapToc(null);
+    fake!.client.get.mockImplementation(async (p: string) => {
+      if (p.endsWith("/content/toc")) throw new ApiError(401, p, "expired");
+      throw new ApiError(404, p, "x");
+    });
+    const result = await sync({ ...all });
+    expect(result.stopped).toBe("auth");
+    expect(result.included).toEqual({ submissions: true, assignmentFiles: true, announcementFiles: true });
+    expect(result.assignments).toMatchObject({ notRun: "auth", folders: 0 });
+    expect(result.announcements).toMatchObject({ notRun: "auth", read: 0 });
+    const text = summarizeSync(result);
+    expect(text).toContain("Assignments were not checked because the run stopped");
+    expect(text).toContain("Announcements were not checked because the run stopped");
+    expect(text).toContain("Content area only");
+    expect(extraReads()).toEqual([]);
+  });
+
+  it("after the time limit passed during the read", async () => {
+    await start(essay());
+    fake!.client.get.mockImplementation(async (p: string, options?: unknown) => {
+      if (p.endsWith("/content/toc")) {
+        await new Promise((resolve) => setTimeout(resolve, 80));
+        (options as { signal?: AbortSignal }).signal!.throwIfAborted();
+        return { Modules: [], Topics: [] };
+      }
+      throw new ApiError(404, p, "x");
+    });
+    const result = await sync({ includeAssignmentFiles: false, includeAnnouncementFiles: true, deadlineMs: 20 });
+    expect(result.stopped).toBe("deadline");
+    expect(result.included).toEqual({ submissions: true, assignmentFiles: false, announcementFiles: true });
+    expect(result.assignments?.notRun).toBe("deadline");
+    expect(result.announcements?.notRun).toBe("deadline");
+    expect(summarizeSync(result)).toContain("were not checked because the run stopped (the time limit passed)");
+  });
+
+  it("with no option on, a stop on the read adds no extra block", async () => {
+    await start(essay());
+    swapToc(null);
+    fake!.client.get.mockImplementation(async (p: string) => {
+      throw new ApiError(401, p, "expired");
+    });
+    const result = await sync({ includeSubmissions: false });
+    expect(result.included).toBeUndefined();
+    expect(result.assignments).toBeUndefined();
+  });
+});
+
+describe("M-b: a module never shares the extras folder's name", () => {
+  const intro = (id: number, name: string) => fileTopic(id, url(name));
+
+  it("(1) a module added later named like the recorded root is saved under the next free name, and nothing moves", async () => {
+    await start({ ...essay(), toc: mkToc([1, "Week 1", [intro(10, "A.pdf")]]), topics: { 10: ok("a"), 20: ok("b") } });
+    await sync();
+    expect(await listTree(root)).toContain("Assignments/Essay 2/feedback.md");
+    const before = (await listTree(root)).filter((e) => !e.endsWith("/"));
+    swapToc(mkToc([1, "Week 1", [intro(10, "A.pdf")]], [2, "Assignments", [intro(20, "Brief.pdf")]]));
+    const result = await sync({ includeSubmissions: false });
+    const tree = await listTree(root);
+    expect(tree).toContain("Assignments (2)/Brief.pdf");
+    expect(tree).not.toContain("Assignments/Brief.pdf");
+    for (const file of before) expect(tree).toContain(file);
+    expect(result.failed).toEqual([]);
+  });
+
+  it("(2) a folder made by 5.2.21: new topics of the module keep going to Assignments (2), even with every option off", async () => {
+    await start({ ...essay(), toc: mkToc([1, "Assignments (2)", [intro(10, "Intro.pdf")]]), topics: { 10: ok("a"), 11: ok("b"), 12: ok("t") } });
+    await sync();
+    const file = path.join(root, ".brightspace-sync.json");
+    const parsed = JSON.parse(await fs.readFile(file, "utf8"));
+    delete parsed.extras["42"].assignmentsRoot;
+    delete parsed.extras["42"].announcementsRoot;
+    await fs.writeFile(file, JSON.stringify(parsed));
+    swapToc(mkToc([1, "Assignments", [intro(10, "Intro.pdf"), intro(11, "More.pdf")]]));
+    const withOptions = await sync();
+    expect(withOptions.failed).toEqual([]);
+    expect(await listTree(root)).toContain("Assignments (2)/More.pdf");
+    expect(await listTree(root)).not.toContain("Assignments/More.pdf");
+    // And later, with the options off, the module still plans under the same folder.
+    swapToc(mkToc([1, "Assignments", [intro(10, "Intro.pdf"), intro(11, "More.pdf"), intro(12, "Third.pdf")]]));
+    await sync({ includeSubmissions: false });
+    expect(await listTree(root)).toContain("Assignments (2)/Third.pdf");
+    expect(await listTree(root)).not.toContain("Assignments/Third.pdf");
+  });
+
+  it("(3) a module on disk before extras were used keeps its name, and the extras take Assignments (2) for good", async () => {
+    await start({ ...essay(), toc: mkToc([1, "Assignments", [intro(10, "Intro.pdf")]]), topics: { 10: ok("a"), 11: ok("b") } });
+    await sync({ includeSubmissions: false });
+    await sync();
+    expect(await listTree(root)).toContain("Assignments/Intro.pdf");
+    expect(await listTree(root)).toContain("Assignments (2)/Essay 2/feedback.md");
+    swapToc(mkToc([1, "Assignments", [intro(10, "Intro.pdf"), intro(11, "More.pdf")]]));
+    await sync({ includeSubmissions: false });
+    expect(await listTree(root)).toContain("Assignments/More.pdf");
+    const manifest = JSON.parse(await fs.readFile(path.join(root, ".brightspace-sync.json"), "utf8"));
+    expect(manifest.extras["42"].assignmentsRoot).toBe("Assignments (2)");
+  });
+
+  it("applies with moduleId too", async () => {
+    await start({ ...essay(), toc: mkToc([1, "Week 1", [intro(10, "A.pdf")]]), topics: { 10: ok("a"), 20: ok("b") } });
+    await sync();
+    swapToc(mkToc([1, "Week 1", [intro(10, "A.pdf")]], [2, "Assignments", [intro(20, "Brief.pdf")]]));
+    await sync({ includeSubmissions: false, moduleId: 2 });
+    expect(await listTree(root)).toContain("Assignments (2)/Brief.pdf");
+  });
+});
+
+describe("M-c: tracking gaps for feedback.md", () => {
+  const regrade = (e: Extras, score = 3) => { e.routes[fbRoute(5)] = { IsGraded: true, Score: score, Feedback: { Text: `Score ${score}`, Html: "" }, Files: [] }; };
+
+  it("(1) recreates a deleted tracked feedback.md at the tracked path", async () => {
+    await run(essay(), {});
+    await fs.rm(path.join(root, ...mdPath.split("/")));
+    const result = await sync();
+    expect(result.assignments?.feedbackWritten).toBe(1);
+    expect(await read(mdPath)).toContain("- Score: 18 / 20");
+  });
+
+  it("(1) recreates a deleted tracked feedback (2).md, never trusting an untracked feedback.md", async () => {
+    await run(essay(), {});
+    await fs.appendFile(path.join(root, ...mdPath.split("/")), "\nmine\n");
+    regrade(extras);
+    await sync({ existing: "keep_both" });
+    const copy = "Assignments/Essay 2/feedback (2).md";
+    await fs.rm(path.join(root, ...copy.split("/")));
+    const result = await sync({ existing: "keep_both" });
+    expect(result.assignments?.feedbackWritten).toBe(1);
+    expect(await read(copy)).toContain("Score 3");
+    expect(await read(mdPath)).toContain("mine");
+  });
+
+  it("(2) keep_both with the tracked copy edited leaves it alone, reports it, and makes no further copy", async () => {
+    await run(essay(), {});
+    await fs.appendFile(path.join(root, ...mdPath.split("/")), "\nmine\n");
+    regrade(extras);
+    await sync({ existing: "keep_both" });
+    const copy = path.join(root, "Assignments", "Essay 2", "feedback (2).md");
+    await fs.appendFile(copy, "\nalso mine\n");
+    regrade(extras, 4);
+    const result = await sync({ existing: "keep_both" });
+    expect(result.assignments).toMatchObject({ feedbackEditedNotRefreshed: 1, feedbackWritten: 0, feedbackRefreshed: 0 });
+    const names = (await fs.readdir(path.join(root, "Assignments", "Essay 2"))).filter((n) => n.endsWith(".md")).sort();
+    expect(names).toEqual(["feedback (2).md", "feedback.md"]);
+    expect(await fs.readFile(copy, "utf8")).toContain("also mine");
+  });
+});
+
+describe("L-d: a size-limit stop on the last file leaves the folder complete", () => {
+  it("writes feedback.md and counts the folder as complete", async () => {
+    const setup = essay({ [fbRoute(5)]: { IsGraded: true, Score: 1, Feedback: { Text: "x", Html: "" }, Files: [] } });
+    const result = await run(setup, { maxTotalBytes: pdf("sub").length });
+    expect(result.stopped).toBe("max_total_bytes");
+    expect(result.assignments).toMatchObject({ folders: 1, foldersPartlySaved: 0, foldersNotReached: 0 });
+    expect(await listTree(root)).toContain("Assignments/Essay 2/feedback.md");
+  });
+
+  it("an empty file is described as empty, not as failed", async () => {
+    const setup = essay();
+    setup.files![subFile(5, 3, 11)] = { body: Buffer.alloc(0) };
+    await run(setup);
+    const md = await read(mdPath);
+    expect(md).toContain("empty on Brightspace (0 bytes)");
+    expect(md).not.toContain("could not be saved");
+  });
+});
+
+describe("L-e: the folder counts add up", () => {
+  it.each([1, 2, 3, 4, 5, 6])("with maxFiles %s", async (maxFiles) => {
+    const routes: Record<string, unknown> = { [WHOAMI]: { Identifier: 77 } };
+    const files: Record<string, Step> = {};
+    const list: unknown[] = [folder(4, "Four"), { ...folder(5, "Bad"), Id: "x" }, folder(6, "Six"), folder(7, "Hidden", { IsHidden: true }), folder(8, "Eight"), folder(9, "Nine")];
+    for (const id of [4, 6, 8, 9]) {
+      routes[subsRoute(id)] = [submission(id * 10, [{ FileId: id, FileName: "a.pdf" }, { FileId: id + 100, FileName: "b.pdf" }])];
+      routes[fbRoute(id)] = status(404);
+      files[subFile(id, id * 10, id)] = ok(String(id));
+      files[subFile(id, id * 10, id + 100)] = ok(`b${id}`);
+    }
+    routes[FOLDERS] = list;
+    const result = await run({ routes, files }, { maxFiles });
+    const a = result.assignments!;
+    expect(a.foldersListed).toBe(5);
+    expect(a.folders + a.foldersPartlySaved + a.foldersNotReached + a.foldersUnusable).toBe(a.foldersListed);
+    expect(a.foldersUnusable).toBe(1);
+    expect(a.hiddenFoldersSkipped).toBe(1);
+  });
+
+  it("also across a cancel after the first file", async () => {
+    const controller = new AbortController();
+    const routes: Record<string, unknown> = { [FOLDERS]: [folder(4, "Four"), folder(6, "Six")], [WHOAMI]: { Identifier: 77 } };
+    const files: Record<string, Step> = {};
+    for (const id of [4, 6]) {
+      routes[subsRoute(id)] = [submission(id * 10, [{ FileId: id, FileName: "a.pdf" }])];
+      routes[fbRoute(id)] = status(404);
+      files[subFile(id, id * 10, id)] = ok(String(id));
+    }
+    const result = await run({ routes, files }, { signal: controller.signal, onProgress: (e) => { if (e.type === "downloaded") controller.abort(); } });
+    const a = result.assignments!;
+    expect(a.folders + a.foldersPartlySaved + a.foldersNotReached + a.foldersUnusable).toBe(a.foldersListed);
+    expect(a.foldersListed).toBe(2);
+  });
+});

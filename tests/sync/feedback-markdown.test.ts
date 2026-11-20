@@ -232,7 +232,7 @@ describe("table cells escape backslashes before pipes", () => {
 });
 
 describe("invisible and bidirectional controls are stripped", () => {
-  const controls = [0x200b, 0x200c, 0x200d, 0x200e, 0x200f, 0x202a, 0x202b, 0x202c, 0x202d, 0x202e, 0x2066, 0x2067, 0x2068, 0x2069, 0xfeff].map((c) => String.fromCharCode(c));
+  const controls = [0x061c, 0x200b, 0x200e, 0x200f, 0x202a, 0x202b, 0x202c, 0x202d, 0x202e, 0x2066, 0x2067, 0x2068, 0x2069, 0xfeff].map((c) => String.fromCharCode(c));
   const dirty = (text: string) => controls.map((c) => `${c}${text}`).join("");
   const hasControl = (md: string) => controls.some((c) => md.includes(c));
 
@@ -285,5 +285,111 @@ describe("feedback.md is bounded", () => {
 
   it("leaves a normal file whole", () => {
     expect(renderFeedbackMarkdown(base())).not.toContain("was cut here");
+  });
+});
+
+describe("rendering stays fast on hostile input (HIGH-1)", () => {
+  const shapes: Array<[string, string]> = [
+    ["open brackets", "[".repeat(200_000)],
+    ["image openers", "![".repeat(100_000)],
+    ["link middles", "](".repeat(100_000)],
+    ["angle brackets", "<".repeat(200_000)],
+    ["backticks", "`".repeat(200_000)],
+    ["mixed", "[![`<](http://x.y ".repeat(12_000)],
+    ["urls", "http://a.b/".repeat(20_000)],
+    ["spaces", " ".repeat(200_000)],
+    ["bracket then text", "[a".repeat(100_000)],
+  ];
+  const render = (text: string, asCell = false) =>
+    renderFeedbackMarkdown(
+      base({ feedback: { known: true, score: 1, text: asCell ? null : text, rubrics: asCell ? [{ name: "R", criteria: [{ criterionName: "C", feedback: text }] }] : [] } })
+    );
+
+  it.each(shapes)("%s as feedback text renders in well under 2 s", (_label, text) => {
+    const started = performance.now();
+    const md = render(text);
+    expect(performance.now() - started).toBeLessThan(2000);
+    expect(md).toContain("## Feedback");
+    expect(md.replace(/^<!--.*-->$/m, "")).not.toContain("<");
+  });
+
+  it.each(shapes)("%s as a rubric cell renders in well under 2 s", (_label, text) => {
+    const started = performance.now();
+    const md = render(text, true);
+    expect(performance.now() - started).toBeLessThan(2000);
+    expect(md).toContain("| C |");
+    expect(md.length).toBeLessThan(300_000);
+  });
+
+  it("cuts a cell to its cap before looking for markup", () => {
+    const md = render(`${"x".repeat(5000)} [a](http://e.x)`, true);
+    expect(md).not.toContain("http://e.x");
+    expect(md.split("\n").find((l) => l.startsWith("| C |"))!.length).toBeLessThan(2500);
+  });
+});
+
+describe("backticks and emails in remote text (L-a)", () => {
+  const text = (t: string) => renderFeedbackMarkdown(base({ feedback: { known: true, score: 1, text: t, rubrics: [] } }));
+  const outsideCode = (md: string) => md.replace(/^<!--.*-->$/m, "").replace(/`[^`\n]*`/g, "");
+
+  it("a stray backtick before a url leaves no live address", () => {
+    for (const t of ["a ` b http://evil.com c", "`x http://evil.com", "``http://evil.com`", "a`b`c http://evil.com"]) {
+      expect(outsideCode(text(t))).not.toContain("http://evil.com");
+    }
+  });
+
+  it("email addresses are inert", () => {
+    const md = outsideCode(text("write me@evil.com or [x](mailto:you@evil.com)"));
+    expect(md).not.toMatch(/@/);
+  });
+});
+
+describe("the 300 kB cap counts bytes (L-b)", () => {
+  it("keeps a file of 4-byte characters within 300000 bytes, on a line boundary, with the note inside the cap", () => {
+    const line = "\u{1F600}".repeat(60);
+    const text = Array.from({ length: 4000 }, () => line).join("\n");
+    const md = renderFeedbackMarkdown(base({ feedback: { known: true, score: 1, text, rubrics: [] } }));
+    expect(Buffer.byteLength(md)).toBeLessThanOrEqual(300_000);
+    expect(md.trimEnd().split("\n").at(-1)).toBe("(feedback.md was cut here: it passed 300 kB.)");
+    expect(Buffer.from(md, "utf8").toString("utf8")).toBe(md);
+    expect(md).not.toContain("�");
+    // No half-written quoted line: every quoted line is a whole one.
+    for (const l of md.split("\n").filter((x) => x.startsWith("> "))) expect(l).toBe(`> ${line}`);
+  });
+
+  it("does not cut a file that is under the cap in bytes", () => {
+    expect(renderFeedbackMarkdown(base())).not.toContain("was cut here");
+  });
+});
+
+describe("only direction and invisible controls are stripped (L-c)", () => {
+  const ch = (...codes: number[]) => codes.map((c) => String.fromCharCode(c)).join("");
+  it("strips U+061C, bidi controls, zero-width space and BOM", () => {
+    const md = renderFeedbackMarkdown(base({ name: `A${ch(0x061c, 0x200e, 0x200f, 0x202a, 0x202e, 0x2066, 0x2069, 0x200b, 0xfeff)}B` }));
+    expect(md).toContain('"AB"');
+  });
+  it("keeps the joiners that emoji sequences and some scripts need", () => {
+    const family = ["\u{1F469}", "\u{1F469}", "\u{1F467}"].join(String.fromCharCode(0x200d));
+    const md = renderFeedbackMarkdown(base({ name: family, feedback: { known: true, score: 1, text: `x${String.fromCharCode(0x200c)}y`, rubrics: [] } }));
+    expect(md).toContain(family);
+    expect(md).toContain(`> x${String.fromCharCode(0x200c)}y`);
+  });
+});
+
+describe("what was not saved is described by what it was (L-d)", () => {
+  it("says failed, empty and not-yet separately, in the files line and in the sections", () => {
+    const md = renderFeedbackMarkdown(
+      base({
+        filesNotSaved: { failed: 1, empty: 2, notYet: 3 },
+        feedbackFiles: ["feedback files/a.pdf"],
+        feedbackFilesNotSaved: { failed: 0, empty: 1, notYet: 0 },
+        assignmentFiles: [],
+        assignmentFilesNotSaved: { failed: 0, empty: 0, notYet: 2 },
+      })
+    );
+    expect(md).toContain("- Files not saved: 1 could not be saved; 2 empty on Brightspace (0 bytes); 3 not saved yet because the run stopped");
+    expect(md).toContain("- 1 listed by Brightspace is empty (0 bytes), so there is nothing to save.");
+    expect(md).not.toMatch(/Feedback files[\s\S]*could not be saved/);
+    expect(md).toContain("- 2 listed by Brightspace not saved yet because the run stopped.");
   });
 });

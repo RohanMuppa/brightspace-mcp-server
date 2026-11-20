@@ -21,7 +21,7 @@ import {
   type DropboxFeedback,
   type DropboxSubmission,
 } from "../utils/dropbox-submissions.js";
-import { renderFeedbackMarkdown, type FeedbackDocInput, type RubricDoc } from "./feedback-markdown.js";
+import { renderFeedbackMarkdown, type FeedbackDocInput, type NotSaved, type RubricDoc } from "./feedback-markdown.js";
 import type { NotRunReason, PhaseContext, SaveOutcome } from "./extras-types.js";
 import type { AssignmentRecord } from "./manifest.js";
 import { NameSet, foldKey, sanitizeComponent } from "./names.js";
@@ -40,8 +40,13 @@ export interface AssignmentsOutcome {
   folder: string;
   /** Set when the phase did not run because the run had already stopped: nothing was read, so no count below means anything. */
   notRun?: NotRunReason;
+  /** Folders listed and not hidden. `folders + foldersPartlySaved + foldersNotReached + foldersUnusable` equals this. */
+  foldersListed: number;
+  /** Folders finished: everything Brightspace listed for them was saved or already there, and feedback.md was written or kept. */
   folders: number;
   hiddenFoldersSkipped: number;
+  /** Folders whose entry had no usable id, so they could not be read. Each is also in `unknown`. */
+  foldersUnusable: number;
   groupFolders: number;
   /** Folders the run stopped before reaching (a cap, a deadline, a cancel or a lost sign-in). */
   foldersNotReached: number;
@@ -64,7 +69,9 @@ export interface AssignmentsOutcome {
 
 export const emptyAssignmentsOutcome = (folder = "Assignments"): AssignmentsOutcome => ({
   folder,
+  foldersListed: 0,
   folders: 0,
+  foldersUnusable: 0,
   hiddenFoldersSkipped: 0,
   groupFolders: 0,
   foldersNotReached: 0,
@@ -188,14 +195,18 @@ export async function syncAssignments(ctx: PhaseContext, options: AssignmentsOpt
     if (parts.length === 2 && parts[0] === root) dirNames.add(parts[1], true);
   }
   const caps = nameCaps(ctx, root, SUB_FOLDER_CHARS);
+  /** A stop that ends the work in a folder: not a cap, which only matters when a file was actually left. */
+  const hardStop = (): boolean => ["auth", "cancelled", "deadline"].includes(ctx.notRunReason() ?? "");
 
   for (const rawFolder of entries) {
     if (isRecord(rawFolder) && rawFolder.IsHidden === true) {
       out.hiddenFoldersSkipped++;
       continue;
     }
+    out.foldersListed++;
     const folderId = isRecord(rawFolder) ? positiveId(rawFolder.Id) : null;
     if (!isRecord(rawFolder) || folderId === null) {
+      out.foldersUnusable++;
       out.unknown.push({
         folderId: 0,
         name: isRecord(rawFolder) && typeof rawFolder.Name === "string" ? rawFolder.Name : "",
@@ -225,6 +236,7 @@ export async function syncAssignments(ctx: PhaseContext, options: AssignmentsOpt
       }
       log("WARN", `Course sync: assignment ${folderId} could not be saved`, error);
       unknown("submissions", "Unexpected error");
+      out.foldersPartlySaved++;
     }
 
     /** Returns false when the run stopped before the folder was finished. */
@@ -240,7 +252,7 @@ export async function syncAssignments(ctx: PhaseContext, options: AssignmentsOpt
       }
 
       const mine = options.submissions ? await readMySubmissions(apiClient, courseId, folderId!, { signal: ctx.signal }) : undefined;
-      if (mine && ctx.halted()) return false;
+      if (mine && hardStop()) return false;
       if (mine?.known && mine.submissions.length === 0) out.notSubmitted++;
       if (mine && !mine.known) unknown("submissions", describeStatus(mine.status));
 
@@ -248,7 +260,7 @@ export async function syncAssignments(ctx: PhaseContext, options: AssignmentsOpt
       let feedbackUnknown: string | undefined;
       if (mine) {
         feedback = await readMyFeedback(apiClient, courseId, { Id: folderId!, GroupTypeId: isGroup ? Number(rawFolder.GroupTypeId) : null }, mine, { signal: ctx.signal });
-        if (ctx.halted()) return false;
+        if (hardStop()) return false;
         if (feedback.status === "restricted") feedbackUnknown = describeStatus(403);
         else if (feedback.status === "error") feedbackUnknown = "Brightspace did not return the feedback";
         else if (feedback.groupRouteSkipped) {
@@ -262,12 +274,12 @@ export async function syncAssignments(ctx: PhaseContext, options: AssignmentsOpt
       }
 
       let incomplete = false;
-      const saveGroup = async (folder: string, wanted: Wanted[], count: () => void): Promise<{ listed: string[]; notSaved: number }> => {
+      const saveGroup = async (folder: string, wanted: Wanted[], count: () => void): Promise<{ listed: string[]; notSaved: NotSaved }> => {
         const names = new NameSet(NAME_CHARS);
         reserveRecorded(names, existingRecord, folder);
         const otherPaths = (key: string) => new Set(Object.entries(record.files).filter(([k]) => k !== key).map(([, e]) => foldKey(e.path)));
         const listed: string[] = [];
-        let notSaved = 0;
+        const notSaved: NotSaved = { failed: 0, empty: 0, notYet: 0 };
         for (const file of wanted) {
           const clean = sanitizeComponent(file.fileName, `File ${file.fileId}`, caps.file);
           const planned = record.files[file.key] ? clean : names.add(clean, false, caps.file);
@@ -287,7 +299,9 @@ export async function syncAssignments(ctx: PhaseContext, options: AssignmentsOpt
           if (result.status === "notAttempted") incomplete = true;
           if (["saved", "skipped", "duplicate", "planned"].includes(result.status)) {
             listed.push(result.rel.startsWith(`${dirRel}/`) ? result.rel.slice(dirRel!.length + 1) : result.rel);
-          } else notSaved++;
+          } else if (result.status === "empty") notSaved.empty++;
+          else if (result.status === "notAttempted") notSaved.notYet++;
+          else notSaved.failed++;
         }
         return { listed, notSaved };
       };
@@ -295,7 +309,7 @@ export async function syncAssignments(ctx: PhaseContext, options: AssignmentsOpt
       // The student's own files.
       let myFiles: string[] = [];
       let myFilesUnknown: string | undefined;
-      let myNotSaved = 0;
+      let myNotSaved: NotSaved = { failed: 0, empty: 0, notYet: 0 };
       if (mine?.known) {
         const wanted: Wanted[] = [];
         for (const submission of mine.submissions as DropboxSubmission[]) {
@@ -322,7 +336,7 @@ export async function syncAssignments(ctx: PhaseContext, options: AssignmentsOpt
 
       // The instructor's attachments.
       let assignmentFiles: string[] | { known: false; reason: string } | undefined;
-      let assignmentNotSaved = 0;
+      let assignmentNotSaved: NotSaved = { failed: 0, empty: 0, notYet: 0 };
       if (options.assignmentFiles) {
         const list = readFileList(rawFolder.Attachments);
         if ("unreadable" in list) {
@@ -339,7 +353,7 @@ export async function syncAssignments(ctx: PhaseContext, options: AssignmentsOpt
       // The feedback's attachments. Only released feedback has any. The route is documented but unverified on a live school, so any trouble is unknown.
       const released = feedback?.feedback != null && feedback.feedback.IsGraded !== false;
       let feedbackFiles: string[] | { known: false; reason: string } = [];
-      let feedbackNotSaved = 0;
+      let feedbackNotSaved: NotSaved = { failed: 0, empty: 0, notYet: 0 };
       if (feedback) {
         if (feedbackUnknown) feedbackFiles = { known: false, reason: feedbackUnknown };
         else if (released) {
@@ -377,7 +391,7 @@ export async function syncAssignments(ctx: PhaseContext, options: AssignmentsOpt
       }
 
       // A folder the run stopped in the middle of is partly saved: no feedback.md, so it never claims to be complete.
-      if (ctx.halted() || incomplete) return false;
+      if (hardStop() || incomplete) return false;
 
       // feedback.md, last, so it can list what was saved.
       if (mine && feedback) {

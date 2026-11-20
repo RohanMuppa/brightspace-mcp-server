@@ -19,8 +19,12 @@ export interface AnnouncementsOutcome {
   folder: string;
   /** Set when the phase did not run because the run had already stopped: nothing was read, so no count here means anything. */
   notRun?: NotRunReason;
+  /** Published announcements listed. `read + notReached + unusable` equals this. */
+  listed: number;
   /** Published announcements read. */
   read: number;
+  /** Announcements whose entry had no usable id. Each is also in `unknown`. */
+  unusable: number;
   withFiles: number;
   filesDownloaded: number;
   /** Announcements whose attachments could not be listed: never to be reported as "no attachments". */
@@ -34,7 +38,7 @@ export interface AnnouncementsOutcome {
 }
 
 export const emptyAnnouncementsOutcome = (folder = "Announcements"): AnnouncementsOutcome => ({
-  folder, read: 0, withFiles: 0, filesDownloaded: 0, unknown: [], notReached: 0, partlySaved: 0,
+  folder, listed: 0, read: 0, unusable: 0, withFiles: 0, filesDownloaded: 0, unknown: [], notReached: 0, partlySaved: 0,
 });
 
 const NAME_CHARS = 150;
@@ -80,7 +84,9 @@ export async function syncAnnouncements(ctx: PhaseContext): Promise<Announcement
     if (isRecord(rawItem) && rawItem.IsPublished === false) continue;
     const newsId = isRecord(rawItem) ? positiveId(rawItem.Id) : null;
     const title = isRecord(rawItem) && typeof rawItem.Title === "string" ? rawItem.Title : "";
+    out.listed++;
     if (!isRecord(rawItem) || newsId === null) {
+      out.unusable++;
       out.unknown.push({ newsId: 0, title, reason: "this announcement had no usable id, so its files were not looked for" });
       continue;
     }

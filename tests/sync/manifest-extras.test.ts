@@ -226,11 +226,19 @@ describe("records made by 5.2.21, which kept no root", () => {
     expect(manifest.findAnnouncement(42, 8)).toBeDefined();
   });
 
-  it("does not adopt anything when one record is not under the fixed name", async () => {
-    await writeJson(old({ "5": rec("Assignments/Essay"), "6": rec("Week 1/Lab") }));
+  it("adopts per record: records under the fixed name are kept, the others are dropped one by one", async () => {
+    await writeJson(old({ "5": rec("Assignments/Essay"), "6": rec("Week 1/Lab"), "7": rec("Assignments/Deep/er") }));
+    const manifest = await SyncManifest.load(dir);
+    expect(manifest.extrasRoot(42, "assignments")).toBe("Assignments");
+    expect(manifest.findAssignment(42, 5)).toBeDefined();
+    expect(manifest.findAssignment(42, 6)).toBeUndefined();
+    expect(manifest.findAssignment(42, 7)).toBeUndefined();
+  });
+
+  it("adopts nothing when no record sits under the fixed name", async () => {
+    await writeJson(old({ "6": rec("Week 1/Lab") }));
     const manifest = await SyncManifest.load(dir);
     expect(manifest.extrasRoot(42, "assignments")).toBeUndefined();
-    expect(manifest.findAssignment(42, 5)).toBeUndefined();
     expect(manifest.findAssignment(42, 6)).toBeUndefined();
   });
 
