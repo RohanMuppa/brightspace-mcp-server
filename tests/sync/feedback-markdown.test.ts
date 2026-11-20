@@ -23,8 +23,8 @@ describe("renderFeedbackMarkdown", () => {
         "",
         "- Status: graded",
         "- Score: 18 / 20",
-        "- Due: 2026-10-02T23:59:00Z",
-        '- Submitted: 2026-10-02T21:10:00Z by "A. Student"',
+        "- Due: 2026-10-02 23:59 (UTC) \u00b7 2026-10-02T23:59:00Z",
+        '- Submitted: 2026-10-02 21:10 (UTC) \u00b7 2026-10-02T21:10:00Z by "A. Student"',
         '- Files: "my files/Essay.docx"',
         "",
         "## Feedback",
@@ -416,5 +416,57 @@ describe("ordinary feedback reads as written (readability)", () => {
     expect(md).toContain("> https:&#47;/x.org/a");
     expect(md).toContain("> me&#64;x.org");
     expect(md).toContain("> (image: i)");
+  });
+});
+
+describe("dates show the student's local time first and keep the exact instant", () => {
+  const withDates = (due: string | null, date: string, timeZone?: string) =>
+    renderFeedbackMarkdown(base({ due, submissions: { known: true, items: [{ date, by: "A. Student" }] }, ...(timeZone ? { timeZone } : {}) }));
+
+  it("renders Due and Submitted as local time, the zone, and the instant as received", () => {
+    const md = withDates("2026-10-02T01:37:00.000Z", "2026-10-02T21:10:00Z", "America/Indianapolis");
+    expect(md).toContain("- Due: 2026-10-01 21:37 (America/Indianapolis) · 2026-10-02T01:37:00.000Z");
+    expect(md).toContain('- Submitted: 2026-10-02 17:10 (America/Indianapolis) · 2026-10-02T21:10:00Z by "A. Student"');
+  });
+
+  it("is deterministic for a given zone, and the zone decides the text", () => {
+    const a = withDates("2026-10-02T01:37:00.000Z", "2026-10-02T21:10:00Z", "Asia/Kolkata");
+    expect(a).toContain("- Due: 2026-10-02 07:07 (Asia/Kolkata) · 2026-10-02T01:37:00.000Z");
+    expect(a).toBe(withDates("2026-10-02T01:37:00.000Z", "2026-10-02T21:10:00Z", "Asia/Kolkata"));
+    expect(a).not.toBe(withDates("2026-10-02T01:37:00.000Z", "2026-10-02T21:10:00Z", "UTC"));
+  });
+
+  it("follows daylight saving: spring forward and fall back in New York", () => {
+    const due = (iso: string) => withDates(iso, "2026-01-01T00:00:00Z", "America/New_York").split("\n").find((l) => l.startsWith("- Due:"))!;
+    expect(due("2026-03-08T06:59:00Z")).toBe("- Due: 2026-03-08 01:59 (America/New_York) · 2026-03-08T06:59:00Z");
+    expect(due("2026-03-08T07:00:00Z")).toBe("- Due: 2026-03-08 03:00 (America/New_York) · 2026-03-08T07:00:00Z");
+    expect(due("2026-11-01T05:30:00Z")).toBe("- Due: 2026-11-01 01:30 (America/New_York) · 2026-11-01T05:30:00Z");
+    expect(due("2026-11-01T06:30:00Z")).toBe("- Due: 2026-11-01 01:30 (America/New_York) · 2026-11-01T06:30:00Z");
+  });
+
+  it("handles an offset in the date and midnight", () => {
+    expect(withDates("2026-10-02T00:00:00+02:00", "2026-10-02T00:00:00Z", "UTC")).toContain("- Due: 2026-10-01 22:00 (UTC) · 2026-10-02T00:00:00+02:00");
+    expect(withDates(null, "2026-10-02T00:00:00Z", "UTC")).toContain("- Submitted: 2026-10-02 00:00 (UTC)");
+  });
+
+  it.each(["not a date", "2026-13-45T99:00:00Z", "2026-10-02T01:37:00", "", "soon"])("writes %j as received", (bad) => {
+    const md = withDates(bad === "" ? null : bad, bad, "America/Indianapolis");
+    if (bad !== "") expect(md).toContain(`- Due: ${bad}`);
+    expect(md).toMatch(new RegExp(`- Submitted: ${bad.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} by`));
+    expect(md).not.toContain("America/Indianapolis)");
+  });
+
+  it("neutralises a hostile date it cannot read", () => {
+    const md = withDates("see www.evil.com [a](http://x.y) <b>", "a@b.com", "UTC");
+    expect(md).toContain("- Due: see www&#46;evil.com &#91;a&#93;(http:&#47;/x.y) &lt;b&gt;");
+    expect(md).toContain("- Submitted: a&#64;b.com by");
+  });
+
+  it("an unknown zone falls back to UTC instead of failing", () => {
+    expect(withDates("2026-10-02T01:37:00Z", "2026-10-02T01:37:00Z", "Not/AZone")).toContain("- Due: 2026-10-02 01:37 (UTC) · 2026-10-02T01:37:00Z");
+  });
+
+  it("without a zone it uses UTC, never the machine's", () => {
+    expect(withDates("2026-10-02T01:37:00Z", "2026-10-02T01:37:00Z")).toContain("- Due: 2026-10-02 01:37 (UTC)");
   });
 });

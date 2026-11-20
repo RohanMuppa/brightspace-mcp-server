@@ -14,6 +14,7 @@ import path from "node:path";
 import { ApiError, NetworkError, RateLimitError } from "../api/errors.js";
 import type { D2LApiClient } from "../api/index.js";
 import { writeFileAtomic } from "../utils/atomic-write.js";
+import { localTimezone } from "../utils/timezone.js";
 import { openContentTopic, parseContentDispositionFilename } from "../tools/download-file.js";
 import { isAuthUnavailable, sanitizeError } from "../tools/tool-helpers.js";
 import { DownloadError } from "../utils/download-errors.js";
@@ -82,6 +83,8 @@ export interface SyncOptions {
   retryDelaysMs?: number[];
   /** Replaced in tests so backoff costs no time. */
   sleep?: (ms: number) => Promise<void>;
+  /** IANA zone the dates in feedback.md are shown in. Default: the machine's (the one get_server_info reports). */
+  timeZone?: string;
   /** Longest full path kept, shortening names to fit. Default 250 on Windows, unlimited elsewhere. */
   pathBudget?: number;
   onProgress?: (event: SyncProgress) => void;
@@ -953,6 +956,7 @@ async function runSync(
         budget,
         rootLength: root.length,
         roots,
+        timeZone: options.timeZone ?? localTimezone(),
         handleStop: (error) => {
           if (stop.signal.aborted) {
             stopWith(abortedReason());

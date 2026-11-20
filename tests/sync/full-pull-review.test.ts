@@ -756,3 +756,31 @@ describe("saying what is in the way of feedback.md", () => {
     expect(folderInTheWay.failed).toEqual([{ path: mdPath, error: expect.stringContaining("folder") }]);
   });
 });
+
+describe("time zone in feedback.md and the folder for individual and group work", () => {
+  it("the zone is passed in; changing it rewrites feedback.md once, then it is unchanged", async () => {
+    await start(essay());
+    const first = await sync({ timeZone: "UTC" });
+    expect(first.assignments?.feedbackWritten).toBe(1);
+    expect(await read(mdPath)).toContain("- Due: 2026-10-02 23:59 (UTC) · 2026-10-02T23:59:00Z");
+    const moved = await sync({ timeZone: "Asia/Kolkata" });
+    expect(moved.assignments?.feedbackRefreshed).toBe(1);
+    expect(await read(mdPath)).toContain("- Due: 2026-10-03 05:29 (Asia/Kolkata) · 2026-10-02T23:59:00Z");
+    const same = await sync({ timeZone: "Asia/Kolkata" });
+    expect(same.assignments).toMatchObject({ feedbackUnchanged: 1, feedbackRefreshed: 0, feedbackWritten: 0 });
+  });
+
+  it("an individual folder saves into my files and a group folder into submission files", async () => {
+    const setup = essay();
+    setup.routes![FOLDERS] = [folder(5, "Solo"), folder(6, "Team", { GroupTypeId: 9 })];
+    setup.routes![subsRoute(6)] = [submission(30, [{ FileId: 60, FileName: "Report.pdf" }], "B. Mate")];
+    setup.routes![fbRoute(6)] = status(404);
+    setup.files![subFile(6, 30, 60)] = ok("team");
+    await run(setup, {});
+    const tree = await listTree(root);
+    expect(tree).toContain("Assignments/Solo/my files/Essay.docx");
+    expect(tree).toContain("Assignments/Team/submission files/Report.pdf");
+    expect(tree.some((e) => e.startsWith("Assignments/Team/my files"))).toBe(false);
+    expect(tree.some((e) => e.startsWith("Assignments/Solo/submission files"))).toBe(false);
+  });
+});

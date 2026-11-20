@@ -64,6 +64,8 @@ export interface PhaseContext {
   /** Longest full path kept (Infinity when there is none) and the length of the destination path. */
   budget: number;
   rootLength: number;
+  /** IANA zone for the dates written in feedback.md. */
+  timeZone: string;
   /** The top-level folders the extras are saved in. */
   roots: { assignments: string; announcements: string };
   /** For a caught error: true when it is a lost sign-in or a cancel, which the sync has recorded as the stop. */

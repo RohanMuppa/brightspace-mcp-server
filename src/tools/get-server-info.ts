@@ -4,6 +4,7 @@
  * Licensed under MIT — see LICENSE file for details.
  */
 
+import { localTimezone } from "../utils/timezone.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { AppConfig } from "../types/index.js";
 import type { D2LApiClient } from "../api/client.js";
@@ -93,7 +94,7 @@ export function registerGetServerInfo(
         sessionStatePath: config.sessionDir,
         schoolUrl: config.baseUrl,
         hasStoredCredential: config.password !== undefined,
-        localTimezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        localTimezone: localTimezone(),
         // Minutes the local clock is ahead of UTC (the inverse sign of
         // Date#getTimezoneOffset, which is "minutes behind UTC"). On a UTC
         // runner getTimezoneOffset() is 0, so negating it yields -0; `|| 0`

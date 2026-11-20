@@ -27,6 +27,8 @@ export interface NotSaved {
 }
 
 export interface FeedbackDocInput {
+  /** IANA zone the dates are shown in. Default UTC: the text must not depend on the machine it was made on. */
+  timeZone?: string;
   folderId: number;
   name: string;
   isGroup: boolean;
@@ -211,6 +213,32 @@ function blockquote(text: string): string[] {
     });
 }
 
+/** An ISO instant with an explicit zone: Z or an offset. Anything else is not read as a date. */
+const ISO_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})$/i;
+
+/**
+ * "2026-10-01 21:37 (America/Indianapolis) \u00b7 2026-10-02T01:37:00.000Z": the local time first, then the exact
+ * instant as Brightspace sent it. A date that cannot be read is written as received, neutralised like any text.
+ * The zone is explicit, so the same instant and zone always give the same text.
+ */
+function formatInstant(value: string, timeZone: string): string {
+  const raw = String(value);
+  const when = ISO_INSTANT.test(raw.trim()) ? new Date(raw.trim()) : undefined;
+  if (!when || Number.isNaN(when.getTime())) return inline(raw);
+  let zone = timeZone;
+  let parts: Intl.DateTimeFormatPart[];
+  const format = (z: string) =>
+    new Intl.DateTimeFormat("en-CA", { timeZone: z, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(when);
+  try {
+    parts = format(zone);
+  } catch {
+    zone = "UTC";
+    parts = format(zone);
+  }
+  const part = (type: string) => parts.find((p) => p.type === type)?.value ?? "";
+  return `${part("year")}-${part("month")}-${part("day")} ${part("hour")}:${part("minute")} (${inline(zone)}) \u00b7 ${inline(raw.trim())}`;
+}
+
 const unknownText = (reason: string): string => `unknown (${inline(reason)})`;
 
 const total = (n: NotSaved | undefined): number => (n ? n.failed + n.empty + n.notYet : 0);
@@ -252,7 +280,7 @@ export function renderFeedbackMarkdown(doc: FeedbackDocInput): string {
   else lines.push(`- Score: ${feedback.score}${typeof doc.points === "number" ? ` / ${doc.points}` : ""}`);
 
   if (doc.isGroup) lines.push("- Group assignment: yes");
-  if (doc.due) lines.push(`- Due: ${inline(doc.due)}`);
+  if (doc.due) lines.push(`- Due: ${formatInstant(doc.due, doc.timeZone ?? "UTC")}`);
 
   if (!doc.submissions.known) {
     lines.push(`- Submitted: ${unknownText(doc.submissions.reason)}`);
@@ -262,7 +290,7 @@ export function renderFeedbackMarkdown(doc: FeedbackDocInput): string {
     if (items.length === 0) lines.push("- Submitted: not submitted");
     else {
       const latest = items[items.length - 1];
-      lines.push(`- Submitted: ${inline(latest.date)}${latest.by ? ` by ${quote(latest.by)}` : ""}${items.length > 1 ? ` (${items.length} submissions)` : ""}`);
+      lines.push(`- Submitted: ${formatInstant(latest.date, doc.timeZone ?? "UTC")}${latest.by ? ` by ${quote(latest.by)}` : ""}${items.length > 1 ? ` (${items.length} submissions)` : ""}`);
     }
     if (doc.filesUnknown) lines.push(`- Files: ${unknownText(doc.filesUnknown)}`);
     else lines.push(`- Files: ${doc.files.length === 0 ? "none" : doc.files.map(quote).join(", ")}`);

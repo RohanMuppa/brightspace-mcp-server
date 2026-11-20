@@ -398,6 +398,7 @@ export async function syncAssignments(ctx: PhaseContext, options: AssignmentsOpt
         const latest = [...mine.submissions].sort((a, b) => Date.parse(String(a?.SubmissionDate)) - Date.parse(String(b?.SubmissionDate)) || 0);
         const doc: FeedbackDocInput = {
           folderId: folderId!,
+          timeZone: ctx.timeZone,
           name,
           isGroup,
           due: typeof rawFolder.DueDate === "string" ? rawFolder.DueDate : null,

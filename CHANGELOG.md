@@ -6,6 +6,11 @@ A change that can break something a caller relied on is marked **Changed behavio
 
 Entries up to 5.2.1 were generated from the merged PR titles. Versions before 5.0.0 are in the [GitHub releases](https://github.com/RohanMuppa/brightspace-mcp-server/releases) and the git history.
 
+## 5.2.24 (2026-11-19)
+
+- fix: the whole-course pull no longer saves assignments or announcements into a folder you already had. If your destination has a file or folder called `assignments` or `announcements` (any capitalisation), the extras go in `Assignments (2)` or `Announcements (2)` instead.
+- fix: dates in `feedback.md` now show your local time and zone first, then the exact instant (`2026-10-01 21:37 (America/Indianapolis) · 2026-10-02T01:37:00.000Z`). The first run after this rewrites an unedited `feedback.md` once.
+
 ## 5.2.23 (2026-11-19)
 
 - fix: on Windows, starting the shared runtime no longer fails or hangs for 30 seconds when antivirus or another chat briefly has its address file open. It retries, and if the file still cannot be written the chat now says why straight away.
