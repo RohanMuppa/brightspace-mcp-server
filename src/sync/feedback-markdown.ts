@@ -74,30 +74,24 @@ const stripControls = (value: string): string =>
  * written as a character reference, so it shows as itself and does nothing. No code span or other markup is
  * written around remote text, so the neutralising can never break (or be broken by) markup of our own.
  *
- * Written as references: & < > [ ] ` @ \ and |, the first of two slashes in "//", and a dot between two
- * letters or digits (a domain a viewer would link, "evil.com", "www.x.y"), except in a path after a single
- * slash ("my files/Essay.docx"), which viewers do not link. Everything is decided in one pass, left to right.
+ * Written as references: & < > [ ] ` @ \ and |, the first of two slashes in "//" (so "https://x" is no link),
+ * and the dot after a leading "www" (so "www.x.y" is no link). Plain prose, decimals, abbreviations and file
+ * names ("18.5/20", "e.g.", "Q1.b", "report.pdf") are left exactly as written. Bare domains such as "evil.com"
+ * are not escaped: only some engines link them (a fuzzy-link extra, not CommonMark or GFM), and this file does
+ * not defend against that. Everything is decided in one pass, left to right.
  */
 const DANGEROUS = new Set(["&", "<", ">", "[", "]", "`", "@", "\\", "|"]);
-const RUN_CHAR = /[\p{L}\p{N}_.-]/u;
 const ALNUM = /[\p{L}\p{N}]/u;
-const LETTER = /\p{L}/u;
+const NAMED: Record<string, string> = { "&": "&amp;", "<": "&lt;", ">": "&gt;" };
 
-/** Which characters of `text` are written as references. One pass; a run of letters, digits, dots, dashes and underscores is tracked as it grows. */
+/** Which characters of `text` are written as references. One pass. */
 function referenceFlags(text: string): Uint8Array {
   const flags = new Uint8Array(text.length);
-  let runStart = 0;
   for (let i = 0; i < text.length; i++) {
     const c = text[i];
     if (DANGEROUS.has(c)) flags[i] = 1;
     else if (c === "/" && text[i + 1] === "/") flags[i] = 1;
-    else if (c === ".") {
-      if (i > 0 && ALNUM.test(text[i - 1]) && i + 1 < text.length && LETTER.test(text[i + 1])) {
-        const pathLike = text[runStart - 1] === "/" && text[runStart - 2] !== "/";
-        if (!pathLike) flags[i] = 1;
-      }
-    }
-    if (!RUN_CHAR.test(c)) runStart = i + 1;
+    else if (c === "." && i >= 3 && text.slice(i - 3, i).toLowerCase() === "www" && !ALNUM.test(text[i - 4] ?? " ")) flags[i] = 1;
   }
   return flags;
 }
@@ -109,7 +103,7 @@ function escapeText(text: string): string {
   let from = 0;
   for (let i = 0; i < text.length; i++) {
     if (!flags[i]) continue;
-    out += `${text.slice(from, i)}&#${text.charCodeAt(i)};`;
+    out += `${text.slice(from, i)}${NAMED[text[i]] ?? `&#${text.charCodeAt(i)};`}`;
     from = i + 1;
   }
   return out + text.slice(from);

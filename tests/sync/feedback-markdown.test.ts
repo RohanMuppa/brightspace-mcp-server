@@ -205,13 +205,13 @@ describe("remote links and images never go live", () => {
   it("turns an image into plain text with its alt text, and a link into 'text (url)' with the url inert", () => {
     const md = withText("![the chart](https://evil.example/t.png) and [the site](http://e.x/p)");
     expect(md).toContain("(image: the chart)");
-    expect(md).toContain("the site (http:&#47;/e&#46;x/p)");
+    expect(md).toContain("the site (http:&#47;/e.x/p)");
     expect(md).not.toContain("https://evil.example/t.png");
   });
 
   it("does the same in a table cell", () => {
     const md = withCell("[l](http://e.x) ![i](http://e.x/i.png)");
-    expect(md).toContain("l (http:&#47;/e&#46;x) (image: i)");
+    expect(md).toContain("l (http:&#47;/e.x) (image: i)");
   });
 });
 
@@ -394,5 +394,27 @@ describe("what was not saved is described by what it was (L-d)", () => {
     expect(md).toContain("- 1 listed by Brightspace is empty (0 bytes), so there is nothing to save.");
     expect(md).not.toMatch(/Feedback files[\s\S]*could not be saved/);
     expect(md).toContain("- 2 listed by Brightspace not saved yet because the run stopped.");
+  });
+});
+
+describe("ordinary feedback reads as written (readability)", () => {
+  it("leaves decimals, abbreviations, section numbers and file names byte for byte", () => {
+    const paragraph = "Good thesis. Score 18.5/20, see section 3.2 and Q1.b, e.g. cite Smith et al. (2020). File: report_v2.final.pdf";
+    const md = renderFeedbackMarkdown(base({ feedback: { known: true, score: 1, text: paragraph, rubrics: [] } }));
+    expect(md).toContain(`\n> ${paragraph}\n`);
+  });
+
+  it("keeps the same text in a rubric cell", () => {
+    const comment = "see 3.2, Q1.b, e.g. Smith et al. (2020), report.pdf";
+    const md = renderFeedbackMarkdown(base({ feedback: { known: true, score: 1, text: null, rubrics: [{ name: "R", criteria: [{ criterionName: "C", feedback: comment }] }] } }));
+    expect(md).toContain(`| ${comment} |`);
+  });
+
+  it("still defuses a leading www., a scheme, an email and an image in the same lines", () => {
+    const md = renderFeedbackMarkdown(base({ feedback: { known: true, score: 1, text: "www.x.org\nhttps://x.org/a\nme@x.org\n![i](http://x.org/i.png)", rubrics: [] } }));
+    expect(md).toContain("> www&#46;x.org");
+    expect(md).toContain("> https:&#47;/x.org/a");
+    expect(md).toContain("> me&#64;x.org");
+    expect(md).toContain("> (image: i)");
   });
 });

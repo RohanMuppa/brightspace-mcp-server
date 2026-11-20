@@ -8,6 +8,10 @@ import { renderFeedbackMarkdown, type FeedbackDocInput } from "../../src/sync/fe
  * the rendered page must hold no link, no image, no raw element, and the same structure the server wrote.
  */
 const engine = new MarkdownIt({ html: true, linkify: true });
+// Fuzzy bare-domain links ("evil.com") are an engine-specific extra, not CommonMark or GFM, and mainstream viewers
+// (GitHub, VS Code, Obsidian) do not make them. feedback.md leaves decimals, abbreviations and file names alone and
+// does not defend against that one extra. Every other link the engine can make (schemes, www., emails) is checked.
+engine.linkify.set({ fuzzyLink: false });
 
 const ch = (...codes: number[]) => codes.map((c) => String.fromCharCode(c)).join("");
 const LS = ch(0x2028);
