@@ -818,9 +818,12 @@ async function runSync(
       let saveAs = name;
       if (owned) {
         if (spec.prior!.hash === hash) return { status: "unchanged", rel };
-        // The student edited it since the sync wrote it: theirs now.
-        if (!unchangedSinceSync({ path: rel, bytes: 0, size: spec.prior!.size, mtimeMs: spec.prior!.mtimeMs }, ownedStat!)) return { status: "edited", rel };
-        if (existing === "keep_both") saveAs = await freeNumberedName(dir!, name, 2);
+        // The student edited it since the sync wrote it: theirs now. keep_both writes the new text to a copy beside it
+        // and tracks that copy, so later refreshes update the copy in place; skip and replace leave it alone.
+        if (!unchangedSinceSync({ path: rel, bytes: 0, size: spec.prior!.size, mtimeMs: spec.prior!.mtimeMs }, ownedStat!)) {
+          if (existing !== "keep_both") return { status: "edited", rel };
+          saveAs = await freeNumberedName(dir!, name, 2);
+        }
       }
       const target = [...segments, saveAs].join("/");
       if (Number.isFinite(budget) && root.length + 1 + target.length > budget) {
@@ -840,7 +843,7 @@ async function runSync(
         result.downloaded.push({ path: target, bytes: written.size });
         emit({ type: "downloaded", path: target, bytes: written.size });
         unsaved++;
-        return { status: owned ? "refreshed" : "written", rel: target };
+        return { status: owned && saveAs === name ? "refreshed" : "written", rel: target };
       } catch (error) {
         log("WARN", `Course sync: ${target} failed`, error);
         fail(target, error instanceof RefusedFolder ? error.message : describeFailure(error));
@@ -879,8 +882,19 @@ async function runSync(
         manifest,
         stopped: () => {
           if (!result.stopped && stop.signal.aborted) stopWith(abortedReason());
+          return result.stopped !== undefined || attempted >= maxFiles;
+        },
+        halted: () => {
+          if (!result.stopped && stop.signal.aborted) stopWith(abortedReason());
           return result.stopped !== undefined;
         },
+        notRunReason: () => {
+          if (!result.stopped && stop.signal.aborted) stopWith(abortedReason());
+          return result.stopped ?? (attempted >= maxFiles ? "max_files" : undefined);
+        },
+        budget,
+        rootLength: root.length,
+        roots: { assignments: "Assignments", announcements: "Announcements" },
         handleStop: (error) => {
           if (stop.signal.aborted) {
             stopWith(abortedReason());

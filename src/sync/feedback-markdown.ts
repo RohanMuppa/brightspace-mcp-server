@@ -28,10 +28,17 @@ export interface FeedbackDocInput {
   submissions: Known<{ items: Array<{ date: string; by: string | null }> }>;
   /** Saved submission files, relative to the assignment's folder. Meaningful when the submissions are known. */
   files: string[];
-  /** Files that should be saved but were not (refused, over a cap, stopped): the list above is then not all of them. */
+  /** Set when the list of submission files could not be read, so "Files: none" would be wrong. */
+  filesUnknown?: string;
+  /** Submission files Brightspace listed that were not saved (refused, over a cap, stopped). */
   filesNotSaved?: number;
   feedback: Known<{ score: number | null; text: string | null; rubrics: RubricDoc[]; released?: boolean }>;
   feedbackFiles: string[] | { known: false; reason: string };
+  /** Feedback attachments Brightspace listed that were not saved. */
+  feedbackFilesNotSaved?: number;
+  /** The instructor's assignment attachments, when they were asked for. */
+  assignmentFiles?: string[] | { known: false; reason: string };
+  assignmentFilesNotSaved?: number;
 }
 
 const MAX_TEXT_CHARS = 200_000;
@@ -67,6 +74,16 @@ function blockquote(text: string): string[] {
 
 const unknownText = (reason: string): string => `unknown (${inline(reason)})`;
 
+/** A section of saved files, with how many Brightspace listed that were not saved, or "unknown" when the list could not be read. */
+function fileSection(lines: string[], title: string, files: string[] | { known: false; reason: string }, notSaved = 0): void {
+  if (!Array.isArray(files)) {
+    lines.push("", `## ${title}`, unknownText(files.reason));
+  } else if (files.length > 0 || notSaved > 0) {
+    lines.push("", `## ${title}`, ...files.map((f) => `- ${quote(f)}`));
+    if (notSaved > 0) lines.push(`- ${notSaved} listed by Brightspace could not be saved.`);
+  }
+}
+
 export function renderFeedbackMarkdown(doc: FeedbackDocInput): string {
   const lines: string[] = [
     `# ${quote(doc.name)} (assignment ${Number(doc.folderId)})`,
@@ -96,7 +113,8 @@ export function renderFeedbackMarkdown(doc: FeedbackDocInput): string {
       const latest = items[items.length - 1];
       lines.push(`- Submitted: ${inline(latest.date)}${latest.by ? ` by ${quote(latest.by)}` : ""}${items.length > 1 ? ` (${items.length} submissions)` : ""}`);
     }
-    lines.push(`- Files: ${doc.files.length === 0 ? "none" : doc.files.map(quote).join(", ")}`);
+    if (doc.filesUnknown) lines.push(`- Files: ${unknownText(doc.filesUnknown)}`);
+    else lines.push(`- Files: ${doc.files.length === 0 ? "none" : doc.files.map(quote).join(", ")}`);
     if (doc.filesNotSaved) lines.push(`- Files not saved: ${doc.filesNotSaved}`);
   }
 
@@ -122,10 +140,7 @@ export function renderFeedbackMarkdown(doc: FeedbackDocInput): string {
     }
   }
 
-  if (!Array.isArray(doc.feedbackFiles)) {
-    lines.push("", "## Feedback files", unknownText(doc.feedbackFiles.reason));
-  } else if (doc.feedbackFiles.length > 0) {
-    lines.push("", "## Feedback files", ...doc.feedbackFiles.map((f) => `- ${quote(f)}`));
-  }
+  fileSection(lines, "Feedback files", doc.feedbackFiles, doc.feedbackFilesNotSaved);
+  if (doc.assignmentFiles !== undefined) fileSection(lines, "Assignment files", doc.assignmentFiles, doc.assignmentFilesNotSaved);
   return `${lines.join("\n")}\n`;
 }

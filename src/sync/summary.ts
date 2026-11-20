@@ -52,10 +52,31 @@ function scopeFor(included: Included): string {
   );
 }
 
+const MAX_NAME_SHOWN = 150;
+
+/** A remote name, quoted and cut to a readable length, so one long title cannot swamp the answer. */
+function quotedName(name: string): string {
+  const chars = Array.from(name);
+  return quoted(chars.length > MAX_NAME_SHOWN ? `${chars.slice(0, MAX_NAME_SHOWN).join("")}\u2026 (name cut)` : name);
+}
+
+const STOP_WORDS: Record<string, string> = {
+  auth: "the Brightspace session is gone",
+  cancelled: "it was cancelled",
+  deadline: "the time limit passed",
+  max_total_bytes: "the download size limit was reached",
+  max_files: "the file cap was reached",
+};
+
+const folderNote = (folder: string | undefined): string => (folder ? ` Saved in the folder ${quoted(folder)}.` : "");
+
 function assignmentLines(result: SyncResult): string[] {
   const a = result.assignments;
   if (!a) return [];
   const lines: string[] = [];
+  if (a.notRun) {
+    return [`Assignments were not checked because the run stopped (${STOP_WORDS[a.notRun] ?? a.notRun}); nothing was read, so this says nothing about whether there are any. Run it again to get them.`];
+  }
   if (a.listUnreadable) {
     lines.push(`Assignments: the assignment list could not be read (${a.listUnreadable}), so no assignment was saved. This is not "the course has no assignments".`);
   } else if (result.dryRun) {
@@ -68,11 +89,12 @@ function assignmentLines(result: SyncResult): string[] {
     ];
     lines.push(
       `Assignments: ${plural(a.folders, "assignment")} read (${a.hiddenFoldersSkipped} hidden skipped, ${a.groupFolders} group). Saved ${parts.join(", ")}. ` +
-        `feedback.md: ${a.feedbackWritten} written, ${a.feedbackRefreshed} refreshed, ${a.feedbackUnchanged} unchanged.`
+        `feedback.md: ${a.feedbackWritten} written, ${a.feedbackRefreshed} refreshed, ${a.feedbackUnchanged} unchanged.${folderNote(a.folder)}`
     );
   }
   if (a.notSubmitted > 0) lines.push(`${plural(a.notSubmitted, "assignment")} had nothing submitted (Brightspace said so).`);
   if (a.feedbackEditedNotRefreshed > 0) lines.push(`${a.feedbackEditedNotRefreshed} feedback.md ${a.feedbackEditedNotRefreshed === 1 ? "file was" : "files were"} edited, so not refreshed.`);
+  if (a.foldersPartlySaved > 0) lines.push(`${plural(a.foldersPartlySaved, "assignment")} only partly saved because the run stopped (no feedback.md was written for them); run it again to finish.`);
   if (a.foldersNotReached > 0) lines.push(`${plural(a.foldersNotReached, "assignment")} not reached because the run stopped; call it again to continue.`);
   return lines;
 }
@@ -81,21 +103,25 @@ function announcementLines(result: SyncResult): string[] {
   const n = result.announcements;
   if (!n) return [];
   const lines: string[] = [];
+  if (n.notRun) {
+    return [`Announcements were not checked because the run stopped (${STOP_WORDS[n.notRun] ?? n.notRun}); nothing was read, so this says nothing about whether there are any. Run it again to get them.`];
+  }
   if (n.listUnreadable) {
     lines.push(`Announcements: the announcement list could not be read (${n.listUnreadable}), so no announcement attachment was saved. This is not "the course has no announcements".`);
   } else if (result.dryRun) {
     lines.push(`Announcements: ${plural(n.read, "announcement")} read, ${n.withFiles} with files. Dry run: the files that would be saved are listed below.`);
   } else {
-    lines.push(`Announcements: ${plural(n.read, "announcement")} read, ${n.withFiles} with files, ${plural(n.filesDownloaded, "file")} saved.`);
+    lines.push(`Announcements: ${plural(n.read, "announcement")} read, ${n.withFiles} with files, ${plural(n.filesDownloaded, "file")} saved.${folderNote(n.folder)}`);
   }
+  if (n.partlySaved > 0) lines.push(`${plural(n.partlySaved, "announcement")} only partly saved because the run stopped; run it again to finish.`);
   if (n.notReached > 0) lines.push(`${plural(n.notReached, "announcement")} not reached because the run stopped; call it again to continue.`);
   return lines;
 }
 
 function unknownLines(result: SyncResult): string[] {
   const items = [
-    ...(result.assignments?.unknown ?? []).map((u) => `assignment ${quoted(u.name)}: ${u.what}: ${u.reason}`),
-    ...(result.announcements?.unknown ?? []).map((u) => `announcement ${quoted(u.title)}: attachments: ${u.reason}`),
+    ...(result.assignments?.unknown ?? []).map((u) => `assignment ${quotedName(u.name)}: ${u.what}: ${u.reason}`),
+    ...(result.announcements?.unknown ?? []).map((u) => `announcement ${quotedName(u.title)}: attachments: ${u.reason}`),
   ];
   const unreadable = [result.assignments?.listUnreadable, result.announcements?.listUnreadable].some(Boolean);
   if (items.length === 0 && !unreadable) return [];

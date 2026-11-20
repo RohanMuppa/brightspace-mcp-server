@@ -15,14 +15,14 @@ import { toOutputAssessment, type RubricDto } from "../tools/get-assignment-rubr
 import { feedbackText } from "../utils/feedback.js";
 import { log } from "../utils/logger.js";
 import {
-  submissionFileUrl,
   readMyFeedback,
   readMySubmissions,
+  submissionFileUrl,
   type DropboxFeedback,
   type DropboxSubmission,
 } from "../utils/dropbox-submissions.js";
 import { renderFeedbackMarkdown, type FeedbackDocInput, type RubricDoc } from "./feedback-markdown.js";
-import type { PhaseContext, SaveOutcome } from "./extras-types.js";
+import type { NotRunReason, PhaseContext, SaveOutcome } from "./extras-types.js";
 import type { AssignmentRecord } from "./manifest.js";
 import { NameSet, foldKey, sanitizeComponent } from "./names.js";
 
@@ -36,11 +36,17 @@ export interface AssignmentsOptions {
 export type UnknownWhat = "submissions" | "feedback" | "feedbackFiles" | "attachments";
 
 export interface AssignmentsOutcome {
+  /** The top-level folder the assignments were saved in. */
+  folder: string;
+  /** Set when the phase did not run because the run had already stopped: nothing was read, so no count below means anything. */
+  notRun?: NotRunReason;
   folders: number;
   hiddenFoldersSkipped: number;
   groupFolders: number;
-  /** Folders the run stopped before finishing (a cap, a deadline, a cancel or a lost sign-in). */
+  /** Folders the run stopped before reaching (a cap, a deadline, a cancel or a lost sign-in). */
   foldersNotReached: number;
+  /** Folders the run stopped in the middle of: some of their files were saved, and no feedback.md was written. */
+  foldersPartlySaved: number;
   submissionFilesDownloaded: number;
   assignmentFilesDownloaded: number;
   feedbackFilesDownloaded: number;
@@ -56,11 +62,13 @@ export interface AssignmentsOutcome {
   listUnreadable?: string;
 }
 
-export const emptyAssignmentsOutcome = (): AssignmentsOutcome => ({
+export const emptyAssignmentsOutcome = (folder = "Assignments"): AssignmentsOutcome => ({
+  folder,
   folders: 0,
   hiddenFoldersSkipped: 0,
   groupFolders: 0,
   foldersNotReached: 0,
+  foldersPartlySaved: 0,
   submissionFilesDownloaded: 0,
   assignmentFilesDownloaded: 0,
   feedbackFilesDownloaded: 0,
@@ -73,17 +81,22 @@ export const emptyAssignmentsOutcome = (): AssignmentsOutcome => ({
 });
 
 const NAME_CHARS = 150;
+const MIN_NAME_CHARS = 16;
+/** The longest sub-folder name ("submission files"). */
+const SUB_FOLDER_CHARS = 16;
 const MY_FILES = "my files";
 const GROUP_FILES = "submission files";
 const ASSIGNMENT_FILES = "assignment files";
 const FEEDBACK_FILES = "feedback files";
+export const NO_FILE_LIST = "Brightspace's answer had no file list";
+const ODD_FILE_LIST = "Brightspace listed a file in a shape the sync does not read";
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === "object" && !Array.isArray(value);
 
-const positiveId = (value: unknown): number | null => {
+export const positiveId = (value: unknown): number | null => {
   const id = Number(value);
-  return Number.isSafeInteger(id) && id > 0 ? id : null;
+  return typeof value !== "boolean" && value !== null && value !== "" && Number.isSafeInteger(id) && id > 0 ? id : null;
 };
 
 /** One short reason, from a fixed vocabulary: nothing from a response body is echoed. */
@@ -98,6 +111,18 @@ export function describeRead(error: unknown): string {
   if (error instanceof NetworkError) return "Could not connect to Brightspace";
   const status = (error as { status?: unknown } | null)?.status;
   return describeStatus(typeof status === "number" ? status : null);
+}
+
+/**
+ * How many characters a name may have so the longest path stays within the
+ * budget: the folder name takes 40% of what is left, the file name the rest.
+ * Without a budget (anywhere but Windows) the usual 150.
+ */
+export function nameCaps(ctx: Pick<PhaseContext, "budget" | "rootLength">, root: string, subChars: number): { dir: number; file: number } {
+  if (!Number.isFinite(ctx.budget)) return { dir: NAME_CHARS, file: NAME_CHARS };
+  const left = ctx.budget - (ctx.rootLength + 1 + root.length + 1 + 1 + (subChars > 0 ? subChars + 1 : 0));
+  const dir = Math.min(NAME_CHARS, Math.max(MIN_NAME_CHARS, Math.floor(left * 0.4)));
+  return { dir, file: Math.min(NAME_CHARS, Math.max(MIN_NAME_CHARS, left - dir)) };
 }
 
 /** What is already recorded for a folder, so new names never take a recorded file's name. */
@@ -116,28 +141,36 @@ interface Wanted {
   url: string;
 }
 
-const readFileList = (value: unknown): { files: Array<{ fileId: number; fileName: string }> } | { unreadable: true } => {
-  if (value === undefined || value === null) return { files: [] };
-  if (!Array.isArray(value)) return { unreadable: true };
+type FileList = { files: Array<{ fileId: number; fileName: string }> } | { unreadable: string };
+
+/** An absent list is unknown; only a present, empty list is "none". */
+const readFileList = (value: unknown): FileList => {
+  if (!Array.isArray(value)) return { unreadable: NO_FILE_LIST };
   const files: Array<{ fileId: number; fileName: string }> = [];
   for (const raw of value) {
-    if (!isRecord(raw)) return { unreadable: true };
-    const fileId = positiveId(raw.FileId);
-    if (fileId === null) return { unreadable: true };
-    files.push({ fileId, fileName: typeof raw.FileName === "string" ? raw.FileName : `File ${fileId}` });
+    const fileId = isRecord(raw) ? positiveId(raw.FileId) : null;
+    if (fileId === null) return { unreadable: ODD_FILE_LIST };
+    files.push({ fileId, fileName: typeof (raw as Record<string, unknown>).FileName === "string" ? ((raw as Record<string, unknown>).FileName as string) : `File ${fileId}` });
   }
   return { files };
 };
 
 export async function syncAssignments(ctx: PhaseContext, options: AssignmentsOptions): Promise<AssignmentsOutcome> {
-  const out = emptyAssignmentsOutcome();
+  const root = ctx.roots.assignments;
+  const out = emptyAssignmentsOutcome(root);
   const { apiClient, courseId, manifest } = ctx;
+
+  const notRun = (): AssignmentsOutcome => {
+    out.notRun = ctx.notRunReason() ?? "cancelled";
+    return out;
+  };
+  if (ctx.stopped()) return notRun();
 
   let raw: unknown;
   try {
     raw = await apiClient.get<unknown>(apiClient.le(courseId, "/dropbox/folders/"), { signal: ctx.signal });
   } catch (error) {
-    if (ctx.handleStop(error)) return out;
+    if (ctx.handleStop(error)) return notRun();
     // A 404 is how Brightspace says the course has no Assignments tool: known, and not unreadable.
     if ((error as { status?: unknown } | null)?.status !== 404) out.listUnreadable = describeRead(error);
     return out;
@@ -148,19 +181,27 @@ export async function syncAssignments(ctx: PhaseContext, options: AssignmentsOpt
     return out;
   }
 
-  // Folder names under Assignments/. Recorded folders keep their name even when the assignment is renamed.
+  // Folder names under the root. Recorded folders keep their name even when the assignment is renamed.
   const dirNames = new NameSet(NAME_CHARS);
   for (const [, record] of manifest.assignmentRecords(courseId)) {
     const parts = record.dir.split("/");
-    if (parts.length === 2 && parts[0] === "Assignments") dirNames.add(parts[1], true);
+    if (parts.length === 2 && parts[0] === root) dirNames.add(parts[1], true);
   }
+  const caps = nameCaps(ctx, root, SUB_FOLDER_CHARS);
 
   for (const rawFolder of entries) {
-    if (!isRecord(rawFolder)) continue;
-    const folderId = positiveId(rawFolder.Id);
-    if (folderId === null) continue;
-    if (rawFolder.IsHidden === true) {
+    if (isRecord(rawFolder) && rawFolder.IsHidden === true) {
       out.hiddenFoldersSkipped++;
+      continue;
+    }
+    const folderId = isRecord(rawFolder) ? positiveId(rawFolder.Id) : null;
+    if (!isRecord(rawFolder) || folderId === null) {
+      out.unknown.push({
+        folderId: 0,
+        name: isRecord(rawFolder) && typeof rawFolder.Name === "string" ? rawFolder.Name : "",
+        what: "submissions",
+        reason: "this assignment had no usable id, so it was not saved",
+      });
       continue;
     }
     if (ctx.stopped()) {
@@ -176,10 +217,10 @@ export async function syncAssignments(ctx: PhaseContext, options: AssignmentsOpt
       if (finished) {
         out.folders++;
         if (isGroup) out.groupFolders++;
-      } else out.foldersNotReached++;
+      } else out.foldersPartlySaved++;
     } catch (error) {
       if (ctx.handleStop(error)) {
-        out.foldersNotReached++;
+        out.foldersPartlySaved++;
         continue;
       }
       log("WARN", `Course sync: assignment ${folderId} could not be saved`, error);
@@ -190,7 +231,7 @@ export async function syncAssignments(ctx: PhaseContext, options: AssignmentsOpt
     async function oneAssignment(): Promise<boolean> {
       const existingRecord = manifest.findAssignment(courseId, folderId!);
       let dirRel = existingRecord?.dir;
-      if (!dirRel) dirRel = `Assignments/${dirNames.add(sanitizeComponent(name, `Assignment ${folderId}`, NAME_CHARS), true)}`;
+      if (!dirRel) dirRel = `${root}/${dirNames.add(sanitizeComponent(name, `Assignment ${folderId}`, caps.dir), true, caps.dir)}`;
       const dirSegments = dirRel.split("/");
       const record: AssignmentRecord = ctx.dryRun ? existingRecord ?? { dir: dirRel, files: Object.create(null) } : manifest.assignment(courseId, folderId!);
       if (!ctx.dryRun) {
@@ -199,7 +240,7 @@ export async function syncAssignments(ctx: PhaseContext, options: AssignmentsOpt
       }
 
       const mine = options.submissions ? await readMySubmissions(apiClient, courseId, folderId!, { signal: ctx.signal }) : undefined;
-      if (mine && ctx.stopped()) return false;
+      if (mine && ctx.halted()) return false;
       if (mine?.known && mine.submissions.length === 0) out.notSubmitted++;
       if (mine && !mine.known) unknown("submissions", describeStatus(mine.status));
 
@@ -207,90 +248,112 @@ export async function syncAssignments(ctx: PhaseContext, options: AssignmentsOpt
       let feedbackUnknown: string | undefined;
       if (mine) {
         feedback = await readMyFeedback(apiClient, courseId, { Id: folderId!, GroupTypeId: isGroup ? Number(rawFolder.GroupTypeId) : null }, mine, { signal: ctx.signal });
-        if (ctx.stopped()) return false;
+        if (ctx.halted()) return false;
         if (feedback.status === "restricted") feedbackUnknown = describeStatus(403);
         else if (feedback.status === "error") feedbackUnknown = "Brightspace did not return the feedback";
         else if (feedback.groupRouteSkipped) {
           feedbackUnknown = "this is a group assignment, and the student feedback route is not read for groups, so group feedback is unknown";
+        } else if (feedback.fallbackUnknown) {
+          feedbackUnknown = `the other feedback route could not be read: ${describeStatus(feedback.fallbackUnknown.status)}`;
         } else if (feedback.feedback === null && !mine.known) {
           feedbackUnknown = "the submission list could not be read, so the other feedback routes were not tried";
         }
         if (feedbackUnknown) unknown("feedback", feedbackUnknown);
       }
 
-      let notSaved = 0;
-      const saveGroup = async (folder: string, wanted: Wanted[], open: (w: Wanted) => string, count: () => void): Promise<string[]> => {
+      let incomplete = false;
+      const saveGroup = async (folder: string, wanted: Wanted[], count: () => void): Promise<{ listed: string[]; notSaved: number }> => {
         const names = new NameSet(NAME_CHARS);
         reserveRecorded(names, existingRecord, folder);
         const otherPaths = (key: string) => new Set(Object.entries(record.files).filter(([k]) => k !== key).map(([, e]) => foldKey(e.path)));
         const listed: string[] = [];
+        let notSaved = 0;
         for (const file of wanted) {
-          const planned = record.files[file.key] ? "" : names.add(sanitizeComponent(file.fileName, `File ${file.fileId}`, NAME_CHARS));
+          const clean = sanitizeComponent(file.fileName, `File ${file.fileId}`, caps.file);
+          const planned = record.files[file.key] ? clean : names.add(clean, false, caps.file);
           const taken = otherPaths(file.key);
           const result: SaveOutcome = await ctx.saveFile({
             segments: [...dirSegments, folder],
-            name: planned || sanitizeComponent(file.fileName, `File ${file.fileId}`, NAME_CHARS),
+            name: planned,
             prior: record.files[file.key],
             ownedByOther: (candidate) => taken.has(foldKey(candidate)),
-            open: async (signal) => ({ response: await apiClient.getRaw(open(file), { signal }) }),
+            open: async (signal) => ({ response: await apiClient.getRaw(file.url, { signal }) }),
             onSaved: (entry) => {
               record.files[file.key] = entry;
               ctx.touch();
             },
           });
           if (result.status === "saved") count();
+          if (result.status === "notAttempted") incomplete = true;
           if (["saved", "skipped", "duplicate", "planned"].includes(result.status)) {
             listed.push(result.rel.startsWith(`${dirRel}/`) ? result.rel.slice(dirRel!.length + 1) : result.rel);
           } else notSaved++;
         }
-        return listed;
+        return { listed, notSaved };
       };
 
       // The student's own files.
       let myFiles: string[] = [];
+      let myFilesUnknown: string | undefined;
+      let myNotSaved = 0;
       if (mine?.known) {
         const wanted: Wanted[] = [];
         for (const submission of mine.submissions as DropboxSubmission[]) {
-          const submissionId = positiveId(submission?.Id);
-          if (submissionId === null) continue;
+          const submissionId = isRecord(submission) ? positiveId(submission.Id) : null;
+          if (submissionId === null) {
+            myFilesUnknown ??= "a submission had no usable id";
+            unknown("submissions", "a submission had no usable id, so its files were not saved");
+            continue;
+          }
           const list = readFileList(submission.Files);
           if ("unreadable" in list) {
-            unknown("submissions", "Brightspace listed this submission's files in a shape the sync does not read");
+            myFilesUnknown ??= list.unreadable;
+            unknown("submissions", list.unreadable);
             continue;
           }
           for (const file of list.files) {
             wanted.push({ key: `sub:${submissionId}:${file.fileId}`, ...file, url: submissionFileUrl(apiClient, courseId, folderId!, submissionId, file.fileId) });
           }
         }
-        myFiles = await saveGroup(isGroup ? GROUP_FILES : MY_FILES, wanted, (w) => w.url, () => out.submissionFilesDownloaded++);
+        const saved = await saveGroup(isGroup ? GROUP_FILES : MY_FILES, wanted, () => out.submissionFilesDownloaded++);
+        myFiles = saved.listed;
+        myNotSaved = saved.notSaved;
       }
 
       // The instructor's attachments.
+      let assignmentFiles: string[] | { known: false; reason: string } | undefined;
+      let assignmentNotSaved = 0;
       if (options.assignmentFiles) {
         const list = readFileList(rawFolder.Attachments);
-        if ("unreadable" in list) unknown("attachments", "Brightspace listed the attachments in a shape the sync does not read");
-        else {
+        if ("unreadable" in list) {
+          unknown("attachments", list.unreadable);
+          assignmentFiles = { known: false, reason: list.unreadable };
+        } else {
           const wanted = list.files.map((file): Wanted => ({ key: `asg:${file.fileId}`, ...file, url: apiClient.le(courseId, `/dropbox/folders/${folderId}/attachments/${file.fileId}`) }));
-          await saveGroup(ASSIGNMENT_FILES, wanted, (w) => w.url, () => out.assignmentFilesDownloaded++);
+          const saved = await saveGroup(ASSIGNMENT_FILES, wanted, () => out.assignmentFilesDownloaded++);
+          assignmentFiles = saved.listed;
+          assignmentNotSaved = saved.notSaved;
         }
       }
 
-      // The feedback's attachments. The route is documented but unverified on a live school, so any trouble is unknown.
+      // The feedback's attachments. Only released feedback has any. The route is documented but unverified on a live school, so any trouble is unknown.
+      const released = feedback?.feedback != null && feedback.feedback.IsGraded !== false;
       let feedbackFiles: string[] | { known: false; reason: string } = [];
+      let feedbackNotSaved = 0;
       if (feedback) {
         if (feedbackUnknown) feedbackFiles = { known: false, reason: feedbackUnknown };
-        else if (feedback.feedback) {
+        else if (released) {
           const list = readFileList((feedback.feedback as DropboxFeedback).Files);
           if ("unreadable" in list) {
-            feedbackFiles = { known: false, reason: "Brightspace listed the feedback files in a shape the sync does not read" };
-            unknown("feedbackFiles", feedbackFiles.reason);
+            feedbackFiles = { known: false, reason: list.unreadable };
+            unknown("feedbackFiles", list.unreadable);
           } else if (list.files.length > 0) {
             let myId: number | undefined;
             let why: string | undefined;
             if (isGroup) why = "group feedback attachments are not fetched";
             else {
               try {
-                myId = await fetchCurrentUserId(apiClient);
+                myId = await fetchCurrentUserId(apiClient, ctx.signal);
               } catch (error) {
                 if (ctx.handleStop(error)) return false;
                 why = describeRead(error);
@@ -305,17 +368,20 @@ export async function syncAssignments(ctx: PhaseContext, options: AssignmentsOpt
                 ...file,
                 url: apiClient.le(courseId, `/dropbox/folders/${folderId}/feedback/user/${myId}/attachments/${file.fileId}`),
               }));
-              feedbackFiles = await saveGroup(FEEDBACK_FILES, wanted, (w) => w.url, () => out.feedbackFilesDownloaded++);
+              const saved = await saveGroup(FEEDBACK_FILES, wanted, () => out.feedbackFilesDownloaded++);
+              feedbackFiles = saved.listed;
+              feedbackNotSaved = saved.notSaved;
             }
           }
         }
       }
 
-      if (ctx.stopped()) return false;
+      // A folder the run stopped in the middle of is partly saved: no feedback.md, so it never claims to be complete.
+      if (ctx.halted() || incomplete) return false;
 
       // feedback.md, last, so it can list what was saved.
       if (mine && feedback) {
-        const latest = [...mine.submissions].sort((a, b) => Date.parse(String(a.SubmissionDate)) - Date.parse(String(b.SubmissionDate)) || 0);
+        const latest = [...mine.submissions].sort((a, b) => Date.parse(String(a?.SubmissionDate)) - Date.parse(String(b?.SubmissionDate)) || 0);
         const doc: FeedbackDocInput = {
           folderId: folderId!,
           name,
@@ -323,10 +389,11 @@ export async function syncAssignments(ctx: PhaseContext, options: AssignmentsOpt
           due: typeof rawFolder.DueDate === "string" ? rawFolder.DueDate : null,
           points: isRecord(rawFolder.Assessment) && typeof rawFolder.Assessment.ScoreDenominator === "number" ? rawFolder.Assessment.ScoreDenominator : null,
           submissions: mine.known
-            ? { known: true, items: latest.map((s) => ({ date: String(s.SubmissionDate ?? ""), by: s.SubmittedBy?.DisplayName ?? null })) }
+            ? { known: true, items: latest.map((s) => ({ date: String(s?.SubmissionDate ?? ""), by: s?.SubmittedBy?.DisplayName ?? null })) }
             : { known: false, reason: describeStatus(mine.status) },
           files: myFiles,
-          filesNotSaved: notSaved,
+          ...(myFilesUnknown ? { filesUnknown: myFilesUnknown } : {}),
+          filesNotSaved: myNotSaved,
           feedback: feedbackUnknown
             ? { known: false, reason: feedbackUnknown }
             : {
@@ -334,9 +401,11 @@ export async function syncAssignments(ctx: PhaseContext, options: AssignmentsOpt
                 score: typeof feedback.feedback?.Score === "number" ? feedback.feedback.Score : null,
                 text: feedbackText(feedback.feedback?.Feedback),
                 rubrics: rubricsOf(feedback.feedback, rawFolder),
-                released: feedback.feedback !== null && feedback.feedback.IsGraded !== false,
+                released,
               },
           feedbackFiles,
+          feedbackFilesNotSaved: feedbackNotSaved,
+          ...(assignmentFiles !== undefined ? { assignmentFiles, assignmentFilesNotSaved: assignmentNotSaved } : {}),
         };
         const written = await ctx.saveText({
           segments: dirSegments,

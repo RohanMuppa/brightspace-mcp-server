@@ -44,6 +44,8 @@ export interface Extras {
   routes: Record<string, unknown>;
   /** What `client.getRaw` serves by route, besides content topics. */
   files: Record<string, Step | Step[]>;
+  /** Milliseconds each content file takes, so a deadline can pass between two files. */
+  contentDelayMs?: number;
 }
 
 /**
@@ -55,10 +57,14 @@ export async function fakeCourse(toc: unknown, topics: Record<number, Step | Ste
   const base = await fakeBrightspace(toc, topics, {});
   const contentGet = base.client.get;
   base.client.lp = (p: string) => `/d2l/api/lp/1.99${p}`;
+  // Like the real client, a request made after the signal aborted throws before anything is sent.
+  const aborted = (options?: unknown) => (options as { signal?: AbortSignal } | undefined)?.signal?.throwIfAborted();
   base.client.get = vi.fn(async (p: string, options?: unknown) => {
+    aborted(options);
     if (p in routes) {
       const hit = routes[p];
       if (hit instanceof Error) throw hit;
+      if (typeof hit === "function") return hit(options);
       return hit;
     }
     return contentGet(p, options);
@@ -67,7 +73,11 @@ export async function fakeCourse(toc: unknown, topics: Record<number, Step | Ste
   const rawRequests: string[] = [];
   const counts = new Map<string, number>();
   base.client.getRaw = vi.fn(async (p: string, options?: unknown) => {
-    if (/\/content\/topics\/\d+\/file/.test(p)) return contentRaw(p, options);
+    aborted(options);
+    if (/\/content\/topics\/\d+\/file/.test(p)) {
+      if (extras.contentDelayMs) await new Promise((resolve) => setTimeout(resolve, extras.contentDelayMs));
+      return contentRaw(p, options);
+    }
     rawRequests.push(p);
     const plan = extras.files[p];
     const steps = Array.isArray(plan) ? plan : [plan];

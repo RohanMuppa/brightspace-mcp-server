@@ -139,6 +139,26 @@ describe("readMyFeedback", () => {
     expect(client.calls.some(([p]: [string]) => p.includes("/feedback/user/"))).toBe(false);
   });
 
+  it.each([[403], [500]])("says the fallback could not be read when the user route answers %s", async (code) => {
+    const client = fakeClient({ "/users/whoami": { Identifier: 5 }, "/feedback/user/5": new ApiError(code, "/x", "no") });
+    const out = await readMyFeedback(client, 7, folder, { submissions: [{ Id: 1 }] as any[], embeddedFeedback: null });
+    expect(out).toMatchObject({ feedback: null, status: "unavailable", fallbackUnknown: { status: code } });
+  });
+
+  it("says so too when the user lookup fails, and passes the signal on", async () => {
+    const client = fakeClient({ "/users/whoami": new Error("boom") });
+    const signal = new AbortController().signal;
+    const out = await readMyFeedback(client, 7, folder, { submissions: [{ Id: 1 }] as any[], embeddedFeedback: null }, { signal });
+    expect(out.fallbackUnknown).toEqual({ status: null });
+    expect(client.calls.find(([p]: [string]) => p.endsWith("/users/whoami"))[1]).toMatchObject({ signal });
+  });
+
+  it("a 404 from the user route is a known absence", async () => {
+    const client = fakeClient({ "/users/whoami": { Identifier: 5 } });
+    const out = await readMyFeedback(client, 7, folder, { submissions: [{ Id: 1 }] as any[], embeddedFeedback: null });
+    expect(out.fallbackUnknown).toBeUndefined();
+  });
+
   it("a failing user route leaves it unavailable, not an error", async () => {
     const client = fakeClient({ "/users/whoami": new Error("boom") });
     expect(await readMyFeedback(client, 7, folder, { submissions: [{ Id: 1 }] as any[], embeddedFeedback: null })).toMatchObject({ feedback: null, status: "unavailable" });
