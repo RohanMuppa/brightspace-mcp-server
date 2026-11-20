@@ -159,3 +159,131 @@ describe("renderFeedbackMarkdown", () => {
     });
   });
 });
+
+describe("remote links and images never go live", () => {
+  const withText = (text: string) => renderFeedbackMarkdown(base({ feedback: { known: true, score: 1, text, rubrics: [] } }));
+  const withCell = (feedback: string) =>
+    renderFeedbackMarkdown(base({ feedback: { known: true, score: 1, text: null, rubrics: [{ name: "R", criteria: [{ criterionName: "C", feedback }] }] } }));
+  /** What a renderer would still see as markup: the text with every inline code span taken out. */
+  const outsideCode = (md: string) => md.replace(/^<!--.*-->$/m, "").replace(/`[^`\n]*`/g, "");
+
+  const inputs: Array<[string, string]> = [
+    ["an inline image", "see ![chart](https://evil.example/t.png) here"],
+    ["an image with a title", '![chart](https://evil.example/t.png "title")'],
+    ["a reference image", "![chart][1]\n\n[1]: https://evil.example/t.png"],
+    ["a shortcut image", "![chart]"],
+    ["an inline link", "[click](http://e.x/path)"],
+    ["a link with a javascript url", "[click](javascript:alert(1))"],
+    ["a reference link", "[click][ref]\n\n[ref]: http://e.x"],
+    ["a shortcut link", "[ref]"],
+    ["an autolink", "<http://e.x/auto>"],
+    ["a mail autolink", "<someone@example.com>"],
+    ["a bare url", "visit https://bare.example/x and www.bare.example/y"],
+    ["an image in a link", "[![alt](https://evil.example/i.png)](https://evil.example/l)"],
+    ["an img tag", '<img src="https://evil.example/t.png" onerror="x">'],
+    ["an a tag", '<a href="https://evil.example/l">go</a>'],
+  ];
+
+  it.each(inputs)("%s in the feedback text", (_label, text) => {
+    const md = outsideCode(withText(text));
+    expect(md).not.toMatch(/https?:\/\//);
+    expect(md).not.toMatch(/www\./);
+    expect(md).not.toContain("![");
+    expect(md).not.toContain("](");
+    expect(md).not.toContain("<");
+    expect(md.replace(/&#9[13];/g, "")).not.toMatch(/[\[\]]/);
+  });
+
+  it.each(inputs)("%s in a rubric cell", (_label, text) => {
+    const md = outsideCode(withCell(text.replace(/\n+/g, " ")));
+    expect(md).not.toMatch(/https?:\/\//);
+    expect(md).not.toContain("![");
+    expect(md).not.toContain("](");
+    expect(md).not.toContain("<");
+  });
+
+  it("turns an image into plain text with its alt text, and a link into 'text (url)' with the url inert", () => {
+    const md = withText("![the chart](https://evil.example/t.png) and [the site](http://e.x/p)");
+    expect(md).toContain("(image: the chart)");
+    expect(md).toContain("the site (`http://e.x/p`)");
+    expect(md).not.toContain("https://evil.example/t.png");
+  });
+
+  it("does the same in a table cell", () => {
+    const md = withCell("[l](http://e.x) ![i](http://e.x/i.png)");
+    expect(md).toContain("l (`http://e.x`) (image: i)");
+  });
+});
+
+describe("table cells escape backslashes before pipes", () => {
+  it("keeps 'c\\|d' inside its column", () => {
+    const md = renderFeedbackMarkdown(
+      base({ feedback: { known: true, score: 1, text: null, rubrics: [{ name: "R", criteria: [{ criterionName: "c\\|d", levelName: "x" }] }] } })
+    );
+    expect(md).toContain("| c\\\\\\|d | x |  |  |");
+  });
+
+  it("escapes a trailing backslash so it cannot eat the closing pipe", () => {
+    const md = renderFeedbackMarkdown(
+      base({ feedback: { known: true, score: 1, text: null, rubrics: [{ name: "R", criteria: [{ criterionName: "end\\", levelName: "x" }] }] } })
+    );
+    expect(md).toContain("| end\\\\ | x |  |  |");
+  });
+});
+
+describe("invisible and bidirectional controls are stripped", () => {
+  const controls = [0x200b, 0x200c, 0x200d, 0x200e, 0x200f, 0x202a, 0x202b, 0x202c, 0x202d, 0x202e, 0x2066, 0x2067, 0x2068, 0x2069, 0xfeff].map((c) => String.fromCharCode(c));
+  const dirty = (text: string) => controls.map((c) => `${c}${text}`).join("");
+  const hasControl = (md: string) => controls.some((c) => md.includes(c));
+
+  it("from names, file names, submitter and rubric names", () => {
+    const md = renderFeedbackMarkdown(
+      base({
+        name: dirty("Essay"),
+        files: [dirty("my files/a.docx")],
+        submissions: { known: true, items: [{ date: "d", by: dirty("A. Student") }] },
+        feedbackFiles: [dirty("feedback files/b.pdf")],
+        feedback: { known: true, score: 1, text: null, rubrics: [{ name: dirty("Rubric"), criteria: [{ criterionName: dirty("Crit") }] }] },
+      })
+    );
+    expect(hasControl(md)).toBe(false);
+    expect(md).toContain("EssayEssay");
+  });
+
+  it("from feedback text and cells", () => {
+    const md = renderFeedbackMarkdown(
+      base({ feedback: { known: true, score: 1, text: dirty("Good"), rubrics: [{ name: "R", criteria: [{ criterionName: "C", feedback: dirty("note") }] }] } })
+    );
+    expect(hasControl(md)).toBe(false);
+    expect(md).toContain("> GoodGood");
+  });
+});
+
+describe("feedback.md is bounded", () => {
+  const criteria = (n: number, feedback = "x") => Array.from({ length: n }, (_, i) => ({ criterionName: `C${i}`, feedback }));
+
+  it("writes at most 200 rubric rows and says how many were not shown", () => {
+    const md = renderFeedbackMarkdown(base({ feedback: { known: true, score: 1, text: null, rubrics: [{ name: "R", criteria: criteria(300) }] } }));
+    expect(md.split("\n").filter((l) => /^\| C\d+ \|/.test(l))).toHaveLength(200);
+    expect(md).toContain("…and 100 more criteria not shown");
+  });
+
+  it("does not add the note when everything fits", () => {
+    const md = renderFeedbackMarkdown(base({ feedback: { known: true, score: 1, text: null, rubrics: [{ name: "R", criteria: criteria(200) }] } }));
+    expect(md).not.toContain("not shown");
+  });
+
+  it("cuts the whole file at 300 kB and says so", () => {
+    const big = "y".repeat(5000);
+    const md = renderFeedbackMarkdown(
+      base({ feedback: { known: true, score: 1, text: "z".repeat(200_000), rubrics: [{ name: "R", criteria: criteria(200, big) }, { name: "S", criteria: criteria(200, big) }] } })
+    );
+    expect(md.length).toBeLessThanOrEqual(300_200);
+    expect(md.trimEnd().split("\n").at(-1)).toBe("(feedback.md was cut here: it passed 300 kB.)");
+    expect(md.startsWith('# "Essay 2"')).toBe(true);
+  });
+
+  it("leaves a normal file whole", () => {
+    expect(renderFeedbackMarkdown(base())).not.toContain("was cut here");
+  });
+});

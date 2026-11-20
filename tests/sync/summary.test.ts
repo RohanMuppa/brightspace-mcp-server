@@ -109,4 +109,32 @@ describe("summarizeSync with the extra phases", () => {
     expect(text).toContain("3 assignments not reached because the run stopped");
     expect(text).toContain("1 assignment had nothing submitted");
   });
+
+  it("cuts a long assignment or announcement name in the unknown list", () => {
+    const long = "N".repeat(500);
+    const text = summarizeSync({
+      ...base, included: all,
+      assignments: { ...assignments, unknown: [{ folderId: 5, name: long, what: "submissions", reason: "Brightspace refused the request: 403" }] },
+      announcements: { read: 1, withFiles: 0, filesDownloaded: 0, notReached: 0, unknown: [{ newsId: 8, title: long, reason: "x" }] },
+    });
+    expect(text).not.toContain("N".repeat(151));
+    expect(text).toContain("(name cut)");
+    expect(text.split("\n").every((line) => line.length < 400)).toBe(true);
+  });
+
+  it("says an unrun phase was not checked, and an unfinished one was only partly saved", () => {
+    const text = summarizeSync({
+      ...base, included: all,
+      assignments: { ...assignments, folder: "Assignments (2)", notRun: "deadline" },
+      announcements: { folder: "Announcements", read: 1, withFiles: 1, filesDownloaded: 1, unknown: [], notReached: 0, partlySaved: 2 },
+    });
+    expect(text).toContain("Assignments were not checked because the run stopped (the time limit passed)");
+    expect(text).not.toMatch(/Assignments: \d+ assignments read/);
+    expect(text).toContain("2 announcements only partly saved because the run stopped");
+  });
+
+  it("names the folder the extras were saved in", () => {
+    const text = summarizeSync({ ...base, included: all, assignments: { ...assignments, folder: "Assignments (2)" } });
+    expect(text).toContain('Saved in the folder "Assignments (2)".');
+  });
 });
