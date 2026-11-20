@@ -314,8 +314,7 @@ The answer is text. Its first line reads "Course N saved to D: X downloaded, Y a
 
 - Not-file counts are listed separately: web links, embedded video and media, broken items, other non-file items, empty files, and files that are locked or not yet released. The answer says these Content items are not files, so they are not missing from the Content sync.
 - The answer always ends with a scope line (`CONTENT_ONLY_SCOPE` in `src/sync/summary.ts`): the sync covers the Content area only, and it names the tool for each thing it skipped (`NOT_COVERED`). `download_course_files`, `get_unsaved_course_files` and the `sync` command all carry it; `get_unsaved_course_files` also returns `NOT_COVERED` as `notCovered`.
-
-**Why:** reported 2026-11-19 from a live course. An agent asked to "pull everything" read "These are not missing from the sync" as "the course is saved" and never downloaded the student's own submissions, which this tool does not look at.
+  **Why:** reported 2026-11-19 from a live course (PR #467). An agent asked to "pull everything" read "These are not missing from the sync" as "the course is saved" and never downloaded the student's own submissions, which this tool does not look at.
 - A 0-byte file is counted as empty. This happens when the response has no body or a Content-Length of 0, and also when the body turns out to be 0 bytes. Empty files are not written, and they are not failures.
 - Names in the answer are JSON-quoted. The answer says once that they come from the course. Each list shows at most 20 names.
 - The tool is not annotated read-only, because it writes files.

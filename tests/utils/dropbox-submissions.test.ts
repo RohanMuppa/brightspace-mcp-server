@@ -23,3 +23,9 @@ describe("flattenDropboxSubmissions", () => {
     expect(flattenDropboxSubmissions(undefined)).toEqual([]);
   });
 });
+
+describe("flattenDropboxSubmissions with a null entry", () => {
+  it("skips it instead of throwing", () => {
+    expect(flattenDropboxSubmissions([null as never, { Id: 1 }])).toEqual([{ Id: 1 }]);
+  });
+});

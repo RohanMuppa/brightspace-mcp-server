@@ -90,7 +90,7 @@ Ask your assistant to save a course, or run it yourself from a terminal:
 npx -y brightspace-mcp-server@latest sync --course 123456 --dest ~/Courses/ECE-264
 ```
 
-Every file in the course's Content area is saved into folders named after its modules. Running it again fetches only what is new. It covers the Content area only: your own submissions and feedback, assignment and attachment files, and the syllabus are separate (ask your assistant for them by name).
+Every file in the course's Content area is saved into folders named after its modules. Running it again fetches only what is new. It covers the Content area only: your own submissions and feedback, assignment and announcement attachments, and the syllabus are separate (ask your assistant for them by name).
 
 | Option | What it does |
 |--------|--------------|
