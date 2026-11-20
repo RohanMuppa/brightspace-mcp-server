@@ -38,6 +38,18 @@ import path from "node:path";
 const RECORD_WAIT_MS = 500;
 
 /** Resolves when `work` does or after `ms`, whichever is first; `work` keeps running either way. */
+/** Ledger writes that have not finished yet, including ones an answer stopped waiting for. */
+const pendingRecords = new Set<Promise<unknown>>();
+
+/**
+ * Resolves once every ledger write started by a download has finished. For tests: the answer
+ * waits for the ledger only RECORD_WAIT_MS, and a slow runner (Windows CI) can take longer,
+ * so a test that reads the ledger right after a download must wait for the write itself.
+ */
+export async function settleSavedTopicRecords(): Promise<void> {
+  await Promise.allSettled([...pendingRecords]);
+}
+
 async function waitAtMost(work: Promise<unknown>, ms: number): Promise<void> {
   let timer: NodeJS.Timeout | undefined;
   await Promise.race([work, new Promise<void>((resolve) => { timer = setTimeout(resolve, ms); })]);
@@ -299,7 +311,10 @@ async function finishDownload(
     // Bookkeeping only: it logs its own failures and never throws, so a save that worked stays a success.
     // The file is already saved, so the answer waits for the ledger only briefly: a busy lock (another server
     // or the sync command writing) must not hold it up. The record still lands in the background.
-    await waitAtMost(recordSavedTopic({ ...topic, path: result.path, size: result.size }), RECORD_WAIT_MS);
+    const record = recordSavedTopic({ ...topic, path: result.path, size: result.size });
+    pendingRecords.add(record);
+    void record.finally(() => pendingRecords.delete(record)).catch(() => undefined);
+    await waitAtMost(record, RECORD_WAIT_MS);
   }
 
   return toolResponse({

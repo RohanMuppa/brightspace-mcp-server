@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { registerDownloadFile } from "../../src/tools/download-file.js";
+import { registerDownloadFile, settleSavedTopicRecords } from "../../src/tools/download-file.js";
 import { registerGetUnsavedCourseFiles } from "../../src/tools/get-unsaved-course-files.js";
 import { registerMarkCourseFilesSaved } from "../../src/tools/mark-course-files-saved.js";
 import { readSavedState, useLedgerFile } from "../../src/sync/saved-topics.js";
@@ -40,11 +40,17 @@ const toc = {
 };
 const bodies = { 10: { body: pdf("a") }, 12: { body: pdf("b") }, 14: { body: pdf("c") } };
 
+/** Runs a tool, then waits for any ledger write the answer stopped waiting for, so the next read sees it. */
+const settled = async (response: Promise<unknown>): Promise<any> => {
+  const value = await response;
+  await settleSavedTopicRecords();
+  return value;
+};
 function tool(register: (server: never, client: never, options?: never) => void, options?: unknown) {
   let config: any;
   let handler: any;
   register({ registerTool: (_n: string, c: unknown, f: any) => { config = c; handler = f; } } as never, fake.client as never, options as never);
-  return { config, call: (args: Record<string, unknown>) => handler(args) };
+  return { config, call: (args: Record<string, unknown>) => settled(handler(args)) };
 }
 const mark = (options?: { lockWaitMs?: number }) => tool(registerMarkCourseFilesSaved as never, options);
 const unsaved = () => tool(registerGetUnsavedCourseFiles as never);

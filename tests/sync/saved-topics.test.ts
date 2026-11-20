@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { registerDownloadFile } from "../../src/tools/download-file.js";
+import { registerDownloadFile, settleSavedTopicRecords } from "../../src/tools/download-file.js";
 import { registerDownloadCourseFiles } from "../../src/tools/download-course-files.js";
 import { registerGetCourseContent } from "../../src/tools/get-course-content.js";
 import { registerGetUnsavedCourseFiles } from "../../src/tools/get-unsaved-course-files.js";
@@ -43,12 +43,23 @@ const toc = {
 };
 const bodies = { 10: { body: pdf("a") }, 12: { body: pdf("b") } };
 
+/** Runs a tool, then waits for any ledger write the answer stopped waiting for, so the next read sees it. */
+const settled = async (response: Promise<unknown>): Promise<any> => {
+  const value = await response;
+  await settleSavedTopicRecords();
+  return value;
+};
 /** Registers a tool and hands back its config and handler. */
 function tool(register: (server: never, client: never) => void) {
   let config: any;
   let handler: any;
   register({ registerTool: (_n: string, c: unknown, f: any) => { config = c; handler = f; } } as never, fake.client as never);
-  return { config, call: (args: Record<string, unknown>, extra?: unknown) => handler(args, extra) };
+  return {
+    config,
+    call: (args: Record<string, unknown>, extra?: unknown) => settled(handler(args, extra)),
+    /** Without the wait, for a test that times the answer itself. */
+    callRaw: (args: Record<string, unknown>, extra?: unknown) => handler(args, extra),
+  };
 }
 const downloadFile = () => tool(registerDownloadFile as never);
 const unsaved = () => tool(registerGetUnsavedCourseFiles as never);
@@ -463,7 +474,7 @@ describe("recording a download_file save never holds up the answer", () => {
     const target = path.join(dir, "out");
     await fs.mkdir(target);
     const started = Date.now();
-    const response = await downloadFile().call({ courseId: COURSE, topicId: 12, downloadPath: target });
+    const response = await downloadFile().callRaw({ courseId: COURSE, topicId: 12, downloadPath: target });
     expect(Date.now() - started).toBeLessThan(1500);
     expect(json(response).success).toBe(true);
     expect((await fs.readdir(target)).length).toBe(1);

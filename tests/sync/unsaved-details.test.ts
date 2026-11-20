@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { registerDownloadFile } from "../../src/tools/download-file.js";
+import { registerDownloadFile, settleSavedTopicRecords } from "../../src/tools/download-file.js";
 import { registerDownloadCourseFiles } from "../../src/tools/download-course-files.js";
 import { registerGetUnsavedCourseFiles } from "../../src/tools/get-unsaved-course-files.js";
 import { useLedgerFile } from "../../src/sync/saved-topics.js";
@@ -24,10 +24,16 @@ afterEach(async () => {
   await fs.rm(dir, { recursive: true, force: true });
 });
 
+/** Runs a tool, then waits for any ledger write the answer stopped waiting for, so the next read sees it. */
+const settled = async (response: Promise<unknown>): Promise<any> => {
+  const value = await response;
+  await settleSavedTopicRecords();
+  return value;
+};
 function tool(register: (server: never, client: never) => void) {
   let handler: any;
   register({ registerTool: (_n: string, _c: unknown, f: any) => { handler = f; } } as never, fake.client as never);
-  return (args: Record<string, unknown>) => handler(args);
+  return (args: Record<string, unknown>) => settled(handler(args));
 }
 const json = (response: any) => JSON.parse(response.content[0].text);
 
