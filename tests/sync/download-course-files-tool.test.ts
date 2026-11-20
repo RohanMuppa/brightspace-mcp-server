@@ -36,6 +36,14 @@ describe("download_course_files", () => {
     expect(DownloadCourseFilesSchema.safeParse({ courseId: 42 }).success).toBe(false);
   });
 
+  it("says in its description that it covers the Content area only and where the rest is", async () => {
+    const { config } = await register(toc, {});
+    expect(config.description).toMatch(/Content area only, not the whole course/);
+    for (const tool of ["get_assignments", "download_file", "get_assignment_files", "get_announcement_files", "get_syllabus"]) {
+      expect(config.description).toContain(tool);
+    }
+  });
+
   it("downloads the course and summarises counts, including what was not a file", async () => {
     const { call } = await register(toc, { 10: { body: pdf("a") } });
     const response = await call({ courseId: 42, downloadPath: dir });

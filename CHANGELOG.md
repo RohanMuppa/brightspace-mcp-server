@@ -6,6 +6,11 @@ A change that can break something a caller relied on is marked **Changed behavio
 
 Entries up to 5.2.1 were generated from the merged PR titles. Versions before 5.0.0 are in the [GitHub releases](https://github.com/RohanMuppa/brightspace-mcp-server/releases) and the git history.
 
+## 5.2.19 (2026-11-19)
+
+- fix: `download_file` with `folderId` and `fileId` now saves your own submission files on schools where Brightspace nests them one level down, instead of answering "not found" with an empty file list. The same fix applies to `get_dropbox_submissions`, `get_dropbox_user_submissions` and `download_dropbox_submission_file`. When a submission has no files, the answer says so.
+- fix: `download_course_files`, `get_unsaved_course_files` and the `sync` command now say they cover the Content area only, and name the tools for what they skip: your own submissions and feedback, assignment and announcement attachments, the syllabus. "These are not missing from the sync" no longer reads as "the whole course is saved". `get_unsaved_course_files` adds a `notCovered` field; every existing field is unchanged.
+
 ## 5.2.18 (2026-11-19)
 
 - fix: `get_unsaved_course_files` labels the topic types in `tableOfContents.topicTypes` as `File` and `Link` when Brightspace gives no numeric type, instead of `File/?` and `Link/?`. A topic with no type at all is `unknown`. The key is `File/1` only when both parts exist, and the answer's note says what the two parts are.

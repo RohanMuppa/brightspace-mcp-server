@@ -15,6 +15,7 @@ import { validateContentId } from "../utils/file-validator.js";
 import { isNetworkOrDevicePath } from "../utils/sensitive-paths.js";
 import { SyncInputError, planFiles, type Plan } from "../sync/course-sync.js";
 import { readSavedState, type SavedCandidate, type SavedState } from "../sync/saved-topics.js";
+import { CONTENT_ONLY_SCOPE, NOT_COVERED } from "../sync/summary.js";
 
 export type Listed = {
   topicId: number;
@@ -118,7 +119,7 @@ export async function diffCourse(apiClient: D2LApiClient, courseId: number, modu
 }
 
 const UNSAVED_NOTE =
-  "unsaved lists topics the server has no record of saving. A file the student already has from before this version, or saved another way (browser download, manual copy), appears here too, so ask before downloading everything again. For files the student says they already have, ask which ones and record them with mark_course_files_saved instead of downloading them. A listed topic may not be open yet (locked, hidden or outside its release dates); download_file says why when it can.";
+  "unsaved lists topics the server has no record of saving. A file the student already has from before this version, or saved another way (browser download, manual copy), appears here too, so ask before downloading everything again. For files the student says they already have, ask which ones and record them with mark_course_files_saved instead of downloading them. A listed topic may not be open yet (locked, hidden or outside its release dates); download_file says why when it can. " + CONTENT_ONLY_SCOPE;
 
 /** What the counters cover: the whole table, or only the module asked for. */
 function tocNote(moduleId: number | undefined): string {
@@ -138,7 +139,7 @@ export function registerGetUnsavedCourseFiles(server: McpServer, apiClient: D2LA
       title: "Get Unsaved Course Files",
       annotations: { readOnlyHint: true },
       description:
-        "List the file topics in a course's Content area that the student has not saved yet, by comparing topic ids with what download_file (when it saved to disk) and download_course_files saved. Use this whenever the user asks what is new, what they are missing, or to pull or sync a course. It reads the course's current table of contents fresh, so it also finds a file that was uploaded long ago and only released now. IMPORTANT: unsaved means the server has no record of saving it. A file the student already has from before this version, or saved another way (browser download, manual copy), appears as unsaved, so ask the user before downloading everything again; for files they already have, use mark_course_files_saved to record them without downloading (ask first, and never mark files as saved just to shorten this list). A listed topic may not be open yet (locked, hidden or outside its release dates); download_file explains why when it can. A saved file that has since been deleted is listed in savedFileMissing and needs downloading again. markedSavedCount counts topics the student marked saved: the server never checked a file for them. Each listed topic has downloadArgs for download_file, plus its title and lastModified when known; ask the user where to save before downloading, and never guess a folder. If complete is false, or there is a notice, something could not be read: say so, and never tell the user there is nothing new. syncFolder is read for this call only (it is not remembered): pass it again on every call. " +
+        "List the file topics in a course's Content area that the student has not saved yet, by comparing topic ids with what download_file (when it saved to disk) and download_course_files saved. Use this whenever the user asks what is new, what they are missing, or to pull or sync a course. It checks the Content area only: " + CONTENT_ONLY_SCOPE + " An empty unsaved list does not mean the whole course is saved. It reads the course's current table of contents fresh, so it also finds a file that was uploaded long ago and only released now. IMPORTANT: unsaved means the server has no record of saving it. A file the student already has from before this version, or saved another way (browser download, manual copy), appears as unsaved, so ask the user before downloading everything again; for files they already have, use mark_course_files_saved to record them without downloading (ask first, and never mark files as saved just to shorten this list). A listed topic may not be open yet (locked, hidden or outside its release dates); download_file explains why when it can. A saved file that has since been deleted is listed in savedFileMissing and needs downloading again. markedSavedCount counts topics the student marked saved: the server never checked a file for them. Each listed topic has downloadArgs for download_file, plus its title and lastModified when known; ask the user where to save before downloading, and never guess a folder. If complete is false, or there is a notice, something could not be read: say so, and never tell the user there is nothing new. syncFolder is read for this call only (it is not remembered): pass it again on every call. " +
         FIND_NEW_FILES_GUIDANCE,
       inputSchema: GetUnsavedCourseFilesSchema,
     },
@@ -213,6 +214,7 @@ export function registerGetUnsavedCourseFiles(server: McpServer, apiClient: D2LA
           ...(markedTopicIds.length > 0 ? { markedTopicIds } : {}),
           ...(markedSavedCount > markedTopicIds.length ? { markedTopicIdsTruncated: true } : {}),
           unsavedNote: UNSAVED_NOTE,
+          notCovered: NOT_COVERED,
           unsaved,
           savedFileMissing,
           ...(couldNotCheck.length > 0 ? { couldNotCheck } : {}),

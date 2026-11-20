@@ -365,6 +365,10 @@ describe("what the tool tells the agent (review items 7 and 8)", () => {
     const result = json(await call({ courseId: COURSE }));
     expect(result.unsavedNote).toMatch(/no record of saving/i);
     expect(result.unsavedNote).toMatch(/ask before downloading everything again/i);
+    expect(config.description).toMatch(/Content area only, not the whole course/);
+    expect(config.description).toMatch(/does not mean the whole course is saved/);
+    expect(result.unsavedNote).toMatch(/Content area only/);
+    expect(result.notCovered.map((n: any) => n.tool).join(" ")).toMatch(/get_assignments.*get_assignment_files.*get_announcement_files.*get_syllabus/);
     expect(result.nonFileCounts).not.toHaveProperty("unavailable");
     expect(result.nonFileCounts.link).toBe(1);
   });

@@ -109,6 +109,11 @@ Everything not refused. The code's comments name `/tmp`, `/private/tmp`, `/var/f
 ### Other single-file writers
 
 - `download_dropbox_submission_file` always saves to disk. It uses `secureStreamDownload` and the 2 GB `DISK_MAX_FILE_SIZE` cap. It checks the listed size, the Content-Length, and the bytes actually received.
+- `download_file` with `folderId` and `fileId` reads `/dropbox/folders/{folderId}/submissions/mysubmissions/` and finds the file in any submission. Some schools answer with EntityDropbox entries (`{ Entity, Status, Feedback, Submissions: [{ Id, Files }] }`) instead of a flat list.
+  - `flattenDropboxSubmissions` (`src/utils/dropbox-submissions.ts`) unwraps both. The download URL uses the id of the inner submission that owns the file.
+  - `get_assignments` and the three instructor submission tools use the same helper.
+
+**Why:** reported 2026-11-19 from a live course. `get_assignments` listed a submission file but `download_file` answered "not found" with an empty list for all 7 submissions, because it read `Files` off the outer entry.
 
 ### Names in single-file downloads
 
@@ -307,7 +312,10 @@ Nothing from a response body or header is echoed into the message.
 
 The answer is text. Its first line reads "Course N saved to D: X downloaded, Y already on disk, Z failed, W not attempted."
 
-- Not-file counts are listed separately: web links, embedded video and media, broken items, other non-file items, empty files, and files that are locked or not yet released. The answer says these are not missing from the sync.
+- Not-file counts are listed separately: web links, embedded video and media, broken items, other non-file items, empty files, and files that are locked or not yet released. The answer says these Content items are not files, so they are not missing from the Content sync.
+- The answer always ends with a scope line (`CONTENT_ONLY_SCOPE` in `src/sync/summary.ts`): the sync covers the Content area only, and it names the tool for each thing it skipped (`NOT_COVERED`). `download_course_files`, `get_unsaved_course_files` and the `sync` command all carry it; `get_unsaved_course_files` also returns `NOT_COVERED` as `notCovered`.
+
+**Why:** reported 2026-11-19 from a live course. An agent asked to "pull everything" read "These are not missing from the sync" as "the course is saved" and never downloaded the student's own submissions, which this tool does not look at.
 - A 0-byte file is counted as empty. This happens when the response has no body or a Content-Length of 0, and also when the body turns out to be 0 bytes. Empty files are not written, and they are not failures.
 - Names in the answer are JSON-quoted. The answer says once that they come from the course. Each list shows at most 20 names.
 - The tool is not annotated read-only, because it writes files.
