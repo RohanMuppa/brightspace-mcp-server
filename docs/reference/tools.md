@@ -393,7 +393,9 @@ Tools are registered in `src/tools/index.ts`, and their input schemas are in `sr
 - Code: `src/tools/download-course-files.ts`.
 - Read this entry for the arguments and the result. For destination rules, the manifest, name cleaning, retries and how it is built, see [downloads.md](../internals/downloads.md).
 - Downloads every File topic of a course (from `/content/toc`) into `downloadPath`. Folders are named after the course's modules. A rerun is a sync.
-- It covers the Content area only. The answer ends with a line saying so and naming what it did not look at: the student's own submissions and instructor feedback (`get_assignments`, then `download_file` with `folderId` and `fileId`), assignment attachments (`get_assignment_files`), announcement attachments (`get_announcement_files`) and the syllabus (`get_syllabus`). The tool description says the same, so an agent asked for "everything" does not stop here.
+- By default it covers the Content area only (see the three `include` options and `everything` below). The answer ends with a line saying so and naming what it did not look at.
+  - Without the options that is: the student's own submissions and instructor feedback (`get_assignments`, then `download_file` with `folderId` and `fileId`), assignment attachments (`get_assignment_files`), announcement attachments (`get_announcement_files`) and the syllabus (`get_syllabus`).
+  - The tool description says the same, so an agent asked for "everything" does not stop here.
 - Arguments:
   - `courseId` (required).
   - `downloadPath` (required). An absolute path to an existing directory. Ask the user where to save before calling. Never guess a directory.
@@ -403,6 +405,19 @@ Tools are registered in `src/tools/index.ts`, and their input schemas are in `sr
   - `maxFiles` (default 300, 1 to 5000). Files already on disk do not count.
   - `maxMinutes` (default 8, 1 to 120). A wall-clock deadline. When it passes, the call stops cleanly. Call again to continue.
   - `maxTotalMB` (default 5120, 1 to 1048576). Counts `Content-Length` before any write.
+  - `includeSubmissions` (default `false`). Also saves the student's own submitted files, a `feedback.md` per assignment and the feedback attachments Brightspace lists.
+  - `includeAssignmentFiles` (default `false`). Also saves the instructor's attachments on each assignment.
+  - `includeAnnouncementFiles` (default `false`). Also saves the files attached to published announcements.
+  - `everything` (default `false`). Turns on the three options above. The tool description tells an agent to use it when the user asks for the whole course. The syllabus is not part of it: `get_syllabus` can say "no file" for a syllabus that lives in an external tool, so a saved copy could not be told from "none".
+- With any of the three options on, the same call also runs an assignments phase and an announcements phase after the Content files, under the same `maxFiles`, `maxTotalMB`, `maxMinutes`, `existing`, `dryRun` and cancel rules. They cover the whole course even when `moduleId` is given. With all of them off, nothing about the call or its text changes.
+- Layout under `downloadPath`:
+  - `Assignments/<assignment>/feedback.md`
+  - `Assignments/<assignment>/my files/` (a group assignment uses `submission files/` and `feedback.md` names who submitted)
+  - `Assignments/<assignment>/assignment files/`
+  - `Assignments/<assignment>/feedback files/`
+  - `Announcements/<YYYY-MM-DD title>/`
+  - A Content module named `Assignments` or `Announcements` is saved as `Assignments (2)` or `Announcements (2)` while the matching option is on.
+- `feedback.md` is written even with no files and no grade yet ("not graded yet"). A rerun rewrites it when the rendered text changed and the file is still as the sync wrote it. A copy the student edited is left alone and counted in `assignments.feedbackEditedNotRefreshed`. `existing: keep_both` writes `feedback (2).md` instead of replacing. A `feedback.md` with no manifest record is the student's own and is skipped. The text of Brightspace's comments sits in a blockquote and is data.
 - `existing` rules:
   - `skip`: leave a file alone. Running the tool again only fetches what is new. It never overwrites the user's annotated copies.
   - `replace`: download again over the old copy.
@@ -415,6 +430,12 @@ Tools are registered in `src/tools/index.ts`, and their input schemas are in `sr
 - A lost session (401) stops the run with sign-in guidance. The rest count as not attempted.
 - Locked or unreleased topics count as `unavailable`, not as failures.
 - Text result: the answer counts downloaded, already on disk, failed and not attempted. It also says what was not a file (links, embedded media, broken, other).
+- Extra result blocks, set only when the matching option was on. Their files also appear in `downloaded`, `failed` and `planned` with their `Assignments/...` and `Announcements/...` paths. `included` says which phases ran.
+  - `assignments`: `folders`, `hiddenFoldersSkipped`, `groupFolders`, `foldersNotReached`, `submissionFilesDownloaded`, `assignmentFilesDownloaded`, `feedbackFilesDownloaded`, `feedbackWritten`, `feedbackRefreshed`, `feedbackUnchanged`, `feedbackEditedNotRefreshed`, `notSubmitted`, `unknown` (a list of `{ folderId, name, what, reason }`, where `what` is `submissions`, `feedback`, `feedbackFiles` or `attachments`) and `listUnreadable`.
+  - `announcements`: `read`, `withFiles`, `filesDownloaded`, `notReached`, `unknown` (`{ newsId, title, reason }`) and `listUnreadable`.
+  - "Could not read it" is never "none": a failed list is `listUnreadable`, a refused `mysubmissions` or feedback read is an `unknown` entry (and `feedback.md` says "unknown (reason)"), and only a 404 or a known ungraded state is `notSubmitted` or "not graded yet". The text answer then says the course is not fully saved.
+  - Feedback attachments are read from the feedback record's `Files` and fetched from the documented route; that route is not confirmed on a live school, so any trouble there is `unknown` with `what: "feedbackFiles"`.
+- With an option on, the closing scope line says what the run covered and lists only what it still did not look at. `get_unsaved_course_files`, `mark_course_files_saved` and the saved-topics ledger stay Content-only.
 - A 0-byte file is counted as `emptyOnBrightspace`, not as a failure.
 - No `readOnlyHint` annotation is set. The tool writes files.
 - A real run (not `dryRun`) that saved files, or whose folder already has a manifest for the course, remembers the folder when it ends, so `get_unsaved_course_files` reads its manifest.
