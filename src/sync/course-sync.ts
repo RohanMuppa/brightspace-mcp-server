@@ -131,6 +131,8 @@ export interface SyncResult {
   authError?: string;
   /** The table of contents was larger than the sync reads; the rest of it was ignored. */
   tocTruncated?: boolean;
+  /** Set only when an extra phase was asked for: which ones ran, so the summary lists only what is still not covered. */
+  included?: { submissions: boolean; assignmentFiles: boolean; announcementFiles: boolean };
   /** Set only when assignments were asked for: what the assignments phase saw and saved. */
   assignments?: AssignmentsOutcome;
   /** Set only when announcement files were asked for. */
@@ -585,6 +587,13 @@ async function runSync(
         : undefined,
       announcements: options.includeAnnouncementFiles === true,
     };
+    if (extras.assignments || extras.announcements) {
+      result.included = {
+        submissions: options.includeSubmissions === true,
+        assignmentFiles: options.includeAssignmentFiles === true,
+        announcementFiles: options.includeAnnouncementFiles === true,
+      };
+    }
     const reserved = [...(extras.assignments ? ["Assignments"] : []), ...(extras.announcements ? ["Announcements"] : [])];
     const plan = planWithinBudget(toc, moduleId, root.length, budget, reserved);
     result.nonFiles = plan.nonFiles;
