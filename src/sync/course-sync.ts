@@ -29,7 +29,7 @@ import type { PhaseContext, SaveOutcome, SaveSpec, TextSpec, TextStatus } from "
 import { syncAssignments, type AssignmentsOutcome } from "./submissions-sync.js";
 import { syncAnnouncements, type AnnouncementsOutcome } from "./announcements-sync.js";
 import { recordSyncRoot } from "./saved-topics.js";
-import { NameSet, fileNameFromTopic, sanitizeComponent, splitExtension } from "./names.js";
+import { NameSet, fileNameFromTopic, foldKey, sanitizeComponent, splitExtension } from "./names.js";
 
 export { SyncInputError } from "./errors.js";
 
@@ -199,7 +199,7 @@ const typePart = (value: unknown, max: number): string =>
   typeof value === "string" || typeof value === "number" ? String(value).replace(/[^\w.\- ]/g, "_").slice(0, max) : "";
 
 /** The table of contents as folders and files, every name made safe and unique, each within its record's cap in `caps`. */
-export function planFiles(toc: unknown, moduleId: number | undefined, caps: NameCaps, reserved: readonly string[] = []): Plan {
+export function planFiles(toc: unknown, moduleId: number | undefined, caps: NameCaps): Plan {
   const capOf = (source: object): number => caps.get(source) ?? FULL_NAME_CHARS;
   const files: PlannedFile[] = [];
   const nonFiles: NonFileCounts = { link: 0, media: 0, broken: 0, other: 0, unavailable: 0 };
@@ -256,8 +256,6 @@ export function planFiles(toc: unknown, moduleId: number | undefined, caps: Name
 
   const walk = (container: Record<string, unknown>, segments: string[], sources: object[], depth: number): void => {
     const names = new NameSet(FULL_NAME_CHARS);
-    // Top-level folders the extra phases own: a Content module with the same name becomes "Assignments (2)".
-    if (depth === 0) for (const name of reserved) names.add(name, true);
     const children: Array<{ module: Record<string, unknown>; segments: string[] }> = [];
     if (container.Modules !== undefined && container.Modules !== null && !Array.isArray(container.Modules)) unreadEntries++;
     if (Array.isArray(container.Modules)) {
@@ -304,9 +302,9 @@ export function planFiles(toc: unknown, moduleId: number | undefined, caps: Name
  * a path that already fits keeps its full names, however long another path
  * in the course is.
  */
-function planWithinBudget(toc: unknown, moduleId: number | undefined, rootLength: number, budget: number, reserved: readonly string[]): Plan {
+function planWithinBudget(toc: unknown, moduleId: number | undefined, rootLength: number, budget: number): Plan {
   const caps = new Map<object, number>();
-  let plan = planFiles(toc, moduleId, caps, reserved);
+  let plan = planFiles(toc, moduleId, caps);
   for (let round = 0; round < 6 && Number.isFinite(budget); round++) {
     let shortened = false;
     for (const file of plan.files) {
@@ -324,7 +322,7 @@ function planWithinBudget(toc: unknown, moduleId: number | undefined, rootLength
       }
     }
     if (!shortened) break;
-    plan = planFiles(toc, moduleId, caps, reserved);
+    plan = planFiles(toc, moduleId, caps);
   }
   return plan;
 }
@@ -594,8 +592,7 @@ async function runSync(
         announcementFiles: options.includeAnnouncementFiles === true,
       };
     }
-    const reserved = [...(extras.assignments ? ["Assignments"] : []), ...(extras.announcements ? ["Announcements"] : [])];
-    const plan = planWithinBudget(toc, moduleId, root.length, budget, reserved);
+    const plan = planWithinBudget(toc, moduleId, root.length, budget);
     result.nonFiles = plan.nonFiles;
     if (plan.truncated) result.tocTruncated = true;
     result.tocTopicCount = plan.topicsSeen;
@@ -818,9 +815,12 @@ async function runSync(
       let saveAs = name;
       if (owned) {
         if (spec.prior!.hash === hash) return { status: "unchanged", rel };
-        // The student edited it since the sync wrote it: theirs now.
-        if (!unchangedSinceSync({ path: rel, bytes: 0, size: spec.prior!.size, mtimeMs: spec.prior!.mtimeMs }, ownedStat!)) return { status: "edited", rel };
-        if (existing === "keep_both") saveAs = await freeNumberedName(dir!, name, 2);
+        // The student edited it since the sync wrote it: theirs now. keep_both writes the new text to a copy beside it
+        // and tracks that copy, so later refreshes update the copy in place; skip and replace leave it alone.
+        if (!unchangedSinceSync({ path: rel, bytes: 0, size: spec.prior!.size, mtimeMs: spec.prior!.mtimeMs }, ownedStat!)) {
+          if (existing !== "keep_both") return { status: "edited", rel };
+          saveAs = await freeNumberedName(dir!, name, 2);
+        }
       }
       const target = [...segments, saveAs].join("/");
       if (Number.isFinite(budget) && root.length + 1 + target.length > budget) {
@@ -840,7 +840,7 @@ async function runSync(
         result.downloaded.push({ path: target, bytes: written.size });
         emit({ type: "downloaded", path: target, bytes: written.size });
         unsaved++;
-        return { status: owned ? "refreshed" : "written", rel: target };
+        return { status: owned && saveAs === name ? "refreshed" : "written", rel: target };
       } catch (error) {
         log("WARN", `Course sync: ${target} failed`, error);
         fail(target, error instanceof RefusedFolder ? error.message : describeFailure(error));
@@ -869,7 +869,32 @@ async function runSync(
       });
     }
 
+    /**
+     * The top-level folders for the extras: the name recorded by an earlier run, else the first one that is
+     * free. Content keeps every name it has; a Content module called "Assignments" is never renamed, so the
+     * assignments go to "Assignments (2)". The choice is recorded, so it is the same on every later run.
+     */
+    const extraRoots = (): { assignments: string; announcements: string } => {
+      const taken = new Set<string>();
+      for (const file of plan.files) taken.add(foldKey(file.segments[0] ?? file.name));
+      for (const [, entry] of manifest.entries(courseId)) taken.add(foldKey(entry.path.split("/")[0]));
+      const pick = (base: string, kind: "assignments" | "announcements"): string => {
+        const recorded = manifest.extrasRoot(courseId, kind);
+        if (recorded !== undefined) return recorded;
+        for (let n = 1; ; n++) {
+          const candidate = n === 1 ? base : `${base} (${n})`;
+          if (!taken.has(foldKey(candidate))) return candidate;
+        }
+      };
+      return { assignments: pick("Assignments", "assignments"), announcements: pick("Announcements", "announcements") };
+    };
+
     if (extras.assignments || extras.announcements) {
+      const roots = extraRoots();
+      if (!dryRun) {
+        if (extras.assignments && manifest.extrasRoot(courseId, "assignments") === undefined) manifest.setExtrasRoot(courseId, "assignments", roots.assignments);
+        if (extras.announcements && manifest.extrasRoot(courseId, "announcements") === undefined) manifest.setExtrasRoot(courseId, "announcements", roots.announcements);
+      }
       const context: PhaseContext = {
         apiClient,
         courseId,
@@ -879,8 +904,19 @@ async function runSync(
         manifest,
         stopped: () => {
           if (!result.stopped && stop.signal.aborted) stopWith(abortedReason());
+          return result.stopped !== undefined || attempted >= maxFiles;
+        },
+        halted: () => {
+          if (!result.stopped && stop.signal.aborted) stopWith(abortedReason());
           return result.stopped !== undefined;
         },
+        notRunReason: () => {
+          if (!result.stopped && stop.signal.aborted) stopWith(abortedReason());
+          return result.stopped ?? (attempted >= maxFiles ? "max_files" : undefined);
+        },
+        budget,
+        rootLength: root.length,
+        roots,
         handleStop: (error) => {
           if (stop.signal.aborted) {
             stopWith(abortedReason());

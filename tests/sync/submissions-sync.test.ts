@@ -132,12 +132,12 @@ describe("full course pull: assignments", () => {
     expect(fake!.rawRequests).toEqual([]);
   });
 
-  it("renames a Content module called Assignments instead of colliding, only when the option is on", async () => {
+  it("never renames a Content module called Assignments: the extras take Assignments (2)", async () => {
     const toc = { Modules: [module_(1, "Assignments", [fileTopic(10, url("Intro.pdf"))])], Topics: [] };
     await run({ ...essay(), toc, topics: { 10: ok("c") } });
     const tree = await listTree(root);
-    expect(tree).toContain("Assignments (2)/Intro.pdf");
-    expect(tree).toContain("Assignments/Essay 2/feedback.md");
+    expect(tree).toContain("Assignments/Intro.pdf");
+    expect(tree).toContain("Assignments (2)/Essay 2/feedback.md");
     await fs.rm(root, { recursive: true });
     await fs.mkdir(root);
     await fake?.close();
@@ -316,10 +316,11 @@ describe("full course pull: caps and stops are shared with Content", () => {
   it("maxTotalBytes stops the extras phase too", async () => {
     const result = await run({ ...essay(), toc, topics: { 10: ok("a"), 11: ok("b") } }, { maxTotalBytes: 1 });
     expect(result.stopped).toBe("max_total_bytes");
-    expect(result.assignments?.foldersNotReached).toBeGreaterThanOrEqual(0);
+    expect(result.assignments).toMatchObject({ notRun: "max_total_bytes", folders: 0, foldersNotReached: 0 });
+    expect(await listTree(root)).toEqual([]);
   });
 
-  it("a cancel before the extras phase leaves the folders not reached", async () => {
+  it("a cancel before the extras phase leaves the phase not run", async () => {
     const controller = new AbortController();
     const result = await run({ ...essay(), toc, topics: { 10: ok("a"), 11: ok("b") } }, {
       signal: controller.signal,
@@ -328,8 +329,7 @@ describe("full course pull: caps and stops are shared with Content", () => {
       },
     });
     expect(result.stopped).toBe("cancelled");
-    expect(result.assignments?.folders).toBe(0);
-    expect(result.assignments?.foldersNotReached).toBe(1);
+    expect(result.assignments).toMatchObject({ notRun: "cancelled", folders: 0, foldersNotReached: 0 });
     expect(await listTree(root)).not.toContain("Assignments/");
   });
 
@@ -350,8 +350,7 @@ describe("full course pull: caps and stops are shared with Content", () => {
     setup.routes![subsRoute(5)] = new ApiError(401, "/x", "expired");
     const result = await run(setup);
     expect(result.stopped).toBe("auth");
-    expect(result.assignments?.folders).toBe(1);
-    expect(result.assignments?.foldersNotReached).toBe(1);
+    expect(result.assignments).toMatchObject({ folders: 1, foldersPartlySaved: 1, foldersNotReached: 0 });
     expect(await listTree(root)).toContain("Assignments/First/feedback.md");
   });
 });
@@ -364,7 +363,8 @@ describe("full course pull: feedback.md refresh and reruns", () => {
     const before = await fs.stat(path.join(root, ...mdPath.split("/")));
     const result = await again(() => {});
     expect(result.assignments).toMatchObject({ feedbackUnchanged: 1, feedbackWritten: 0, submissionFilesDownloaded: 0 });
-    expect(result.skippedExisting).toBeGreaterThanOrEqual(1);
+    // The submitted file and the feedback attachment are on disk; feedback.md is unchanged, which is not a skip.
+    expect(result.skippedExisting).toBe(2);
     expect((await fs.stat(path.join(root, ...mdPath.split("/")))).mtimeMs).toBe(before.mtimeMs);
   });
 
@@ -402,16 +402,6 @@ describe("full course pull: feedback.md refresh and reruns", () => {
       e.routes[fbRoute(5)] = { IsGraded: true, Score: 4, Feedback: { Text: "Again 2.", Html: "" } };
     }, { existing: "replace" });
     expect(result2.assignments?.feedbackEditedNotRefreshed).toBe(1);
-  });
-
-  it("existing: keep_both writes feedback (2).md beside the old one", async () => {
-    await run(essay());
-    await again((e) => {
-      e.routes[fbRoute(5)] = { IsGraded: true, Score: 3, Feedback: { Text: "Again.", Html: "" } };
-    }, { existing: "keep_both" });
-    const names = await fs.readdir(path.join(root, "Assignments", "Essay 2"));
-    expect(names).toContain("feedback.md");
-    expect(names).toContain("feedback (2).md");
   });
 
   it("leaves a file that is on disk with no manifest record alone, as the student's own", async () => {

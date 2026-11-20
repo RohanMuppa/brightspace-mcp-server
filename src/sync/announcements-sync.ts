@@ -9,12 +9,16 @@
 
 import { effectiveDate, isPublishedNewsItem, type NewsItem } from "../tools/get-announcements.js";
 import { log } from "../utils/logger.js";
-import type { PhaseContext } from "./extras-types.js";
+import type { NotRunReason, PhaseContext } from "./extras-types.js";
 import type { AnnouncementRecord } from "./manifest.js";
 import { NameSet, sanitizeComponent } from "./names.js";
-import { describeRead } from "./submissions-sync.js";
+import { NO_FILE_LIST, describeRead, nameCaps, positiveId } from "./submissions-sync.js";
 
 export interface AnnouncementsOutcome {
+  /** The top-level folder the announcement files were saved in. */
+  folder: string;
+  /** Set when the phase did not run because the run had already stopped: nothing was read, so no count here means anything. */
+  notRun?: NotRunReason;
   /** Published announcements read. */
   read: number;
   withFiles: number;
@@ -25,9 +29,13 @@ export interface AnnouncementsOutcome {
   listUnreadable?: string;
   /** Announcements the run stopped before reaching. */
   notReached: number;
+  /** Announcements the run stopped in the middle of: some of their files were not saved. */
+  partlySaved: number;
 }
 
-export const emptyAnnouncementsOutcome = (): AnnouncementsOutcome => ({ read: 0, withFiles: 0, filesDownloaded: 0, unknown: [], notReached: 0 });
+export const emptyAnnouncementsOutcome = (folder = "Announcements"): AnnouncementsOutcome => ({
+  folder, read: 0, withFiles: 0, filesDownloaded: 0, unknown: [], notReached: 0, partlySaved: 0,
+});
 
 const NAME_CHARS = 150;
 
@@ -35,15 +43,22 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === "object" && !Array.isArray(value);
 
 export async function syncAnnouncements(ctx: PhaseContext): Promise<AnnouncementsOutcome> {
-  const out = emptyAnnouncementsOutcome();
+  const root = ctx.roots.announcements;
+  const out = emptyAnnouncementsOutcome(root);
   const { apiClient, courseId, manifest } = ctx;
+
+  const notRun = (): AnnouncementsOutcome => {
+    out.notRun = ctx.notRunReason() ?? "cancelled";
+    return out;
+  };
+  if (ctx.stopped()) return notRun();
 
   let raw: unknown;
   try {
     // Read fresh (no cache) so a cancel reaches the request and a new post is seen.
     raw = await apiClient.get<unknown>(apiClient.le(courseId, "/news/"), { signal: ctx.signal });
   } catch (error) {
-    if (ctx.handleStop(error)) return out;
+    if (ctx.handleStop(error)) return notRun();
     // A 404 is how Brightspace says the course has no announcements tool: known, not unreadable.
     if ((error as { status?: unknown } | null)?.status !== 404) out.listUnreadable = describeRead(error);
     return out;
@@ -57,31 +72,36 @@ export async function syncAnnouncements(ctx: PhaseContext): Promise<Announcement
   const dirNames = new NameSet(NAME_CHARS);
   for (const [, record] of manifest.announcementRecords(courseId)) {
     const parts = record.dir.split("/");
-    if (parts.length === 2 && parts[0] === "Announcements") dirNames.add(parts[1], true);
+    if (parts.length === 2 && parts[0] === root) dirNames.add(parts[1], true);
   }
+  const caps = nameCaps(ctx, root, 0);
 
   for (const rawItem of entries) {
-    if (!isRecord(rawItem)) continue;
+    if (isRecord(rawItem) && rawItem.IsPublished === false) continue;
+    const newsId = isRecord(rawItem) ? positiveId(rawItem.Id) : null;
+    const title = isRecord(rawItem) && typeof rawItem.Title === "string" ? rawItem.Title : "";
+    if (!isRecord(rawItem) || newsId === null) {
+      out.unknown.push({ newsId: 0, title, reason: "this announcement had no usable id, so its files were not looked for" });
+      continue;
+    }
     const item = rawItem as unknown as NewsItem;
-    const newsId = Number(item.Id);
-    if (!Number.isSafeInteger(newsId) || newsId <= 0 || !isPublishedNewsItem(item)) continue;
+    if (!isPublishedNewsItem(item)) continue;
     if (ctx.stopped()) {
       out.notReached++;
       continue;
     }
     out.read++;
-    const title = typeof item.Title === "string" ? item.Title : "";
 
-    const attachments = (rawItem as { Attachments?: unknown }).Attachments;
-    if (attachments !== undefined && attachments !== null && !Array.isArray(attachments)) {
-      out.unknown.push({ newsId, title, reason: "Brightspace listed the attachments in a shape the sync does not read" });
+    const attachments = rawItem.Attachments;
+    if (!Array.isArray(attachments)) {
+      out.unknown.push({ newsId, title, reason: NO_FILE_LIST });
       continue;
     }
     const files: Array<{ fileId: number; fileName: string }> = [];
     let unreadable = false;
-    for (const file of (attachments ?? []) as unknown[]) {
-      const fileId = isRecord(file) ? Number(file.FileId) : NaN;
-      if (!Number.isSafeInteger(fileId) || fileId <= 0) {
+    for (const file of attachments as unknown[]) {
+      const fileId = isRecord(file) ? positiveId(file.FileId) : null;
+      if (fileId === null) {
         unreadable = true;
         break;
       }
@@ -99,7 +119,7 @@ export async function syncAnnouncements(ctx: PhaseContext): Promise<Announcement
       let dirRel = existingRecord?.dir;
       if (!dirRel) {
         const date = /^\d{4}-\d{2}-\d{2}/.exec(effectiveDate(item) ?? "")?.[0] ?? "undated";
-        dirRel = `Announcements/${dirNames.add(sanitizeComponent(`${date} ${title}`, `${date} Announcement ${newsId}`, NAME_CHARS), true)}`;
+        dirRel = `${root}/${dirNames.add(sanitizeComponent(`${date} ${title}`, `${date} Announcement ${newsId}`, caps.dir), true, caps.dir)}`;
       }
       const record: AnnouncementRecord = ctx.dryRun
         ? existingRecord ?? { dir: dirRel, files: Object.create(null) }
@@ -112,12 +132,13 @@ export async function syncAnnouncements(ctx: PhaseContext): Promise<Announcement
       for (const entry of Object.values(existingRecord?.files ?? {})) {
         if (entry.path.startsWith(`${dirRel}/`) && !entry.path.slice(dirRel.length + 1).includes("/")) names.add(entry.path.slice(dirRel.length + 1));
       }
+      let incomplete = false;
       for (const file of files) {
         const key = String(file.fileId);
-        const sanitized = sanitizeComponent(file.fileName, `File ${file.fileId}`, NAME_CHARS);
+        const sanitized = sanitizeComponent(file.fileName, `File ${file.fileId}`, caps.file);
         const result = await ctx.saveFile({
           segments: dirRel.split("/"),
-          name: record.files[key] ? sanitized : names.add(sanitized),
+          name: record.files[key] ? sanitized : names.add(sanitized, false, caps.file),
           prior: record.files[key],
           open: async (signal) => ({ response: await apiClient.getRaw(apiClient.le(courseId, `/news/${newsId}/attachments/${file.fileId}`), { signal }) }),
           onSaved: (entry) => {
@@ -126,10 +147,12 @@ export async function syncAnnouncements(ctx: PhaseContext): Promise<Announcement
           },
         });
         if (result.status === "saved") out.filesDownloaded++;
+        if (result.status === "notAttempted") incomplete = true;
       }
+      if (incomplete) out.partlySaved++;
     } catch (error) {
       if (ctx.handleStop(error)) {
-        out.notReached++;
+        out.partlySaved++;
         continue;
       }
       log("WARN", `Course sync: announcement ${newsId} could not be saved`, error);

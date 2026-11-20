@@ -63,6 +63,9 @@ export interface AnnouncementRecord {
 }
 
 interface CourseExtras {
+  /** The top-level folders the extras live in ("Assignments", or "Assignments (2)" when Content has a module of that name). */
+  assignmentsRoot?: string;
+  announcementsRoot?: string;
   assignments: Record<string, AssignmentRecord>;
   announcements: Record<string, AnnouncementRecord>;
 }
@@ -90,20 +93,34 @@ function readEntry(entry: unknown): ManifestEntry | null {
   return { path: rel, bytes, ...(Number.isFinite(size) && Number.isFinite(mtimeMs) ? { size, mtimeMs } : {}) };
 }
 
-function readFiles(value: unknown): Record<string, ManifestEntry> {
+/** A root is one folder name: no separator, and a valid relative path. */
+function validRoot(value: unknown): value is string {
+  return typeof value === "string" && validRelativePath(value) && !value.includes("/");
+}
+
+/** A record's folder sits directly under its root, so a record can only ever point inside the extras root. */
+function validDir(value: unknown, root: string | undefined): value is string {
+  if (root === undefined || !validRelativePath(value)) return false;
+  const parts = value.split("/");
+  return parts.length === 2 && parts[0] === root;
+}
+
+const inside = (dir: string, rel: string): boolean => rel.startsWith(`${dir}/`);
+
+function readFiles(value: unknown, dir: string): Record<string, ManifestEntry> {
   const files = bare<ManifestEntry>();
   if (!plainObject(value)) return files;
   for (const [key, entry] of Object.entries(value)) {
     const read = FILE_KEY.test(key) ? readEntry(entry) : null;
-    if (read) files[key] = read;
+    if (read && inside(dir, read.path)) files[key] = read;
   }
   return files;
 }
 
-function readFeedback(value: unknown): FeedbackEntry | undefined {
+function readFeedback(value: unknown, dir: string): FeedbackEntry | undefined {
   if (!plainObject(value)) return undefined;
   const { path: rel, size, mtimeMs, hash } = value;
-  if (!validRelativePath(rel) || typeof size !== "number" || !Number.isFinite(size)) return undefined;
+  if (!validRelativePath(rel) || !inside(dir, rel) || typeof size !== "number" || !Number.isFinite(size)) return undefined;
   if (typeof mtimeMs !== "number" || !Number.isFinite(mtimeMs) || typeof hash !== "string" || !/^[0-9a-f]{64}$/i.test(hash)) return undefined;
   return { path: rel, size, mtimeMs, hash };
 }
@@ -159,17 +176,19 @@ export class SyncManifest {
     for (const [courseId, record] of Object.entries(extras)) {
       if (!ID_KEY.test(courseId) || !plainObject(record)) continue;
       const mine = this.course(courseId);
+      if (validRoot(record.assignmentsRoot)) mine.assignmentsRoot = record.assignmentsRoot;
+      if (validRoot(record.announcementsRoot)) mine.announcementsRoot = record.announcementsRoot;
       if (plainObject(record.assignments)) {
         for (const [folderId, raw] of Object.entries(record.assignments)) {
-          if (!ID_KEY.test(folderId) || !plainObject(raw) || !validRelativePath(raw.dir)) continue;
-          const feedback = readFeedback(raw.feedback);
-          mine.assignments[folderId] = { dir: raw.dir, ...(feedback ? { feedback } : {}), files: readFiles(raw.files) };
+          if (!ID_KEY.test(folderId) || !plainObject(raw) || !validDir(raw.dir, mine.assignmentsRoot)) continue;
+          const feedback = readFeedback(raw.feedback, raw.dir);
+          mine.assignments[folderId] = { dir: raw.dir, ...(feedback ? { feedback } : {}), files: readFiles(raw.files, raw.dir) };
         }
       }
       if (plainObject(record.announcements)) {
         for (const [newsId, raw] of Object.entries(record.announcements)) {
-          if (!ID_KEY.test(newsId) || !plainObject(raw) || !validRelativePath(raw.dir)) continue;
-          mine.announcements[newsId] = { dir: raw.dir, files: readFiles(raw.files) };
+          if (!ID_KEY.test(newsId) || !plainObject(raw) || !validDir(raw.dir, mine.announcementsRoot)) continue;
+          mine.announcements[newsId] = { dir: raw.dir, files: readFiles(raw.files, raw.dir) };
         }
       }
     }
@@ -177,6 +196,19 @@ export class SyncManifest {
 
   private course(courseId: string | number): CourseExtras {
     return (this.extras[String(courseId)] ??= { assignments: bare(), announcements: bare() });
+  }
+
+  /** The top-level folder this course's assignments or announcements go in, as recorded by an earlier run. */
+  extrasRoot(courseId: number, kind: "assignments" | "announcements"): string | undefined {
+    const course = this.extras[String(courseId)];
+    return kind === "assignments" ? course?.assignmentsRoot : course?.announcementsRoot;
+  }
+
+  setExtrasRoot(courseId: number, kind: "assignments" | "announcements", name: string): void {
+    const course = this.course(courseId);
+    if (kind === "assignments") course.assignmentsRoot = name;
+    else course.announcementsRoot = name;
+    this.changed = true;
   }
 
   /** What was saved for an assignment folder, or undefined. Read only. */
@@ -250,7 +282,9 @@ export class SyncManifest {
     // Only the user reads it: it says which of their files the sync may overwrite.
     // `extras` is written only when it holds something, so a Content-only manifest is byte-for-byte what it always was.
     const extras = Object.fromEntries(
-      Object.entries(this.extras).filter(([, c]) => Object.keys(c.assignments).length + Object.keys(c.announcements).length > 0)
+      Object.entries(this.extras).filter(
+        ([, c]) => Object.keys(c.assignments).length + Object.keys(c.announcements).length > 0 || c.assignmentsRoot !== undefined || c.announcementsRoot !== undefined
+      )
     );
     const body = Object.keys(extras).length > 0 ? { version: 1, courses: this.courses, extras } : { version: 1, courses: this.courses };
     await writeFileAtomic(this.file, `${JSON.stringify(body, null, 1)}\n`, { mode: 0o600 });

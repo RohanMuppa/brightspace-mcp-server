@@ -101,6 +101,12 @@ export interface MyFeedbackRead {
   source: "myFeedback" | "submission" | "user" | null;
   /** Set when no feedback was found and the student route was not tried because the folder is a group folder. */
   groupRouteSkipped?: boolean;
+  /**
+   * Set when the fallback routes (the current user, then feedback/user/{me}) could not be read and
+   * no feedback was found: "unavailable" is then not known to mean "none". A 404 is a known absence.
+   * get_assignments ignores it, so its output is unchanged.
+   */
+  fallbackUnknown?: { status: number | null };
 }
 
 /**
@@ -140,6 +146,7 @@ export async function readMyFeedback(
   // feedback/user/{me}.
   let source: MyFeedbackRead["source"] = feedback ? "myFeedback" : null;
   let groupRouteSkipped = false;
+  let fallbackUnknown: MyFeedbackRead["fallbackUnknown"];
   if (!feedback && mine.submissions.length > 0) {
     const individual = folder.GroupTypeId === null || folder.GroupTypeId === undefined;
     if (mine.embeddedFeedback && mine.embeddedFeedback.IsGraded !== false) {
@@ -147,7 +154,7 @@ export async function readMyFeedback(
       source = "submission";
     } else if (individual) {
       try {
-        const myId = await fetchCurrentUserId(apiClient);
+        const myId = await fetchCurrentUserId(apiClient, options?.signal);
         const own = await apiClient.get<DropboxFeedback>(
           apiClient.le(courseId, `/dropbox/folders/${folder.Id}/feedback/user/${myId}`),
           options
@@ -159,13 +166,21 @@ export async function readMyFeedback(
       } catch (error: any) {
         if (isAuthUnavailable(error)) throw error;
         log("DEBUG", `Own-feedback fallback failed for folder ${folder.Id}`, error);
+        // A 404 says there is no record; anything else says the route could not be read.
+        if (error?.status !== 404) fallbackUnknown = { status: typeof error?.status === "number" ? error.status : null };
       }
     } else {
       groupRouteSkipped = true;
     }
     if (feedback) status = "retrieved";
   }
-  return { feedback, status, source, ...(feedback === null && groupRouteSkipped ? { groupRouteSkipped } : {}) };
+  return {
+    feedback,
+    status,
+    source,
+    ...(feedback === null && groupRouteSkipped ? { groupRouteSkipped } : {}),
+    ...(feedback === null && fallbackUnknown ? { fallbackUnknown } : {}),
+  };
 }
 
 /**

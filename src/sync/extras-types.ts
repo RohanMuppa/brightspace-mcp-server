@@ -45,6 +45,9 @@ export interface TextSpec {
 
 export type TextStatus = "written" | "refreshed" | "unchanged" | "edited" | "skipped" | "planned" | "failed";
 
+/** Why a phase was not run: the run had already stopped, or the file cap was already reached. */
+export type NotRunReason = "auth" | "cancelled" | "deadline" | "max_total_bytes" | "max_files";
+
 export interface PhaseContext {
   apiClient: D2LApiClient;
   courseId: number;
@@ -52,8 +55,17 @@ export interface PhaseContext {
   dryRun: boolean;
   existing: ExistingMode;
   manifest: SyncManifest;
-  /** True once the run has a stop reason or the signal aborted. Check before each unit of work. */
+  /** True once the run has a stop reason, the signal aborted or the file cap is reached. Check before starting a unit of work. */
   stopped: () => boolean;
+  /** True once the run has a stop reason or the signal aborted (not for the file cap alone). */
+  halted: () => boolean;
+  /** Why `stopped()` is true, for a phase that did not run. */
+  notRunReason: () => NotRunReason | undefined;
+  /** Longest full path kept (Infinity when there is none) and the length of the destination path. */
+  budget: number;
+  rootLength: number;
+  /** The top-level folders the extras are saved in. */
+  roots: { assignments: string; announcements: string };
   /** For a caught error: true when it is a lost sign-in or a cancel, which the sync has recorded as the stop. */
   handleStop: (error: unknown) => boolean;
   saveFile: (spec: SaveSpec) => Promise<SaveOutcome>;

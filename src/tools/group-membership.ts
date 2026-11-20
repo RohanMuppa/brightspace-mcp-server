@@ -14,9 +14,9 @@ const inaccessible = (error: unknown) => error instanceof ApiError
   && (error.status === 403 || error.status === 404);
 
 /** The signed-in user's id, from the cached whoami read. */
-export async function fetchCurrentUserId(apiClient: D2LApiClient): Promise<number> {
+export async function fetchCurrentUserId(apiClient: D2LApiClient, signal?: AbortSignal): Promise<number> {
   const me = await apiClient.get<{ Identifier: number | string }>(apiClient.lp("/users/whoami"),
-    { ttl: DEFAULT_CACHE_TTLS.roster });
+    { ttl: DEFAULT_CACHE_TTLS.roster, ...(signal ? { signal } : {}) });
   const myId = Number(me.Identifier);
   if (!Number.isSafeInteger(myId) || myId <= 0) throw new Error("Brightspace returned an invalid current user identifier.");
   return myId;
