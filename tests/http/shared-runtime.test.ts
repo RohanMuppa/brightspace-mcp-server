@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync, mkdirSync, renameSync } from "node:fs";
 import { hostname, tmpdir } from "node:os";
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
@@ -11,7 +11,7 @@ import { createRuntime, type ServerRuntime } from "../../src/server.js";
 import { D2LApiClient } from "../../src/api/client.js";
 import { currentMfaAnnouncer } from "../../src/tools/mfa-relay.js";
 import type { TokenManager } from "../../src/auth/token-manager.js";
-import { runtimeDirectory, serveSharedRuntime, type SharedRuntime } from "../../src/shared-runtime.js";
+import { readRuntimeAddress, runtimeDirectory, serveSharedRuntime, type SharedRuntime } from "../../src/shared-runtime.js";
 import { relaySharedRuntime, startupFailure, type RuntimeExit } from "../../src/runtime-relay.js";
 import type { AppConfig } from "../../src/types/index.js";
 
@@ -82,12 +82,15 @@ describe("shared runtime behind the default stdio command", { timeout: 30_000 },
   let served: SharedRuntime[];
   let starts: number;
   let makeRuntime: () => ServerRuntime;
+  /** Test seams for how the runtime publishes its address. */
+  let publishSeams: { renameImpl?: (from: string, to: string) => Promise<void>; sleep?: (ms: number) => Promise<void> };
   const clients: Client[] = [];
 
   beforeEach(() => {
     upstream = [];
     served = [];
     starts = 0;
+    publishSeams = {};
     idleMs = 60_000;
     makeRuntime = () => createRuntime(baseConfig(sessionDir), "test");
     sessionDir = mkdtempSync(join(tmpdir(), "bs-shared-"));
@@ -125,7 +128,7 @@ describe("shared runtime behind the default stdio command", { timeout: 30_000 },
     // must reach the relay as a failed start (exit code 1, with the reason),
     // as spawnSharedRuntime reports it, not as an unhandled rejection that
     // leaves the chat waiting out its whole start timeout.
-    return serveSharedRuntime(makeRuntime(), { dir, idleMs }).then(
+    return serveSharedRuntime(makeRuntime(), { dir, idleMs, ...publishSeams }).then(
       (runtime) => {
         if (runtime) {
           if (owner === served) served.push(runtime);
@@ -388,6 +391,60 @@ describe("shared runtime behind the default stdio command", { timeout: 30_000 },
     await expect(client.connect(clientSide)).rejects.toThrow("stopped while starting: NativeCredentialStoreError: The native credential store is locked or unavailable. Its log is");
   });
 
+  describe("publishing the address (Windows CI timeout, 2026-11-19)", () => {
+    const transient = (code: string) => Object.assign(new Error(`${code}: operation not permitted, rename`), { code });
+    const noWait = () => Promise.resolve();
+
+    /** A rename that fails with `code` for the first `failures` calls, then really renames. */
+    function flaky(code: string, failures: number) {
+      const calls = { count: 0 };
+      const renameImpl = async (from: string, to: string) => {
+        calls.count += 1;
+        if (calls.count <= failures) throw transient(code);
+        renameSync(from, to);
+      };
+      return { calls, renameImpl };
+    }
+
+    it.each(["EPERM", "EBUSY", "EACCES"])("starts when replacing state.json fails with %s twice and then works", async (code) => {
+      const { calls, renameImpl } = flaky(code, 2);
+      publishSeams = { renameImpl, sleep: noWait };
+      const client = await chat();
+      expect(await courseNames(client)).toContain("Course 1");
+      expect(calls.count).toBe(3);
+      expect(served).toHaveLength(1);
+      expect(JSON.parse(readFileSync(join(dir, "state.json"), "utf-8")).pid).toBe(process.pid);
+    });
+
+    it("keeps state.json private and leaves no temp file behind", async () => {
+      const { renameImpl } = flaky("EBUSY", 1);
+      publishSeams = { renameImpl, sleep: noWait };
+      await chat();
+      if (process.platform !== "win32") expect(statSync(join(dir, "state.json")).mode & 0o777).toBe(0o600);
+      expect(readdirSync(dir).filter((name) => name.startsWith("state.json") && name !== "state.json")).toEqual([]);
+    });
+
+    it("fails the start at once, with the reason, when the file cannot be replaced after the retries", async () => {
+      const { calls, renameImpl } = flaky("EPERM", Infinity);
+      publishSeams = { renameImpl, sleep: noWait };
+      const client = new Client({ name: "chat", version: "1" });
+      const [clientSide, relaySide] = InMemoryTransport.createLinkedPair();
+      // A long start timeout: only the failed start itself may end the wait.
+      await relaySharedRuntime(relaySide, { dir, startRuntime, startTimeoutMs: 600_000 });
+      clients.push(client);
+      await expect(client.connect(clientSide)).rejects.toThrow(/stopped while starting: .*publish.*state\.json.*EPERM/s);
+      expect(calls.count).toBeGreaterThan(1);
+      expect(calls.count).toBeLessThan(20);
+      expect(existsSync(join(dir, "state.json"))).toBe(false);
+      expect(served).toHaveLength(0);
+      // The failed start gave up its owner lock, so a later start is not blocked.
+      publishSeams = {};
+      const later = await serveSharedRuntime(makeRuntime(), { dir, idleMs });
+      expect(later).toBeDefined();
+      served.push(later!);
+    });
+  });
+
   it("keeps waiting when the runtime it started exits because another one won", async () => {
     // Exit 0 is the runtime that lost the owner lock; the winner publishes.
     const client = new Client({ name: "chat", version: "1" });
@@ -402,6 +459,64 @@ describe("shared runtime behind the default stdio command", { timeout: 30_000 },
     clients.push(client);
     await client.connect(clientSide);
     expect((await client.listTools()).tools).toHaveLength(31);
+  });
+});
+
+describe("readRuntimeAddress", () => {
+  const address = { pid: 4242, url: "http://127.0.0.1:5555/mcp", token: "t".repeat(64) };
+  const noWait = () => Promise.resolve();
+  const errno = (code: string) => Object.assign(new Error(code), { code });
+  let dir: string;
+  beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "bs-read-")); });
+  afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
+
+  /** A reader whose first calls throw or return `outcomes`, then returns the real address. */
+  const scripted = (outcomes: Array<Error | string>) => {
+    let calls = 0;
+    const readFile = async () => {
+      const next = outcomes[calls++];
+      if (next === undefined) return JSON.stringify(address);
+      if (typeof next === "string") return next;
+      throw next;
+    };
+    return { readFile, calls: () => calls };
+  };
+
+  it("reads a published address", async () => {
+    writeFileSync(join(dir, "state.json"), JSON.stringify(address));
+    expect(await readRuntimeAddress(dir)).toEqual(address);
+  });
+
+  it("is undefined, without retrying, when there is no file", async () => {
+    const reader = scripted([errno("ENOENT")]);
+    expect(await readRuntimeAddress(dir, reader)).toBeUndefined();
+    expect(reader.calls()).toBe(1);
+  });
+
+  it.each(["EPERM", "EBUSY", "EACCES"])("looks again when the file is momentarily locked (%s)", async (code) => {
+    const reader = scripted([errno(code), errno(code)]);
+    expect(await readRuntimeAddress(dir, { ...reader, sleep: noWait })).toEqual(address);
+    expect(reader.calls()).toBe(3);
+  });
+
+  it("looks again when it catches partial JSON", async () => {
+    const reader = scripted(['{"pid":4242,"url":"http://127.', ""]);
+    expect(await readRuntimeAddress(dir, { ...reader, sleep: noWait })).toEqual(address);
+    expect(reader.calls()).toBe(3);
+  });
+
+  it("gives up with undefined, after a bounded number of tries, when the file stays unreadable", async () => {
+    let calls = 0;
+    const readFile = async (): Promise<string> => { calls += 1; throw errno("EBUSY"); };
+    expect(await readRuntimeAddress(dir, { readFile, sleep: noWait })).toBeUndefined();
+    expect(calls).toBeGreaterThan(1);
+    expect(calls).toBeLessThan(20);
+  });
+
+  it("treats well-formed JSON of the wrong shape as no address, without retrying", async () => {
+    const reader = scripted([JSON.stringify({ pid: "x" })]);
+    expect(await readRuntimeAddress(dir, reader)).toBeUndefined();
+    expect(reader.calls()).toBe(1);
   });
 });
 
