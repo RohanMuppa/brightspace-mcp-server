@@ -258,6 +258,8 @@ Tools are registered in `src/tools/index.ts`, and their input schemas are in `sr
   - `forumId` (optional). Returns topics and posts for that forum. Omit it for all forums.
   - `topicId` (optional, requires `forumId`). Returns posts for that topic.
 - Returns discussion forums and recent posts.
+- Every forum and topic `description` is the description's HTML as markdown, so links keep their URLs. When the HTML is missing or has no text, it is Brightspace's plain-text form.
+  **Why:** #481. Forum descriptions, and topic descriptions in the course-wide list, used only the plain-text form. It has no link targets and can be empty while the HTML holds the text.
 - A 403 on discussions does not fail [search_course](#search_course). That tool skips the source and names it in `note`.
 
 ## Course content
@@ -305,6 +307,7 @@ Tools are registered in `src/tools/index.ts`, and their input schemas are in `sr
   - `query` (2 to 200 characters). For example, `midterm review slides`.
   - `limit` (default 10, max 50). Results are returned highest score first.
 - Searches modules, topics, file names, announcements, and discussion forums and topics, all in one call.
+- Forum and topic descriptions are searched in the same form `get_discussions` returns them, so words that exist only in a description's HTML are found (#481).
 - It reuses the fetchers of `get_course_content`, `get_announcements` and `get_discussions`: `fetchRootContent`/`buildContentTree`, `fetchCourseNews`, and `fetchForums`/`fetchForumTopics`. Results share their cache, so the tool does not hit the API a second way.
 - Scoring uses in-memory term matches. Matching is case-insensitive and tokenised on non-alphanumeric characters.
 - A result that matches every query term always ranks above one that matches only some terms.

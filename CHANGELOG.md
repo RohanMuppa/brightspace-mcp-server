@@ -6,6 +6,10 @@ A change that can break something a caller relied on is marked **Changed behavio
 
 Entries up to 5.2.1 were generated from the merged PR titles. Versions before 5.0.0 are in the [GitHub releases](https://github.com/RohanMuppa/brightspace-mcp-server/releases) and the git history.
 
+## 5.3.2 (2026-11-20)
+
+- fix: `get_discussions` now returns forum descriptions, and topic descriptions in the list of all forums, with their links and with text Brightspace keeps only in the formatted version. Before, they could come back without URLs or empty. `search_course` finds words in those descriptions too (#481).
+
 ## 5.3.1 (2026-11-20)
 
 - chore: dependency updates: Playwright 1.65.1 (the browser used for sign-in), dotenv 18.0.10, sanitize-filename 1.6.5 and turndown 7.2.5. Nothing should look different.

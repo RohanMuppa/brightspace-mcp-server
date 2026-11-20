@@ -244,6 +244,27 @@ describe("search_course ranking", () => {
   });
 });
 
+describe("search_course discussion descriptions (#481)", () => {
+  it("finds a forum by a word that appears only in its Html description", async () => {
+    const { call } = setup({
+      forums: [{ ...FORUMS[0], Description: { Text: "", Html: "<p>Post your <b>capstone</b> proposals here.</p>" } }],
+      forumTopics: { [FORUM_ID]: [] },
+    });
+
+    const body = JSON.parse((await call({ courseId: COURSE_ID, query: "capstone" })).content[0].text);
+    expect(body.results.map((r: any) => r.id)).toContain(FORUM_ID);
+  });
+
+  it("finds a topic by a word that appears only in its Html description", async () => {
+    const { call } = setup({
+      forumTopics: { [FORUM_ID]: [{ ...FORUM_TOPICS[0], TopicId: 402, Name: "Week 3", Description: { Text: "", Html: "<p>Bring your <i>capstone</i> outline.</p>" } }] },
+    });
+
+    const body = JSON.parse((await call({ courseId: COURSE_ID, query: "capstone" })).content[0].text);
+    expect(body.results.map((r: any) => r.id)).toContain(402);
+  });
+});
+
 describe("search_course limit", () => {
   it("returns at most `limit` results, highest scoring first", async () => {
     const { call } = setup();
