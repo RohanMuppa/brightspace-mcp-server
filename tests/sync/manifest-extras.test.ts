@@ -140,7 +140,8 @@ describe("SyncManifest extras", () => {
 
   it("rejects every record when the course has no recorded root, or the root is not one folder name", async () => {
     for (const roots of [{ assignmentsRoot: undefined }, { assignmentsRoot: "A/B" }, { assignmentsRoot: ".." }, { assignmentsRoot: "" }, { assignmentsRoot: 5 }, { assignmentsRoot: "back\\slash" }]) {
-      await writeJson(record(roots));
+      // The records are not under the fixed 5.2.21 name either, so nothing is adopted.
+      await writeJson(record({ ...roots, assignments: { "5": { dir: "Weeks/Ok", files: {} } } }));
       const manifest = await SyncManifest.load(dir);
       expect(manifest.findAssignment(42, 5)).toBeUndefined();
       expect(manifest.extrasRoot(42, "assignments")).toBeUndefined();
@@ -204,5 +205,67 @@ describe("SyncManifest extras", () => {
     expect(third.findAssignment(42, 5)).toBeDefined();
     expect(third.findAssignment(43, 6)).toBeDefined();
     expect(third.extrasRoot(43, "assignments")).toBe("Assignments (2)");
+  });
+});
+
+describe("records made by 5.2.21, which kept no root", () => {
+  const old = (assignments: Record<string, unknown>, announcements: Record<string, unknown> = {}) => ({
+    version: 1,
+    courses: {},
+    extras: { "42": { assignments, announcements } },
+  });
+  const rec = (dirName: string) => ({ dir: dirName, files: { "sub:3:11": { path: `${dirName}/my files/a.pdf`, bytes: 1 } } });
+
+  it("adopts the fixed 5.2.21 name as the root when every record sits under it", async () => {
+    await writeJson(old({ "5": rec("Assignments/Essay"), "6": rec("Assignments/Lab") }, { "8": { dir: "Announcements/2026-10-01 Hi", files: {} } }));
+    const manifest = await SyncManifest.load(dir);
+    expect(manifest.extrasRoot(42, "assignments")).toBe("Assignments");
+    expect(manifest.extrasRoot(42, "announcements")).toBe("Announcements");
+    expect(manifest.findAssignment(42, 5)?.files["sub:3:11"].path).toBe("Assignments/Essay/my files/a.pdf");
+    expect(manifest.findAssignment(42, 6)).toBeDefined();
+    expect(manifest.findAnnouncement(42, 8)).toBeDefined();
+  });
+
+  it("adopts per record: records under the fixed name are kept, the others are dropped one by one", async () => {
+    await writeJson(old({ "5": rec("Assignments/Essay"), "6": rec("Week 1/Lab"), "7": rec("Assignments/Deep/er") }));
+    const manifest = await SyncManifest.load(dir);
+    expect(manifest.extrasRoot(42, "assignments")).toBe("Assignments");
+    expect(manifest.findAssignment(42, 5)).toBeDefined();
+    expect(manifest.findAssignment(42, 6)).toBeUndefined();
+    expect(manifest.findAssignment(42, 7)).toBeUndefined();
+  });
+
+  it("adopts nothing when no record sits under the fixed name", async () => {
+    await writeJson(old({ "6": rec("Week 1/Lab") }));
+    const manifest = await SyncManifest.load(dir);
+    expect(manifest.extrasRoot(42, "assignments")).toBeUndefined();
+    expect(manifest.findAssignment(42, 6)).toBeUndefined();
+  });
+
+  it.each([["Assignments (2)/Essay"], ["Announcements/Essay"], ["Assignments/A/B"], ["assignments/Essay"]])("does not adopt a record at %s", async (dirName) => {
+    await writeJson(old({ "5": rec(dirName) }));
+    expect((await SyncManifest.load(dir)).findAssignment(42, 5)).toBeUndefined();
+  });
+
+  it("applies the usual rules to the adopted records (paths outside the folder are dropped)", async () => {
+    await writeJson(old({ "5": { dir: "Assignments/Essay", files: { "sub:3:11": { path: "Elsewhere/a.pdf", bytes: 1 } } } }));
+    expect(Object.keys((await SyncManifest.load(dir)).findAssignment(42, 5)!.files)).toEqual([]);
+  });
+
+  it("a recorded root wins over the migration", async () => {
+    const doc = old({ "5": rec("Assignments (2)/Essay") }) as any;
+    doc.extras["42"].assignmentsRoot = "Assignments (2)";
+    await writeJson(doc);
+    const manifest = await SyncManifest.load(dir);
+    expect(manifest.extrasRoot(42, "assignments")).toBe("Assignments (2)");
+    expect(manifest.findAssignment(42, 5)).toBeDefined();
+  });
+
+  it("writes the adopted root back on the next save", async () => {
+    await writeJson(old({ "5": rec("Assignments/Essay") }));
+    const manifest = await SyncManifest.load(dir);
+    manifest.touch();
+    await manifest.save();
+    expect((await readJson()).extras["42"].assignmentsRoot).toBe("Assignments");
   });
 });

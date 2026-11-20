@@ -210,16 +210,30 @@ describe("cancel, deadline and progress", () => {
 
   it("stops cleanly at the wall-clock deadline", async () => {
     fake = await fakeBrightspace(toc, all);
-    const slow = fake.client.getRaw.getMockImplementation()!;
-    fake.client.getRaw.mockImplementation(async (p: string) => {
-      await new Promise((resolve) => setTimeout(resolve, 40));
-      return slow(p);
-    });
-    const result = await syncCourse(fake.client, { courseId: 42, destination: root, deadlineMs: 100 });
+    // The deadline is the only timer under test, so it runs on a clock the test
+    // moves: it fires when the third download is requested, never earlier or
+    // later because the machine was slow. Only setTimeout is faked; the file
+    // writes stay real.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    let result: Awaited<ReturnType<typeof syncCourse>>;
+    try {
+      const deadlineMs = 100_000;
+      const served = fake.client.getRaw.getMockImplementation()!;
+      let requests = 0;
+      fake.client.getRaw.mockImplementation(async (p: string) => {
+        requests += 1;
+        if (requests === 3) vi.advanceTimersByTime(deadlineMs);
+        return served(p);
+      });
+      result = await syncCourse(fake.client, { courseId: 42, destination: root, deadlineMs, sleep: async () => {} });
+    } finally {
+      vi.useRealTimers();
+    }
     expect(result.stopped).toBe("deadline");
-    expect(result.downloaded.length).toBeGreaterThan(0);
-    expect(result.downloaded.length + result.notAttempted).toBe(6);
-    expect(result.notAttempted).toBeGreaterThan(0);
+    // The deadline fired as the third file was requested: two are saved, and
+    // that one and the three after it are reported as not attempted.
+    expect(result.downloaded).toHaveLength(2);
+    expect(result.notAttempted).toBe(4);
     expect(result.failed).toEqual([]);
     // Nothing half-written is left behind.
     expect((await fs.readdir(path.join(root, "M"))).filter((n) => n.endsWith(".part"))).toEqual([]);
@@ -235,10 +249,20 @@ describe("an abort interrupts a request that is hung", () => {
 
   it("ends a hung file download at the deadline and reports the rest as not attempted", async () => {
     fake = await fakeBrightspace(toc, { 10: ok("a"), 11: ok("b") });
-    fake.client.getRaw.mockImplementation((_p: string, options?: { signal?: AbortSignal }) => hangs(options?.signal));
-    const started = Date.now();
-    const result = await syncCourse(fake.client, { courseId: 42, destination: root, deadlineMs: 60 });
-    expect(Date.now() - started).toBeLessThan(3000);
+    // The deadline fires on a clock the test moves, at the moment the first
+    // download hangs, so it cannot land before the table of contents is read.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    fake.client.getRaw.mockImplementation((_p: string, options?: { signal?: AbortSignal }) => {
+      const hung = hangs(options?.signal);
+      vi.advanceTimersByTime(60_000);
+      return hung;
+    });
+    let result: Awaited<ReturnType<typeof syncCourse>>;
+    try {
+      result = await syncCourse(fake.client, { courseId: 42, destination: root, deadlineMs: 60_000, sleep: async () => {} });
+    } finally {
+      vi.useRealTimers();
+    }
     expect(result.stopped).toBe("deadline");
     expect(result.downloaded).toEqual([]);
     expect(result.failed).toEqual([]);
@@ -247,8 +271,19 @@ describe("an abort interrupts a request that is hung", () => {
 
   it("ends a hung table-of-contents read at the deadline", async () => {
     fake = await fakeBrightspace(toc, {});
-    fake.client.get.mockImplementation((_p: string, options?: { signal?: AbortSignal }) => hangs(options?.signal));
-    const result = await syncCourse(fake.client, { courseId: 42, destination: root, deadlineMs: 60 });
+    // The deadline fires on a clock the test moves, once the read has hung.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    fake.client.get.mockImplementation((_p: string, options?: { signal?: AbortSignal }) => {
+      const hung = hangs(options?.signal);
+      vi.advanceTimersByTime(60_000);
+      return hung;
+    });
+    let result: Awaited<ReturnType<typeof syncCourse>>;
+    try {
+      result = await syncCourse(fake.client, { courseId: 42, destination: root, deadlineMs: 60_000, sleep: async () => {} });
+    } finally {
+      vi.useRealTimers();
+    }
     expect(result.stopped).toBe("deadline");
     expect(result.downloaded).toEqual([]);
     expect(await fs.readdir(root)).toEqual([]);

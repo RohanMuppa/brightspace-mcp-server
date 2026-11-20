@@ -147,3 +147,37 @@ describe("full course pull: announcement attachments", () => {
     expect(fake!.client.get.mock.calls.some((c: unknown[]) => String(c[0]).includes("/news/"))).toBe(false);
   });
 });
+
+describe("announcement counts add up", () => {
+  const item = (id: number, name: string) => news(id, `Post ${id}`, [{ FileId: id, FileName: name }]);
+  const routes = () => ({
+    [NEWS]: [
+      item(1, "a.pdf"),
+      { ...news(2, "No id", []), Id: "x" },
+      news(3, "Draft", [{ FileId: 3, FileName: "d.pdf" }], { IsPublished: false }),
+      item(4, "b.pdf"),
+      news(5, "Empty", []),
+      { ...news(6, "Zero", []), Id: 0 },
+      item(7, "c.pdf"),
+    ],
+  });
+  const files = () => ({ [attachment(1, 1)]: ok("1"), [attachment(4, 4)]: ok("4"), [attachment(7, 7)]: ok("7") });
+
+  it.each([1, 2, 3, 4])("with maxFiles %s", async (maxFiles) => {
+    const result = await run(routes(), files(), { maxFiles });
+    const n = result.announcements!;
+    // Six published entries are listed; the draft is not one of them.
+    expect(n.listed).toBe(6);
+    expect(n.unusable).toBe(2);
+    expect(n.read + n.notReached + n.unusable).toBe(n.listed);
+  });
+
+  it("also across a cancel after the first file", async () => {
+    const controller = new AbortController();
+    const result = await run(routes(), files(), { signal: controller.signal, onProgress: (e) => { if (e.type === "downloaded") controller.abort(); } });
+    const n = result.announcements!;
+    expect(n.read + n.notReached + n.unusable).toBe(n.listed);
+    expect(n.listed).toBe(6);
+    expect(n.notReached).toBeGreaterThan(0);
+  });
+});

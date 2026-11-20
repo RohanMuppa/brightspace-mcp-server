@@ -25,9 +25,9 @@ import { SyncInputError } from "./errors.js";
 import { removeStalePartials } from "./cleanup.js";
 import { acquireSyncLock } from "./lock.js";
 import { SyncManifest, unchangedSinceSync, type ManifestEntry } from "./manifest.js";
-import type { PhaseContext, SaveOutcome, SaveSpec, TextSpec, TextStatus } from "./extras-types.js";
-import { syncAssignments, type AssignmentsOutcome } from "./submissions-sync.js";
-import { syncAnnouncements, type AnnouncementsOutcome } from "./announcements-sync.js";
+import type { NotRunReason, PhaseContext, SaveOutcome, SaveSpec, TextSpec, TextStatus } from "./extras-types.js";
+import { emptyAssignmentsOutcome, syncAssignments, type AssignmentsOutcome } from "./submissions-sync.js";
+import { emptyAnnouncementsOutcome, syncAnnouncements, type AnnouncementsOutcome } from "./announcements-sync.js";
 import { recordSyncRoot } from "./saved-topics.js";
 import { NameSet, fileNameFromTopic, foldKey, sanitizeComponent, splitExtension } from "./names.js";
 
@@ -199,7 +199,7 @@ const typePart = (value: unknown, max: number): string =>
   typeof value === "string" || typeof value === "number" ? String(value).replace(/[^\w.\- ]/g, "_").slice(0, max) : "";
 
 /** The table of contents as folders and files, every name made safe and unique, each within its record's cap in `caps`. */
-export function planFiles(toc: unknown, moduleId: number | undefined, caps: NameCaps): Plan {
+export function planFiles(toc: unknown, moduleId: number | undefined, caps: NameCaps, reserved: readonly string[] = []): Plan {
   const capOf = (source: object): number => caps.get(source) ?? FULL_NAME_CHARS;
   const files: PlannedFile[] = [];
   const nonFiles: NonFileCounts = { link: 0, media: 0, broken: 0, other: 0, unavailable: 0 };
@@ -256,6 +256,9 @@ export function planFiles(toc: unknown, moduleId: number | undefined, caps: Name
 
   const walk = (container: Record<string, unknown>, segments: string[], sources: object[], depth: number): void => {
     const names = new NameSet(FULL_NAME_CHARS);
+    // The folders the extras already use (a recorded root that no Content has been saved under): a module that
+    // would share one takes the next free name instead. Content already saved is never moved.
+    if (depth === 0) for (const name of reserved) names.add(name, true);
     const children: Array<{ module: Record<string, unknown>; segments: string[] }> = [];
     if (container.Modules !== undefined && container.Modules !== null && !Array.isArray(container.Modules)) unreadEntries++;
     if (Array.isArray(container.Modules)) {
@@ -302,9 +305,9 @@ export function planFiles(toc: unknown, moduleId: number | undefined, caps: Name
  * a path that already fits keeps its full names, however long another path
  * in the course is.
  */
-function planWithinBudget(toc: unknown, moduleId: number | undefined, rootLength: number, budget: number): Plan {
+function planWithinBudget(toc: unknown, moduleId: number | undefined, rootLength: number, budget: number, reserved: readonly string[]): Plan {
   const caps = new Map<object, number>();
-  let plan = planFiles(toc, moduleId, caps);
+  let plan = planFiles(toc, moduleId, caps, reserved);
   for (let round = 0; round < 6 && Number.isFinite(budget); round++) {
     let shortened = false;
     for (const file of plan.files) {
@@ -322,7 +325,7 @@ function planWithinBudget(toc: unknown, moduleId: number | undefined, rootLength
       }
     }
     if (!shortened) break;
-    plan = planFiles(toc, moduleId, caps);
+    plan = planFiles(toc, moduleId, caps, reserved);
   }
   return plan;
 }
@@ -564,21 +567,6 @@ async function runSync(
       nonFiles: { link: 0, media: 0, broken: 0, other: 0, unavailable: 0 },
     };
 
-    // Read once, and fresh: a cached copy would hide what the instructor added since the last run.
-    let toc: unknown;
-    try {
-      toc = await apiClient.get<unknown>(apiClient.le(courseId, "/content/toc"), { signal: stop.signal });
-    } catch (error) {
-      if (stop.signal.aborted) {
-        // Cancelled or out of time before the course was even read: nothing was attempted.
-        result.stopped = stop.signal.reason === "deadline" ? "deadline" : "cancelled";
-        return result;
-      }
-      if (!isAuthUnavailable(error)) throw error;
-      result.stopped = "auth";
-      result.authError = textOf(error);
-      return result;
-    }
     const extras = {
       assignments: options.includeSubmissions === true || options.includeAssignmentFiles === true
         ? { submissions: options.includeSubmissions === true, assignmentFiles: options.includeAssignmentFiles === true }
@@ -592,11 +580,39 @@ async function runSync(
         announcementFiles: options.includeAnnouncementFiles === true,
       };
     }
-    const plan = planWithinBudget(toc, moduleId, root.length, budget);
+    /** A stop before the Content was even read: the extra phases did not run either, and must say so rather than show nothing. */
+    const stoppedBeforeRead = (): SyncResult => {
+      if (extras.assignments) result.assignments = { ...emptyAssignmentsOutcome(), notRun: result.stopped as NotRunReason };
+      if (extras.announcements) result.announcements = { ...emptyAnnouncementsOutcome(), notRun: result.stopped as NotRunReason };
+      return result;
+    };
+
+    // Read once, and fresh: a cached copy would hide what the instructor added since the last run.
+    let toc: unknown;
+    try {
+      toc = await apiClient.get<unknown>(apiClient.le(courseId, "/content/toc"), { signal: stop.signal });
+    } catch (error) {
+      if (stop.signal.aborted) {
+        // Cancelled or out of time before the course was even read: nothing was attempted.
+        result.stopped = stop.signal.reason === "deadline" ? "deadline" : "cancelled";
+        return stoppedBeforeRead();
+      }
+      if (!isAuthUnavailable(error)) throw error;
+      result.stopped = "auth";
+      result.authError = textOf(error);
+      return stoppedBeforeRead();
+    }
+    const manifest = await SyncManifest.load(root);
+    // Folders the extras use, from earlier runs. A Content module is never moved: only one with nothing saved under
+    // the name yet, and a name the extras hold, is planned under the next free name.
+    const contentFirstSegments = new Set(manifest.entries(courseId).map(([, entry]) => foldKey(entry.path.split("/")[0])));
+    const reservedRoots = (["assignments", "announcements"] as const)
+      .map((kind) => manifest.extrasRoot(courseId, kind))
+      .filter((name): name is string => name !== undefined && !contentFirstSegments.has(foldKey(name)));
+    const plan = planWithinBudget(toc, moduleId, root.length, budget, reservedRoots);
     result.nonFiles = plan.nonFiles;
     if (plan.truncated) result.tocTruncated = true;
     result.tocTopicCount = plan.topicsSeen;
-    const manifest = await SyncManifest.load(root);
 
     let total = plan.files.length;
     let done = 0;
@@ -776,20 +792,27 @@ async function runSync(
       let ownedStat: { size: number; mtimeMs: number } | undefined;
       try {
         const prior = spec.prior;
+        let tracked = false;
         if (prior) {
+          // The sync's own file is found at the path it recorded. If the student deleted it, it is written
+          // there again; an untracked file elsewhere never takes its place.
           const parts = prior.path.split("/");
           const priorName = parts.pop()!;
-          const priorDir = await locateFolder(root, parts, false);
-          const onDisk = priorDir ? await lstatOrNull(path.join(priorDir, priorName)) : null;
-          if (priorDir && onDisk?.isFile()) {
-            segments = parts;
-            name = priorName;
-            dir = priorDir;
+          segments = parts;
+          name = priorName;
+          tracked = true;
+          dir = await locateFolder(root, parts, false);
+          const onDisk = dir ? await lstatOrNull(path.join(dir, priorName)) : null;
+          if (onDisk?.isFile()) {
             owned = true;
             ownedStat = onDisk;
+          } else if (onDisk) {
+            // Say what is there: a link or a folder, not "a folder" for both.
+            fail(prior.path, onDisk.isSymbolicLink() ? "A symbolic link is in the way" : onDisk.isDirectory() ? "A folder with this name is in the way" : "Something that is not a regular file is in the way");
+            return { status: "failed", rel: prior.path };
           }
         }
-        if (!owned) {
+        if (!owned && !tracked) {
           dir = await locateFolder(root, segments, false);
           const found = dir === null ? null : await lstatOrNull(path.join(dir, name));
           if (found?.isDirectory()) {
@@ -818,7 +841,8 @@ async function runSync(
         // The student edited it since the sync wrote it: theirs now. keep_both writes the new text to a copy beside it
         // and tracks that copy, so later refreshes update the copy in place; skip and replace leave it alone.
         if (!unchangedSinceSync({ path: rel, bytes: 0, size: spec.prior!.size, mtimeMs: spec.prior!.mtimeMs }, ownedStat!)) {
-          if (existing !== "keep_both") return { status: "edited", rel };
+          // A tracked copy ("feedback (2).md") that was itself edited is left alone too: there is never a third copy.
+          if (existing !== "keep_both" || name !== spec.name) return { status: "edited", rel };
           saveAs = await freeNumberedName(dir!, name, 2);
         }
       }

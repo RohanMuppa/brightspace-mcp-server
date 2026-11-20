@@ -105,6 +105,12 @@ function validDir(value: unknown, root: string | undefined): value is string {
   return parts.length === 2 && parts[0] === root;
 }
 
+/** True when at least one record has a valid `dir` directly under `root`. Records elsewhere are dropped one by one. */
+function anyUnder(records: unknown, root: string): boolean {
+  if (!plainObject(records)) return false;
+  return Object.entries(records).some(([id, raw]) => ID_KEY.test(id) && plainObject(raw) && validDir(raw.dir, root));
+}
+
 const inside = (dir: string, rel: string): boolean => rel.startsWith(`${dir}/`);
 
 function readFiles(value: unknown, dir: string): Record<string, ManifestEntry> {
@@ -178,6 +184,10 @@ export class SyncManifest {
       const mine = this.course(courseId);
       if (validRoot(record.assignmentsRoot)) mine.assignmentsRoot = record.assignmentsRoot;
       if (validRoot(record.announcementsRoot)) mine.announcementsRoot = record.announcementsRoot;
+      // 5.2.21 recorded no root and always used the fixed names. Records written then are adopted, narrowly:
+      // the fixed name is adopted when any record of a kind sits directly under it, and only those records are kept.
+      if (mine.assignmentsRoot === undefined && anyUnder(record.assignments, "Assignments")) mine.assignmentsRoot = "Assignments";
+      if (mine.announcementsRoot === undefined && anyUnder(record.announcements, "Announcements")) mine.announcementsRoot = "Announcements";
       if (plainObject(record.assignments)) {
         for (const [folderId, raw] of Object.entries(record.assignments)) {
           if (!ID_KEY.test(folderId) || !plainObject(raw) || !validDir(raw.dir, mine.assignmentsRoot)) continue;
