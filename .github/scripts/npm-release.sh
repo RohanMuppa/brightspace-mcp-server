@@ -151,6 +151,9 @@ fi
 # Only a version newer than npm's `latest`: a run for an older commit that
 # finishes late must not publish over, or take `latest` from, a newer release.
 if ! is_newer "$CURRENT" "$PUBLISHED"; then
+  if [ -n "$ALREADY" ] && [ "$(npm_view "$NAME" "dist-tags.$STAGED_TAG" || true)" = "$CURRENT" ]; then
+    echo "::warning::$NAME@$CURRENT was published as \`$STAGED_TAG\` and its release was never finished, and npm's \`latest\` is now $PUBLISHED, which is newer. Nothing was changed. $CURRENT has no GitHub release and no MCP Registry entry; create them by hand if they are wanted (see docs/internals/releasing.md, \"A release that is stuck\")."
+  fi
   echo "Version $CURRENT is not newer than npm's $PUBLISHED, skipping"
   done_with false
 fi

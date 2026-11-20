@@ -77,6 +77,8 @@ If the script cannot remove `staged` after a release, it prints a warning and th
 
 **Not yet verified:** whether the `NPM_TOKEN` secret may change dist-tags. It is an access token, not OIDC trusted publishing, and a granular token with write access to the package normally can, but nothing has moved a tag with it yet. The first stable release after this change is the test. If it fails with "npm refused to move `latest`", promote by hand as above and give the token that permission. Delete this paragraph once a release has promoted itself.
 
+If a newer version ships before a stuck release is finished, re-running the stuck job changes nothing: `latest` never moves backwards, so the job warns and skips. That version then has no GitHub release and no MCP Registry entry unless someone creates them by hand. Users lose nothing, since the newer version contains it.
+
 ## CI
 
 `.github/workflows/ci.yml` runs the build and `npm run test:run` on macOS, Ubuntu and Windows with Node 22 and 24. It installs with `npm ci --ignore-scripts`, so no Chromium is downloaded and no test in the default suite may need a browser. Browser tests run only with `BRIGHTSPACE_TEST_BROWSER=1`.
