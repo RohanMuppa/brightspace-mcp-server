@@ -736,3 +736,23 @@ describe("L-e: the folder counts add up", () => {
     expect(a.foldersListed).toBe(2);
   });
 });
+
+describe("saying what is in the way of feedback.md", () => {
+  it("names a symbolic link at the tracked path, and a folder", async () => {
+    await run(essay(), {});
+    const target = path.join(root, ...mdPath.split("/"));
+    await fs.rm(target);
+    try {
+      await fs.symlink(path.join(parent, "elsewhere.md"), target);
+    } catch {
+      return; // Creating a link needs a privilege on some systems; nothing to prove there.
+    }
+    const linked = await sync();
+    expect(linked.failed).toEqual([{ path: mdPath, error: expect.stringContaining("symbolic link") }]);
+    expect(linked.failed[0].error).not.toContain("folder");
+    await fs.rm(target);
+    await fs.mkdir(target);
+    const folderInTheWay = await sync();
+    expect(folderInTheWay.failed).toEqual([{ path: mdPath, error: expect.stringContaining("folder") }]);
+  });
+});

@@ -44,7 +44,7 @@ describe("download_course_files boolean options", () => {
       const { tools } = await client.listTools();
       const schema = tools.find((tool) => tool.name === "download_course_files")!.inputSchema;
       for (const key of OPTIONS) {
-        expect(schema.properties![key]).toMatchObject({ type: "boolean" });
+        expect(schema.properties![key]).toMatchObject({ type: "boolean", default: false });
         expect(schema.required ?? []).not.toContain(key);
       }
       // The call gets past input validation; it then fails on the path (not on the string).

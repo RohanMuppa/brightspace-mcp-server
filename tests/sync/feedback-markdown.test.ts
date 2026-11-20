@@ -96,7 +96,7 @@ describe("renderFeedbackMarkdown", () => {
     );
     expect(text).toContain('## Rubric: "Essay rubric"');
     expect(text).toContain("| Criterion | Level | Points | Comment |\n|---|---|---|---|");
-    expect(text).toContain("| Thesis \\| claim | Level 3 | 3 | line one line two \\| pipe |");
+    expect(text).toContain("| Thesis &#124; claim | Level 3 | 3 | line one line two &#124; pipe |");
     expect(text).toContain("| Style |  |  |  |");
     expect(text).toContain("> Overall ok");
   });
@@ -205,13 +205,13 @@ describe("remote links and images never go live", () => {
   it("turns an image into plain text with its alt text, and a link into 'text (url)' with the url inert", () => {
     const md = withText("![the chart](https://evil.example/t.png) and [the site](http://e.x/p)");
     expect(md).toContain("(image: the chart)");
-    expect(md).toContain("the site (`http://e.x/p`)");
+    expect(md).toContain("the site (http:&#47;/e&#46;x/p)");
     expect(md).not.toContain("https://evil.example/t.png");
   });
 
   it("does the same in a table cell", () => {
     const md = withCell("[l](http://e.x) ![i](http://e.x/i.png)");
-    expect(md).toContain("l (`http://e.x`) (image: i)");
+    expect(md).toContain("l (http:&#47;/e&#46;x) (image: i)");
   });
 });
 
@@ -220,14 +220,14 @@ describe("table cells escape backslashes before pipes", () => {
     const md = renderFeedbackMarkdown(
       base({ feedback: { known: true, score: 1, text: null, rubrics: [{ name: "R", criteria: [{ criterionName: "c\\|d", levelName: "x" }] }] } })
     );
-    expect(md).toContain("| c\\\\\\|d | x |  |  |");
+    expect(md).toContain("| c&#92;&#124;d | x |  |  |");
   });
 
   it("escapes a trailing backslash so it cannot eat the closing pipe", () => {
     const md = renderFeedbackMarkdown(
       base({ feedback: { known: true, score: 1, text: null, rubrics: [{ name: "R", criteria: [{ criterionName: "end\\", levelName: "x" }] }] } })
     );
-    expect(md).toContain("| end\\\\ | x |  |  |");
+    expect(md).toContain("| end&#92; | x |  |  |");
   });
 });
 
@@ -278,9 +278,12 @@ describe("feedback.md is bounded", () => {
     const md = renderFeedbackMarkdown(
       base({ feedback: { known: true, score: 1, text: "z".repeat(200_000), rubrics: [{ name: "R", criteria: criteria(200, big) }, { name: "S", criteria: criteria(200, big) }] } })
     );
-    expect(md.length).toBeLessThanOrEqual(300_200);
-    expect(md.trimEnd().split("\n").at(-1)).toBe("(feedback.md was cut here: it passed 300 kB.)");
+    expect(Buffer.byteLength(md)).toBeLessThanOrEqual(300_000);
+    expect(md).toContain("(feedback.md was cut here: it passed 300 kB.)");
     expect(md.startsWith('# "Essay 2"')).toBe(true);
+    // Only the free text was cut: both rubric tables are there.
+    expect(md).toContain('## Rubric: "R"');
+    expect(md).toContain('## Rubric: "S"');
   });
 
   it("leaves a normal file whole", () => {

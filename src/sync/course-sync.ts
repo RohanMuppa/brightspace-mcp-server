@@ -807,9 +807,9 @@ async function runSync(
             owned = true;
             ownedStat = onDisk;
           } else if (onDisk) {
-            const blocked = prior.path;
-            fail(blocked, "A folder with this name is in the way");
-            return { status: "failed", rel: blocked };
+            // Say what is there: a link or a folder, not "a folder" for both.
+            fail(prior.path, onDisk.isSymbolicLink() ? "A symbolic link is in the way" : onDisk.isDirectory() ? "A folder with this name is in the way" : "Something that is not a regular file is in the way");
+            return { status: "failed", rel: prior.path };
           }
         }
         if (!owned && !tracked) {

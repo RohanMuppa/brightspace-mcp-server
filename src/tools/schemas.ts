@@ -99,17 +99,15 @@ export const DownloadFileSchema = z.object({
 /**
  * A boolean that also accepts the strings "true" and "false" (any case, trimmed). A client that cached an
  * older tool list has no schema for a newer argument and may send it as text. Any other string is still
- * refused; z.coerce.boolean() would turn "false" into true. The advertised JSON schema stays `boolean`.
+ * refused; z.coerce.boolean() would turn "false" into true. The advertised JSON schema stays `boolean` with default false.
  */
 export const looseBoolean = () =>
-  z
-    .preprocess((value) => {
-      if (typeof value !== "string") return value;
-      const text = value.trim().toLowerCase();
-      return text === "true" ? true : text === "false" ? false : value;
-    }, z.boolean({ error: "Expected true or false" }))
-    .default(false)
-    .meta({ type: "boolean" });
+  z.preprocess((value) => {
+    if (typeof value !== "string") return value;
+    const text = value.trim().toLowerCase();
+    return text === "true" ? true : text === "false" ? false : value;
+    // The default sits inside the preprocess so the advertised schema keeps `type: boolean` and `default: false`.
+  }, z.boolean({ error: "Expected true or false" }).default(false));
 
 export const DownloadCourseFilesSchema = z.object({
   courseId: z.coerce.number().int().positive()

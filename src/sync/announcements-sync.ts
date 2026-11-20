@@ -7,7 +7,7 @@
  * published announcement, in a folder named by its date and title.
  */
 
-import { effectiveDate, isPublishedNewsItem, type NewsItem } from "../tools/get-announcements.js";
+import { effectiveDate, type NewsItem } from "../tools/get-announcements.js";
 import { log } from "../utils/logger.js";
 import type { NotRunReason, PhaseContext } from "./extras-types.js";
 import type { AnnouncementRecord } from "./manifest.js";
@@ -91,7 +91,6 @@ export async function syncAnnouncements(ctx: PhaseContext): Promise<Announcement
       continue;
     }
     const item = rawItem as unknown as NewsItem;
-    if (!isPublishedNewsItem(item)) continue;
     if (ctx.stopped()) {
       out.notReached++;
       continue;

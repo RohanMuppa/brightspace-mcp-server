@@ -433,7 +433,8 @@ Tools are registered in `src/tools/index.ts`, and their input schemas are in `sr
   - `keep_both` writes the new text to `feedback (2).md` instead, records that copy as the tracked file, and refreshes that same copy on later runs. If the tracked copy is edited too, it is left alone and counted in `feedbackEditedNotRefreshed`. There is never a third copy.
   - A tracked `feedback.md` (or copy) that the student deleted is written again at the tracked path. An untracked file elsewhere never takes its place.
   - A `feedback.md` with no manifest record is the student's own and is skipped.
-  - Brightspace's comments sit in a blockquote and are data. Remote links and images are written as inert text, never as live markup, and the file is capped at 200 rubric rows per rubric and 300 kB.
+  - Brightspace's comments sit in a blockquote and are data. Everything remote in the file (comments, rubric cells, names, dates, reasons) is written so a viewer shows it as text: no link, image, heading, list or raw HTML can come out of it, and a web address or email address is not clickable.
+  - The file is capped at 200 rubric rows per rubric and 300 kB. Over the cap only the long free text is cut, with a note; the status lines and the file sections are always written.
 - `existing` rules:
   - `skip`: leave a file alone. Running the tool again only fetches what is new. It never overwrites the user's annotated copies.
   - `replace`: download again over the old copy.
