@@ -12,7 +12,7 @@ import { D2LApiClient } from "../../src/api/client.js";
 import { currentMfaAnnouncer } from "../../src/tools/mfa-relay.js";
 import type { TokenManager } from "../../src/auth/token-manager.js";
 import { runtimeDirectory, serveSharedRuntime, type SharedRuntime } from "../../src/shared-runtime.js";
-import { relaySharedRuntime, startupFailure } from "../../src/runtime-relay.js";
+import { relaySharedRuntime, startupFailure, type RuntimeExit } from "../../src/runtime-relay.js";
 import type { AppConfig } from "../../src/types/index.js";
 
 /**
@@ -113,7 +113,7 @@ describe("shared runtime behind the default stdio command", { timeout: 30_000 },
   });
 
   /** What spawning `brightspace-mcp-server runtime` does, in this process. */
-  function startRuntime(): void {
+  function startRuntime(): Promise<RuntimeExit> {
     starts += 1;
     // A start that lost the race keeps waiting for the owner lock, so it can
     // win only after its own test has ended and released it. It belongs to
@@ -121,11 +121,20 @@ describe("shared runtime behind the default stdio command", { timeout: 30_000 },
     // landed in the next test's list with the default idle time, and that test
     // waited 60 s for it to idle out.
     const owner = served;
-    void serveSharedRuntime(makeRuntime(), { dir, idleMs }).then((runtime) => {
-      if (!runtime) return;
-      if (owner === served) served.push(runtime);
-      else void runtime.stop();
-    });
+    // Like the spawned process, it reports how it exited. A start that throws
+    // must reach the relay as a failed start (exit code 1, with the reason),
+    // as spawnSharedRuntime reports it, not as an unhandled rejection that
+    // leaves the chat waiting out its whole start timeout.
+    return serveSharedRuntime(makeRuntime(), { dir, idleMs }).then(
+      (runtime) => {
+        if (runtime) {
+          if (owner === served) served.push(runtime);
+          else void runtime.stop();
+        }
+        return { code: 0 };
+      },
+      (error: unknown) => ({ code: 1, reason: error instanceof Error ? `${error.name}: ${error.message}` : String(error) }),
+    );
   }
 
   /** One chat: an SDK client talking to its own relay, as over stdio. */
@@ -257,6 +266,13 @@ describe("shared runtime behind the default stdio command", { timeout: 30_000 },
 
   it("shows a call's MFA challenge to the client that made the call", async () => {
     const tokenManager = { getToken: async () => null } as unknown as TokenManager;
+    // A real sign-in waits for the user's approval, minutes after the challenge.
+    // The test is that user: it approves only once the challenge has reached
+    // the client. A fixed pause is not enough. The SDK client handles a
+    // response at once but a progress notification a microtask later, so a
+    // slow runner that delivers both in one read drops the notice.
+    let approve!: () => void;
+    const approval = new Promise<void>((done) => { approve = done; });
     makeRuntime = () => ({
       config: baseConfig(sessionDir),
       version: "test",
@@ -266,18 +282,24 @@ describe("shared runtime behind the default stdio command", { timeout: 30_000 },
         tokenManager,
         onAuthExpired: async () => {
           currentMfaAnnouncer()?.("42");
-          // A real sign-in waits for the approval, well after the challenge.
-          await new Promise((done) => setTimeout(done, 50));
+          await approval;
           return false;
         },
       }),
     });
     const [asking, other] = await Promise.all([chat(), chat()]);
     const seen: Record<string, string[]> = { asking: [], other: [] };
-    await Promise.all([
+    const calls = Promise.all([
       asking.callTool({ name: "get_my_courses", arguments: {} }, undefined, { onprogress: (p) => seen.asking.push(p.message ?? "") }),
       other.callTool({ name: "get_server_info", arguments: {} }, undefined, { onprogress: (p) => seen.other.push(p.message ?? "") }),
     ]);
+    try {
+      // The call is still open, waiting on the approval, when the notice arrives.
+      await vi.waitFor(() => expect(seen.asking).toHaveLength(1), { timeout: 20_000, interval: 10 });
+    } finally {
+      approve();
+    }
+    await calls;
     expect(seen.asking).toHaveLength(1);
     expect(seen.asking[0]).toContain("42");
     expect(seen.other).toEqual([]);

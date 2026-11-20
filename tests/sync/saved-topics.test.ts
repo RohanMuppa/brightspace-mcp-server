@@ -424,23 +424,29 @@ async function freshSync() {
 describe("recording a sync folder never delays the sync (release fix)", () => {
   it("downloads before a blocked ledger lock is released, and records the folder afterwards", async () => {
     fake = await fakeBrightspace(toc, bodies);
-    const slow = fake.client.getRaw.getMockImplementation()!;
-    fake.client.getRaw.mockImplementation(async (p: string) => {
-      await new Promise((resolve) => setTimeout(resolve, 40));
-      return slow(p);
-    });
+    const served = fake.client.getRaw.getMockImplementation()!;
     // Another process holds the ledger lock (a live owner, so it is not taken over).
-    await fs.writeFile(`${ledger}.lock`, JSON.stringify({ pid: process.pid, startedAt: Date.now(), token: "other" }));
-    setTimeout(() => void fs.rm(`${ledger}.lock`, { force: true }), 500);
+    // It lets go only once both files have been downloaded, so no timing decides
+    // whether the lock was still held: recording the folder before the first
+    // download would wait on it (up to its 3 s limit) past the deadline, and
+    // nothing would be downloaded.
+    const lock = `${ledger}.lock`;
+    await fs.writeFile(lock, JSON.stringify({ pid: process.pid, startedAt: Date.now(), token: "other" }));
+    let requests = 0;
+    fake.client.getRaw.mockImplementation(async (p: string) => {
+      const response = await served(p);
+      requests += 1;
+      if (requests === 2) await fs.rm(lock, { force: true });
+      return response;
+    });
     const root = path.join(dir, "course");
     await fs.mkdir(root);
 
     const { syncCourse } = await freshSync();
-    const started = Date.now();
-    const result = await syncCourse(fake.client as never, { courseId: COURSE, destination: root, deadlineMs: 200 });
-    expect(result.downloaded.length).toBeGreaterThan(0);
-    // The wait for the lock comes after the downloads, and is bounded.
-    expect(Date.now() - started).toBeLessThan(3500);
+    // Longer than the setup and two downloads by a wide margin, shorter than the ledger's 3 s wait.
+    const result = await syncCourse(fake.client as never, { courseId: COURSE, destination: root, deadlineMs: 2500 });
+    expect(result.stopped).toBeUndefined();
+    expect(result.downloaded).toHaveLength(2);
     const roots = JSON.parse(await fs.readFile(ledger, "utf8")).schools[ORIGIN].syncRoots[String(COURSE)];
     expect(roots).toHaveLength(1);
   });
