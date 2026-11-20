@@ -9,6 +9,7 @@ Always include `@latest`. Without it, `npx` prefers a copy already on `PATH` and
 | [`setup`](#setup) | Install: save settings, register AI apps, sign in |
 | [`auth`](#auth) | Sign in again from a terminal, or sign out with `--logout` |
 | [`sync`](#sync) | Download a whole course into a folder |
+| [`schedule`](#schedule) | Run `sync` every day (macOS) |
 | [`doctor`](#doctor) | Check a setup and say what to fix |
 | [`repair`](#repair) | Restore the browser sign-in uses |
 | [(no command)](#no-command-the-server) | Run the MCP server. This is what AI apps start |
@@ -78,6 +79,7 @@ Downloads a whole course into folders named after its modules, using the saved s
 | `--dry-run` | List what would be downloaded and download nothing |
 | `--json` | Print only the result object on stdout. Progress and the summary go to stderr |
 | `--max-files <n>` | Most files to download in one run (default 300) |
+| `--notify` | macOS notification when new files arrive or the sign-in has expired; says it could not check (never "0 new files") when a run failed or left files unchecked; quiet when nothing changed |
 | `--help` | Print the flags |
 
 | Exit | Meaning |
@@ -88,6 +90,28 @@ Downloads a whole course into folders named after its modules, using the saved s
 | 130 | Stopped by Ctrl-C or SIGTERM, with no partial file left behind |
 
 The CLI has no time limit; the `download_course_files` tool does. The rules for where files may be saved and what `replace` may overwrite are in [docs/internals/downloads.md](../internals/downloads.md).
+
+## schedule
+
+`src/sync/schedule-cli.ts`. macOS only. Other platforms print "not supported yet" and exit 2.
+
+```
+schedule --course <id> --dest <dir> --at HH:MM [--existing skip|replace|keep_both]
+schedule --list
+schedule --remove --course <id>
+```
+
+- Creates a per-user launchd agent that runs `sync --course … --dest … --notify` once a day at `--at`.
+- Writes `~/Library/LaunchAgents/com.brightspace-mcp-server.sync.<course>.plist`, with a daily `StartCalendarInterval`. It uses absolute node and entry-script paths, not `npx`.
+- Stdout and stderr go to `<session root>/logs/sync-<course>.log`.
+- It checks `--dest` with the sync's destination rule before writing anything.
+- It loads the agent with `launchctl bootstrap gui/<uid>`, falling back to `load`, and replaces an existing schedule for that course.
+- The course id must be a positive integer. Values are XML-escaped. The plist is written atomically, mode 0600.
+- `--list` lists the schedules this tool created. `--remove --course <id>` stops one and deletes its plist.
+- Only files named `com.brightspace-mcp-server.sync.<id>.plist` are ever read, replaced or removed, and only when the file's own `Label` matches. A plist that is not ours is left alone and the command exits 1.
+- `--remove` and a replacement first stop the loaded agent and check with `launchctl print` that it is gone. If launchd still has it, nothing is changed and the command exits 1 and prints `launchctl bootout gui/<uid>/<label>`.
+- If `launchctl` cannot load a new schedule, the plist just written is removed again and the command exits 1.
+- Only non-secret `D2L_*` settings are copied into the plist. `D2L_SESSION_COOKIE` and `D2L_ACCESS_TOKEN` are not, so a scheduled run cannot use them: it uses the saved sign-in, and if there is none you get a "sign-in needed" notification.
 
 ## doctor
 

@@ -60,15 +60,22 @@ More on `D2L_DOWNLOAD_ROOTS`:
 | Variable | Default | What it does |
 |----------|---------|--------------|
 | `D2L_NO_UPDATE_CHECK` | unset | Any non-empty value turns off the npm new-version notice and the auth CLI's self-update re-exec |
+| `D2L_NOTIFY` | on (macOS) | `0`, `false`, `no` or `off` turns off system notifications: the sign-in approval number and `sync --notify`. Other platforms do nothing |
 | `D2L_DEV_MODE` | unset | Exactly `true` writes a local, content-free activity log ([docs/dev-mode.md](../dev-mode.md)) |
 | `D2L_RUNTIME_IDLE_SECONDS` | `600` | Default command only: seconds the shared runtime waits with no request in progress before stopping |
 | `D2L_HTTP_TOKEN` | none | `http` only, and required there: the bearer token every request to the shared server must carry. At least 32 characters; never logged ([docs/shared-server.md](../shared-server.md)) |
 | `D2L_HTTP_PORT` | `18765` | `http` only: the port on 127.0.0.1. `--port` overrides it |
 
+Notification text never holds a password, cookie, token or code. It holds only the text it needs (`src/utils/notify.ts`): a 1 to 3 digit approval number; or a file count with `Course <id>` or the course's name (text the instructor wrote, cut short, and left out when it reads like a sign-in prompt) and the name of the destination folder. Notifications go only to macOS; nothing is sent over the network.
+
+macOS hides notifications from `osascript` when Script Editor is not allowed to show them, and `osascript` still reports success, so nothing tells the server. If none ever appear, open System Settings > Notifications > Script Editor and turn on Allow Notifications (and check that no Focus mode is on).
+
 ## Files on disk
 
 | Path | Contents | Permissions |
 |------|----------|-------------|
+| `~/Library/LaunchAgents/com.brightspace-mcp-server.sync.<course id>.plist` | macOS only: a daily sync made by `schedule`. Holds the course id, destination folder, time, node and script paths, and the non-secret `D2L_*` settings in effect when it was made. Never a password, cookie or token | 0600 |
+| `<session root>/logs/sync-<course id>.log` | Output of that scheduled sync: file names and results, no credentials | folder 0700 |
 | `~/.brightspace-mcp/config.json` | School URL, username, and public settings | 0600 |
 | `~/.brightspace-mcp/saved-topics.json` | Which content topics `download_file` saved to disk, with the absolute path, size and save time, and the folders a course sync wrote into. No file contents and no credentials. It also holds topics the student marked saved. Delete it to forget them; see [downloads.md](../internals/downloads.md#what-is-already-saved) | 0600 |
 | `~/.brightspace-mcp/saved-topics.json.lock` | Held for milliseconds while the ledger is rewritten, so two servers do not drop each other's entries. A leftover from a crash is taken over after 30 seconds or when its process is gone | 0600 |

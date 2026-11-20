@@ -6,6 +6,12 @@ A change that can break something a caller relied on is marked **Changed behavio
 
 Entries up to 5.2.1 were generated from the merged PR titles. Versions before 5.0.0 are in the [GitHub releases](https://github.com/RohanMuppa/brightspace-mcp-server/releases) and the git history.
 
+## 5.3.0 (2026-11-20)
+
+- feat: on macOS, the sign-in approval number now also shows as a system notification, so a sign-in nobody is watching does not go stale. `D2L_NOTIFY=0` turns every notification off.
+- feat: `sync --notify` shows a notification when new files arrive or the sign-in has expired, and says it could not check (never "0 new files") when part of a run failed.
+- feat: `schedule` runs a course sync every day at a time you choose, through a per-user launchd agent (macOS); `schedule --list` and `schedule --remove` manage it. No secrets are written into the agent file.
+
 ## 5.2.25 (2026-11-20)
 
 - fix: `get_rubrics_for_object` now lists the criteria, levels, points and descriptions of rubrics Brightspace sends in its documented grouped shape, instead of returning them with no criteria. A rubric that arrives without criteria is marked `criteriaUnavailable: true` with a notice, so it no longer reads as empty (#459).

@@ -22,7 +22,8 @@ The full description of each command is in [docs/reference/cli.md](docs/referenc
   - `--prepare --json` prints `{state, school?, steps, apps, restart, next}`. Its `state` values and those fields follow the additive-only rule.
   - Since 4.0.0, an unknown flag is an error (exit 2) instead of being ignored. The wizard and `--sign-in` exit 2 when stdin is not a terminal, instead of waiting for typing.
 - **`auth`**: manual sign-in, with no required flags. `auth --logout` deletes this computer's saved session. `--automatic` is internal and not a user flag.
-- **`sync`**: `--course`, `--dest`, `--existing`, `--module`, `--dry-run`, `--json`, `--max-files`, and exit codes 0, 1, 2 and 130.
+- **`sync`**: `--course`, `--dest`, `--existing`, `--module`, `--dry-run`, `--json`, `--max-files`, `--notify` (since 5.3.0), and exit codes 0, 1, 2 and 130.
+- **`schedule`** (since 5.3.0, macOS only): `--course`, `--dest`, `--at HH:MM`, `--existing`, `--list`, `--remove`, and exit codes 0, 1 and 2.
 - **`doctor`**: `--json` prints `{checks: [{id, ok, line}], allOk, notes}`. Check ids may be added (4.0.0 added `browser`).
 - **`repair`**: `--json`.
 - **`http`**: since 4.1.0, one shared MCP server over Streamable HTTP on `127.0.0.1` (`/mcp`), default port 18765 (`--port` or `D2L_HTTP_PORT`). Requires `D2L_HTTP_TOKEN` (at least 32 characters) as a bearer token on every request.
@@ -34,6 +35,7 @@ Every environment variable in [docs/reference/settings.md](docs/reference/settin
 
 ## Files on disk
 
+- `~/Library/LaunchAgents/com.brightspace-mcp-server.sync.<course id>.plist` (0600, macOS, since 5.3.0): a daily sync that `schedule` created. Only plists with that name and Label are ever read or removed. Its log is `<session root>/logs/sync-<course id>.log` (the folder is 0700). The plist never holds a password, cookie or token.
 - `~/.brightspace-mcp/config.json` (0600). Keys: `baseUrl`, `username`, `campus`, `sessionDir`, `tokenTtl`, `headless`, `rememberMfa`, `passwordless`, `includeCourses`, `excludeCourses`, `activeOnly`, `currentOnly`. No plaintext password; the password lives in the OS credential store.
 - `~/.d2l-session/accounts/<account-hash>/session.json` and `storage-state.encrypted.json` (AES-256-GCM, 0600). `<account-hash>` is `sha256([origin, username])`. Used only when a username is configured; otherwise state sits directly under `~/.d2l-session/`.
 - `.brightspace-sync.json` in a synced course folder: the manifest a sync keeps, keyed by course id and topic id. Since 5.2.21 it may also hold an `extras` key (assignment and announcement files and `feedback.md`, by course id); an older server that rewrites the manifest drops it, which is safe. With those options on, the extras go in the top-level folders `Assignments` and `Announcements` of the destination, or the first free name (`Assignments (2)`, ...), which also avoids anything already in the destination with that name. Existing Content is never moved: a module that would share an extras folder's name is saved under the next free name. The chosen folder is recorded in the manifest.
