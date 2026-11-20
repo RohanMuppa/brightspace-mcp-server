@@ -362,7 +362,7 @@ Tools are registered in `src/tools/index.ts`, and their input schemas are in `sr
   - One target. Use one of these:
     - `topicId`: a course content file.
     - `coursePath`: a file an instructor linked inside a module or page description, instead of adding it as a topic. Maximum 1024 characters.
-    - `folderId` and `fileId`: a dropbox submission. Use `source` to pick another kind (below).
+    - `folderId` and `fileId`: a dropbox submission. Use `source` to pick another kind (below). Your own submission is found whether Brightspace lists the submissions flat or nested inside an entry; a submission with no files answers that there are no files, not an empty list.
     - `newsId` and `fileId`: an announcement attachment. `newsId` requires `fileId`.
   - `source` (optional): `submission` (the default) or `assignmentAttachment`. Do not combine `source` with `topicId` or `newsId`. Do not combine `coursePath` with `topicId`, `folderId` or `newsId`.
   - `coursePath` accepts any of these forms:
@@ -393,6 +393,7 @@ Tools are registered in `src/tools/index.ts`, and their input schemas are in `sr
 - Code: `src/tools/download-course-files.ts`.
 - Read this entry for the arguments and the result. For destination rules, the manifest, name cleaning, retries and how it is built, see [downloads.md](../internals/downloads.md).
 - Downloads every File topic of a course (from `/content/toc`) into `downloadPath`. Folders are named after the course's modules. A rerun is a sync.
+- It covers the Content area only. The answer ends with a line saying so and naming what it did not look at: the student's own submissions and instructor feedback (`get_assignments`, then `download_file` with `folderId` and `fileId`), assignment attachments (`get_assignment_files`), announcement attachments (`get_announcement_files`) and the syllabus (`get_syllabus`). The tool description says the same, so an agent asked for "everything" does not stop here.
 - Arguments:
   - `courseId` (required).
   - `downloadPath` (required). An absolute path to an existing directory. Ask the user where to save before calling. Never guess a directory.
@@ -434,6 +435,7 @@ Tools are registered in `src/tools/index.ts`, and their input schemas are in `sr
   - `markedSavedCount`: of `savedCount`, the topics the student marked saved with [`mark_course_files_saved`](#mark_course_files_saved), with or without a path. Without a path the server never checked a file for them; with one it still checks the file. A notice says so.
   - `markedTopicIds`: those topics' ids, at most 500 (`markedTopicIdsTruncated: true` when there are more).
   - `unsavedNote`: one sentence on what `unsaved` means: the server has no record of saving the topic. A file the student already has from before this version, or saved another way (browser, manual copy), appears there too, so ask before downloading everything again. A listed topic may not be open yet; `download_file` says why when it can.
+  - `notCovered`: a list of `{ what, tool }` for what this tool does not check, because it reads the Content area only (submissions and feedback, assignment and announcement attachments, the syllabus). An empty `unsaved` never means the whole course is saved. `unsavedNote` and the tool description say so too.
   - `unsaved`: file topics with no record. Each has `topicId`, `fileName`, `title`, `modulePath` and `downloadArgs` (`courseId`, `topicId`) for `download_file`, plus `lastModified` when the table of contents gives it. `savedFileMissing` and `couldNotCheck` entries carry `title` and `lastModified` too.
   - `savedFileMissing`: recorded as saved, but the file is no longer at `savedTo`. Counts as not saved. Download it again.
   - `couldNotCheck`: recorded, but the file could not be checked, or the folder it was saved in is not found (a drive that is not connected, a moved folder). Not reported as saved or missing.

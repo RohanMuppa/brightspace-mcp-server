@@ -509,6 +509,63 @@ describe("download_file: dropbox submissions", () => {
   });
 });
 
+describe("download_file: own submission in the EntityDropbox shape", () => {
+  const file = (fileId: number, fileName: string, size = 1024) => ({ FileId: fileId, FileName: fileName, Size: size });
+  const inner = (id: number, files: unknown[]) => ({
+    Id: id,
+    SubmittedBy: { Identifier: "7", DisplayName: "Student" },
+    SubmissionDate: "2026-11-01T10:00:00.000Z",
+    Comment: null,
+    Files: files,
+  });
+  const entity = (subs: unknown[]) => ({ Entity: { EntityId: 7, EntityType: "User" }, Status: 1, Feedback: null, Submissions: subs });
+
+  it("finds a file one level down and uses the inner submission id in the URL", async () => {
+    const { call, rawRequested } = setup({ submissions: [entity([inner(777, [file(61716234, "report.pdf")])])] });
+    const result = await call({ courseId: COURSE, folderId: 1619079, fileId: 61716234, downloadPath: targetDir });
+    expect(result.isError).toBeUndefined();
+    expect(parse(result).originalFilename).toBe("report.pdf");
+    expect(rawRequested[0]).toContain("/dropbox/folders/1619079/submissions/777/files/61716234/download");
+  });
+
+  it("finds a file in the second of two nested submissions", async () => {
+    const { call, rawRequested } = setup({
+      submissions: [entity([inner(700, [file(11, "draft.pdf")]), inner(701, [file(22, "final.pdf")])])],
+    });
+    const result = await call({ courseId: COURSE, folderId: 5, fileId: 22, downloadPath: targetDir });
+    expect(parse(result).originalFilename).toBe("final.pdf");
+    expect(rawRequested[0]).toContain("/submissions/701/files/22/download");
+  });
+
+  it("says there are no files, not an empty list, when nested submissions carry none", async () => {
+    const { call } = setup({ submissions: [entity([inner(700, [])])] });
+    const result = await call({ courseId: COURSE, folderId: 5, fileId: 22, downloadPath: targetDir });
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain("no files");
+    expect(textOf(result)).not.toContain("Available files:");
+  });
+
+  it("reads an entity with no submissions as no submissions", async () => {
+    const { call } = setup({ submissions: [entity([])] });
+    const result = await call({ courseId: COURSE, folderId: 5, fileId: 22, downloadPath: targetDir });
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain("No submissions found");
+  });
+
+  it("still reads the flat shape", async () => {
+    const { call, rawRequested } = setup({ submissions: [inner(900, [file(22, "final.pdf")])] });
+    const result = await call({ courseId: COURSE, folderId: 5, fileId: 22, downloadPath: targetDir });
+    expect(parse(result).originalFilename).toBe("final.pdf");
+    expect(rawRequested[0]).toContain("/submissions/900/files/22/download");
+  });
+
+  it("reads a { Objects } wrapper too", async () => {
+    const { call } = setup({ submissions: { Objects: [entity([inner(900, [file(22, "final.pdf")])])] } });
+    const result = await call({ courseId: COURSE, folderId: 5, fileId: 22, downloadPath: targetDir });
+    expect(parse(result).originalFilename).toBe("final.pdf");
+  });
+});
+
 describe("download_file: announcement attachments", () => {
   const newsItem = (attachments: unknown[]) => ({ Id: 55, Title: "Field notes", Attachments: attachments });
   const file = (fileId: number, fileName: string, size = 1024) => ({

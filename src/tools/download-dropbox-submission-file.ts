@@ -12,6 +12,7 @@
 // download_file's disk mode) instead of writing the buffer directly as the
 // fork did.
 
+import { flattenDropboxSubmissions } from "../utils/dropbox-submissions.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { D2LApiClient, ApiError } from "../api/index.js";
 import { DownloadDropboxSubmissionFileSchema } from "./schemas.js";
@@ -108,7 +109,7 @@ export function registerDownloadDropboxSubmissionFile(
           const raw = await apiClient.get<{ Objects: D2LSubmission[] } | D2LSubmission[]>(
             submissionsPath
           );
-          const allSubmissions: D2LSubmission[] = Array.isArray(raw) ? raw : raw.Objects ?? [];
+          const allSubmissions: D2LSubmission[] = flattenDropboxSubmissions(raw);
 
           const submission = allSubmissions.find((s) => s.Id === submissionId);
           if (!submission) {
@@ -117,9 +118,9 @@ export function registerDownloadDropboxSubmissionFile(
                 "Use get_dropbox_submissions to list available submissions.", "notFound"
             );
           }
-          targetFile = submission.Files.find((f) => f.FileId === fileId) ?? null;
+          targetFile = (submission.Files ?? []).find((f) => f.FileId === fileId) ?? null;
           if (!targetFile) {
-            const available = submission.Files.map((f) => `${f.FileName} (ID: ${f.FileId})`).join(", ");
+            const available = (submission.Files ?? []).map((f) => `${f.FileName} (ID: ${f.FileId})`).join(", ");
             return errorResponse(
               `File ID ${fileId} not found in submission ${submissionId}. Available files: ${available}`, "notFound"
             );

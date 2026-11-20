@@ -4,6 +4,7 @@
  * Licensed under MIT — see LICENSE file for details.
  */
 
+import { flattenDropboxSubmissions } from "../utils/dropbox-submissions.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { D2LApiClient, DEFAULT_CACHE_TTLS } from "../api/index.js";
 import { fetchAllItems, fetchAllObjects } from "../api/paginate.js";
@@ -759,7 +760,7 @@ async function fetchCourseInventory(
         // D2L documents EntityDropbox ({ Feedback, Submissions: [...] }) for this
         // route; older tenants answer with the flat submissions. Accept both.
         embeddedFeedback = entries.find((e) => e.Feedback)?.Feedback ?? null;
-        submissions = entries.flatMap((e) => (Array.isArray(e.Submissions) ? e.Submissions : [e]));
+        submissions = flattenDropboxSubmissions(entries);
       } catch (error: any) {
         if (isAuthUnavailable(error)) throw error;
         // 404 is how D2L reports "nothing submitted yet" - that one is known.

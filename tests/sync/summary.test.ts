@@ -22,3 +22,22 @@ describe("summarizeSync stop reasons", () => {
     expect(text.split("\n").some((line) => line.startsWith("SYSTEM"))).toBe(false);
   });
 });
+
+describe("summarizeSync scope", () => {
+  const tools = ["get_assignments", "download_file", "get_assignment_files", "get_announcement_files", "get_syllabus"];
+
+  it("always says it covers the Content area only and names what it did not look at", () => {
+    for (const result of [base, { ...base, dryRun: true }, { ...base, notAttempted: 0 }]) {
+      const text = summarizeSync(result);
+      expect(text).toMatch(/Content area only, not the whole course/);
+      expect(text).toMatch(/own assignment submissions and instructor feedback/);
+      for (const tool of tools) expect(text).toContain(tool);
+    }
+  });
+
+  it("says non-file Content items are not missing from the Content sync, not from the course", () => {
+    const text = summarizeSync({ ...base, nonFiles: { ...base.nonFiles, link: 2 } });
+    expect(text).toContain("not missing from the Content sync");
+    expect(text).not.toContain("not missing from the sync.");
+  });
+});
