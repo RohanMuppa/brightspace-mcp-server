@@ -35,7 +35,7 @@ jobs:
 
       - run: npm run build
 
-      # A stable version is published under the temporary dist-tag `staged`, and
+      # A stable version is published under the dist-tag `staged`, and
       # `latest` moves to it only once npm serves its tarball: npm reports a new
       # version minutes before the tarball can be downloaded, and in that window
       # `npx brightspace-mcp-server@latest` could not start. `published` is true

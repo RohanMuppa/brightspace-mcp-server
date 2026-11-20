@@ -20,12 +20,12 @@ A PR needs the bump when it changes what ships in the npm package: anything unde
 - A stable version reaches users in three steps:
   1. `npm publish --tag staged`. The version is on npm, but `latest` still points at the previous one, so `npx -y brightspace-mcp-server@latest` keeps serving the previous version.
   2. `.github/scripts/wait-for-npm.sh` polls npm every 20 seconds, up to 15 minutes, until the metadata for the exact version exists and the `dist.tarball` URL in it answers 200.
-  3. `npm dist-tag add brightspace-mcp-server@<version> latest`. The script then reads `dist-tags.latest` back, for up to 5 minutes, until it shows the version, and removes the `staged` tag.
+  3. `npm dist-tag add brightspace-mcp-server@<version> latest`. The script then reads `dist-tags.latest` back, for up to 5 minutes, until it shows the version. `staged` is left where it is.
 - A prerelease (a version containing `-`) is published with `--tag next` and stops there.
 - Once npm is done, the `github-release` job tags that run's commit `v<version>` and creates the GitHub release with generated notes, and the `registry` job publishes `server.json` to the MCP Registry. Both run only when the `publish` job's `published` output is `true`.
 
 To confirm a release:
-- `npm view brightspace-mcp-server dist-tags` shows `latest` on the new version and no `staged`.
+- `npm view brightspace-mcp-server dist-tags` shows `latest` on the new version. `staged` shows it too.
 - The tarball downloads: `curl -sSL -o /dev/null -w '%{http_code}\n' "$(npm view brightspace-mcp-server@<version> dist.tarball)"` prints `200`.
 - `gh release view v<version>` finds the release.
 
@@ -37,18 +37,20 @@ To confirm a release:
 - **`latest` never moves backwards.** The script reads `latest` again after the tarball wait, right before moving it. If a newer version took `latest` in the meantime, it leaves the tag alone and ends with a warning and `published=false`.
 - **A lookup failure stops the job.** An `npm view` failure other than E404 fails the job. It never falls back to `0.0.0`.
 - **`npm view` stdout and stderr are read separately**, so an `npm warn` line cannot corrupt the version that was read.
+- **`staged` always sits on the newest stable version, and means nothing.** Nothing removes it: it moves on the next stable publish. No decision reads it.
 - **Prereleases stay off `latest`.** They never get the `staged` tag or the tarball wait either.
-- **`published` means finished, and is `true` once per release.** It is `true` when this run left the version as `latest` (or published a prerelease), and `false` when it changed nothing. If the script fails, the job fails and the jobs after it are skipped. The `staged` tag is what marks a release as unfinished, which is how a re-run knows whether there is work left:
+- **`published` means finished, and is `true` once per release.** It is `true` when this run left the version as `latest` (or published a prerelease), and `false` when it changed nothing. If the script fails, the job fails and the jobs after it are skipped. The tag `v<version>`, made by the `github-release` job, tells a re-run whether there is work left:
 
-  | npm when the run starts | What the run does | `published` |
+  | npm and the repository when the run starts | What the run does | `published` |
   |---|---|---|
   | version not on npm, newer than `latest` | publish as `staged`, wait, promote | `true` |
   | version on npm, newer than `latest` | wait, promote (no second publish) | `true` |
-  | version is `latest`, `staged` still on it | remove `staged` | `true` |
-  | version is `latest`, no `staged` | nothing: the release is finished | `false` |
+  | version is `latest`, no tag `v<version>` | nothing on npm: lets the later jobs run | `true` |
+  | version is `latest`, tag `v<version>` exists | nothing: the release is finished | `false` |
   | version older than `latest` | nothing | `false` |
 
-- **Only the run for the published commit finishes a release.** The second and third rows apply only when the commit npm recorded for the version (`gitHead`) is the run's commit. A later push that did not change the version prints a warning and changes nothing, so the GitHub release never tags a commit the package was not built from.
+- **The tag lookup is `git ls-remote --tags origin refs/tags/v<version>`.** The job's checkout and `contents: read` are enough for it. If the lookup fails, the job fails: "could not ask" is never read as "no tag". No real run has reached this lookup with a missing tag yet; the first stuck release will.
+- **Only the run for the published commit finishes a release.** The second and third rows apply only when the commit npm recorded for the version (`gitHead`) is the run's commit. Any other run prints a warning and changes nothing, so the GitHub release never tags a commit the package was not built from.
 - **The MCP Registry publish waits for the tarball too.** The `registry` job runs the same `wait-for-npm.sh` before its publish step, so a prerelease, or a re-run of that job alone, cannot reach a publish that would be refused. If npm never serves the tarball the job fails with an error. The job is `continue-on-error`, so that does not fail the workflow.
 
 **Why:** on 2026-11-19 npm reported a new version as `latest` before the version could be downloaded, twice. In that window a fresh `npx brightspace-mcp-server@latest` could not start.
@@ -59,23 +61,28 @@ To confirm a release:
 
 `tests/release/publish-workflow.test.ts` runs the script against a fake registry for each row above and each failure below.
 
+**Why:** the first real run of this flow, 5.2.20 on 2026-11-19, showed what the `NPM_TOKEN` secret may do.
+
+- Publishing as `staged` and `npm dist-tag add ... latest` both worked, and `latest` never pointed at a tarball that could not be downloaded.
+- `npm dist-tag rm brightspace-mcp-server staged` was refused with a 403.
+- The script used to remove `staged` and read "`staged` still on the version" as "release not finished". With the removal refused, that was true after every release. So it no longer removes the tag, and reads the release tag instead.
+
 **Why:** two PRs merged back to back on 2026-11-09 (#413 and #422) ran their publish jobs at the same time. The run for the older commit finished last and left npm's `latest` one version behind what had been published. Serialized publishing and the newer-only rule came from that (#425).
 
 ## A release that is stuck
 
-A stuck release is a failed `publish` job, with `npm view brightspace-mcp-server dist-tags` showing `staged` on the new version and `latest` on the previous one. Users are unaffected: they still get the previous version. There is no GitHub release and no MCP Registry entry for the new version yet. The job's error says which of these happened and prints the command to promote by hand.
+A stuck release is a failed `publish` job, with `npm view brightspace-mcp-server dist-tags` showing `latest` on the previous version and `staged` on the new one. Users are unaffected: they still get the previous version. There is no GitHub release and no MCP Registry entry for the new version yet. The job's error says which of these happened and prints the command to promote by hand.
 
 | The error says | What happened | What to do |
 |---|---|---|
 | npm never served the tarball | 15 minutes passed without a 200 | Re-run the failed job. It skips the publish, waits again and promotes. |
-| npm refused to move `latest` | `npm dist-tag add` failed, most likely because the `NPM_TOKEN` secret may not change dist-tags | Run `npm dist-tag add brightspace-mcp-server@<version> latest` as a maintainer, then re-run the failed job. |
+| npm refused to move `latest` | `npm dist-tag add` failed. The `NPM_TOKEN` secret could do this on 5.2.20, so check whether the token was replaced or narrowed | Run `npm dist-tag add brightspace-mcp-server@<version> latest` as a maintainer, then re-run the failed job. |
+| could not ask the repository whether the tag exists | `git ls-remote` failed, before anything was changed | Re-run the failed job. |
 | npm accepted the move but still reports the old `latest` | npm did not show the new tag within 5 minutes | Check `npm view brightspace-mcp-server dist-tags`, promote by hand if `latest` is still old, then re-run the failed job. |
 
-Re-run the job after promoting by hand: the re-run finds the version as `latest` with `staged` still on it, removes `staged` and reports `published=true`, so the GitHub release and the MCP Registry publish run. Do not remove `staged` by hand before that re-run, or the re-run reads the release as finished and skips both.
+Re-run the job after promoting by hand: the re-run finds the version as `latest` with no tag `v<version>` and reports `published=true`, so the GitHub release and the MCP Registry publish run. Do not create the tag or the release by hand before that re-run, or the re-run reads the release as finished and skips the MCP Registry publish.
 
-If the script cannot remove `staged` after a release, it prints a warning and the release still succeeds. Remove the tag with `npm dist-tag rm brightspace-mcp-server staged`. While it stays, re-running that workflow run repeats the `github-release` job (which skips a release that exists) and the `registry` job (which the MCP Registry refuses for a version it already has, shown as a failed job that does not fail the workflow).
-
-**Not yet verified:** whether the `NPM_TOKEN` secret may change dist-tags. It is an access token, not OIDC trusted publishing, and a granular token with write access to the package normally can, but nothing has moved a tag with it yet. The first stable release after this change is the test. If it fails with "npm refused to move `latest`", promote by hand as above and give the token that permission. Delete this paragraph once a release has promoted itself.
+The `github-release` job is `continue-on-error`. If it fails, the tag is still missing, so re-running that workflow run repeats both later jobs. The `registry` job then asks the MCP Registry for a version it already has and is refused, shown as a failed job that does not fail the workflow.
 
 If a newer version ships before a stuck release is finished, re-running the stuck job changes nothing: `latest` never moves backwards, so the job warns and skips. That version then has no GitHub release and no MCP Registry entry unless someone creates them by hand. Users lose nothing, since the newer version contains it.
 

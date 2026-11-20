@@ -11,8 +11,9 @@
 set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
-# The temporary dist-tag a stable version is published under. While a version
-# carries it, its release is not finished.
+# The dist-tag a stable version is published under before `latest` moves to it.
+# It is never removed (the NPM_TOKEN secret may not delete a dist-tag), so it
+# always sits on the newest stable version and says nothing about a release.
 STAGED_TAG=staged
 VERIFY_ATTEMPTS=${NPM_VERIFY_ATTEMPTS:-15}
 VERIFY_INTERVAL=${NPM_VERIFY_INTERVAL:-20}
@@ -55,25 +56,26 @@ done_with() {
 # A release is finished only by the run for the commit it was built from, so
 # the GitHub release never tags some later commit. npm records that commit as
 # `gitHead`. When npm has none there is nothing to compare, and the run goes on.
+PUBLISHED_FROM=
 built_from_this_commit() {
-  local head
-  head=$(npm_view "$NAME@$CURRENT" gitHead) || exit 1
-  if [ -n "$head" ] && [ -n "${GITHUB_SHA:-}" ] && [ "$head" != "$GITHUB_SHA" ]; then
-    echo "::warning::$NAME@$CURRENT is on npm but its release is not finished, and it was published from commit $head, not this run's $GITHUB_SHA. Nothing was changed. Re-run the publish workflow run of commit $head to finish it."
-    return 1
-  fi
+  PUBLISHED_FROM=$(npm_view "$NAME@$CURRENT" gitHead) || exit 1
+  [ -z "$PUBLISHED_FROM" ] || [ -z "${GITHUB_SHA:-}" ] || [ "$PUBLISHED_FROM" = "$GITHUB_SHA" ]
 }
 
-remove_staged_tag() {
-  local staged
-  staged=$(npm_view "$NAME" "dist-tags.$STAGED_TAG" 2>/dev/null) || staged=unknown
-  # Only our own tag: nothing to do when it is gone or on another version.
-  if [ "$staged" != "$CURRENT" ] && [ "$staged" != "unknown" ]; then
-    return 0
+warn_other_commit() {
+  echo "::warning::$NAME@$CURRENT is on npm but its release is not finished, and it was published from commit $PUBLISHED_FROM, not this run's $GITHUB_SHA. Nothing was changed. Re-run the publish workflow run of commit $PUBLISHED_FROM to finish it."
+}
+
+# Succeeds when the repository has the tag v$CURRENT, which the github-release
+# job creates: the mark of a release whose later jobs have run. A lookup that
+# fails stops the step: "could not ask" must not read as "no tag".
+release_tag_exists() {
+  local found
+  if ! found=$(git ls-remote --tags origin "refs/tags/v$CURRENT"); then
+    echo "::error::Could not ask the repository whether the tag v$CURRENT exists (git ls-remote failed), so this run cannot tell whether the release of $NAME@$CURRENT is finished. Nothing was changed on npm by this check. Re-run this job." >&2
+    exit 1
   fi
-  if ! npm dist-tag rm "$NAME" "$STAGED_TAG"; then
-    echo "::warning::$NAME@$CURRENT is released (\`latest\` points at it), but the temporary dist-tag \`$STAGED_TAG\` could not be removed. Remove it by hand, or a re-run of this workflow run will repeat the GitHub release and MCP Registry jobs: npm dist-tag rm $NAME $STAGED_TAG"
-  fi
+  [ -n "$found" ]
 }
 
 # Waits for the tarball, then moves `latest` to $CURRENT, never backwards.
@@ -104,7 +106,6 @@ promote() {
     seen=$(npm_view "$NAME" dist-tags.latest 2>/dev/null) || seen=
     if [ "$seen" = "$CURRENT" ]; then
       echo "npm reports latest = $CURRENT"
-      remove_staged_tag
       done_with true
     fi
     echo "attempt $i of $VERIFY_ATTEMPTS: npm reports latest = ${seen:-nothing}, expected $CURRENT"
@@ -135,24 +136,26 @@ case "$CURRENT" in
 esac
 
 if [ "$CURRENT" = "$PUBLISHED" ]; then
-  # `latest` is already this version. That is a finished release, unless the
-  # temporary tag is still on it: then `latest` was moved by hand, or an earlier
-  # run stopped right after moving it, and the jobs after this one never ran.
-  STAGED=$(npm_view "$NAME" "dist-tags.$STAGED_TAG") || exit 1
-  if [ "$STAGED" = "$CURRENT" ] && built_from_this_commit; then
-    echo "Version $CURRENT is already \`latest\` but still carries \`$STAGED_TAG\`: finishing its release"
-    remove_staged_tag
+  # `latest` is already this version. That is a finished release once the tag
+  # v$CURRENT exists. Without it, `latest` was moved by hand, or an earlier run
+  # stopped right after moving it, and the jobs after this one never ran.
+  if release_tag_exists; then
+    echo "Version $CURRENT is already npm's latest and tagged v$CURRENT, skipping"
+    done_with false
+  elif built_from_this_commit; then
+    echo "Version $CURRENT is already \`latest\` but has no tag v$CURRENT: finishing its release"
     done_with true
   fi
-  echo "Version $CURRENT is already npm's latest, skipping"
+  warn_other_commit
   done_with false
 fi
 
 # Only a version newer than npm's `latest`: a run for an older commit that
 # finishes late must not publish over, or take `latest` from, a newer release.
 if ! is_newer "$CURRENT" "$PUBLISHED"; then
-  if [ -n "$ALREADY" ] && [ "$(npm_view "$NAME" "dist-tags.$STAGED_TAG" || true)" = "$CURRENT" ]; then
-    echo "::warning::$NAME@$CURRENT was published as \`$STAGED_TAG\` and its release was never finished, and npm's \`latest\` is now $PUBLISHED, which is newer. Nothing was changed. $CURRENT has no GitHub release and no MCP Registry entry; create them by hand if they are wanted (see docs/internals/releasing.md, \"A release that is stuck\")."
+  # Published by this commit's run, never finished, and overtaken since.
+  if [ -n "$ALREADY" ] && built_from_this_commit && [ -n "$PUBLISHED_FROM" ] && ! release_tag_exists; then
+    echo "::warning::$NAME@$CURRENT was published but its release was never finished, and npm's \`latest\` is now $PUBLISHED, which is newer. Nothing was changed. $CURRENT has no GitHub release and no MCP Registry entry; create them by hand if they are wanted (see docs/internals/releasing.md, \"A release that is stuck\")."
   fi
   echo "Version $CURRENT is not newer than npm's $PUBLISHED, skipping"
   done_with false
@@ -160,7 +163,10 @@ fi
 
 if [ -n "$ALREADY" ]; then
   # Published by an earlier run that never got to move `latest`.
-  built_from_this_commit || done_with false
+  if ! built_from_this_commit; then
+    warn_other_commit
+    done_with false
+  fi
   echo "Version $CURRENT is on npm but \`latest\` is still $PUBLISHED: waiting for its tarball, then promoting"
 else
   # Not `latest` yet: npm reports a new version minutes before it serves the tarball.
