@@ -469,7 +469,8 @@ describe("download_file: dropbox submissions", () => {
 
     expect(result.isError).toBeUndefined();
     expect(parse(result).originalFilename).toBe("final.pdf");
-    expect(rawRequested[0]).toContain("/submissions/901/files/22/download");
+    expect(rawRequested[0]).toContain("/submissions/901/files/22");
+    expect(rawRequested[0]).not.toContain("/download");
   });
 
   it("lists every submission's files when the id really is absent", async () => {
@@ -525,7 +526,8 @@ describe("download_file: own submission in the EntityDropbox shape", () => {
     const result = await call({ courseId: COURSE, folderId: 1619079, fileId: 61716234, downloadPath: targetDir });
     expect(result.isError).toBeUndefined();
     expect(parse(result).originalFilename).toBe("report.pdf");
-    expect(rawRequested[0]).toContain("/dropbox/folders/1619079/submissions/777/files/61716234/download");
+    expect(rawRequested[0]).toContain("/dropbox/folders/1619079/submissions/777/files/61716234");
+    expect(rawRequested[0]).not.toContain("/download");
   });
 
   it("finds a file in the second of two nested submissions", async () => {
@@ -534,7 +536,8 @@ describe("download_file: own submission in the EntityDropbox shape", () => {
     });
     const result = await call({ courseId: COURSE, folderId: 5, fileId: 22, downloadPath: targetDir });
     expect(parse(result).originalFilename).toBe("final.pdf");
-    expect(rawRequested[0]).toContain("/submissions/701/files/22/download");
+    expect(rawRequested[0]).toContain("/submissions/701/files/22");
+    expect(rawRequested[0]).not.toContain("/download");
   });
 
   it("says there are no files, not an empty list, when nested submissions carry none", async () => {
@@ -556,7 +559,8 @@ describe("download_file: own submission in the EntityDropbox shape", () => {
     const { call, rawRequested } = setup({ submissions: [inner(900, [file(22, "final.pdf")])] });
     const result = await call({ courseId: COURSE, folderId: 5, fileId: 22, downloadPath: targetDir });
     expect(parse(result).originalFilename).toBe("final.pdf");
-    expect(rawRequested[0]).toContain("/submissions/900/files/22/download");
+    expect(rawRequested[0]).toContain("/submissions/900/files/22");
+    expect(rawRequested[0]).not.toContain("/download");
   });
 
   it("reads a { Objects } wrapper too", async () => {

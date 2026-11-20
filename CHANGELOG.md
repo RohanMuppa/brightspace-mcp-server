@@ -6,6 +6,10 @@ A change that can break something a caller relied on is marked **Changed behavio
 
 Entries up to 5.2.1 were generated from the merged PR titles. Versions before 5.0.0 are in the [GitHub releases](https://github.com/RohanMuppa/brightspace-mcp-server/releases) and the git history.
 
+## 5.2.20 (2026-11-19)
+
+- fix: `download_file` with `folderId` and `fileId`, and `download_dropbox_submission_file`, now request a submission file from the route Brightspace actually serves. They asked for a path ending in `/download`, which Brightspace answers with "not found", so no submission file could be downloaded on any school.
+
 ## 5.2.19 (2026-11-19)
 
 - fix: `download_file` with `folderId` and `fileId` now saves your own submission files on schools where Brightspace nests them one level down, instead of answering "not found" with an empty file list. The same fix applies to `get_dropbox_submissions`, `get_dropbox_user_submissions` and `download_dropbox_submission_file`. When a submission has no files, the answer says so.

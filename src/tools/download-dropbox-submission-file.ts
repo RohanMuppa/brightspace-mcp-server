@@ -143,9 +143,10 @@ export function registerDownloadDropboxSubmissionFile(
           return tooLargeResponse(targetFile.Size);
         }
 
+        // One file of a submission; D2L's route has no "/download" suffix (see download-file.ts).
         const downloadApiPath = apiClient.le(
           courseId,
-          `/dropbox/folders/${folderId}/submissions/${submissionId}/files/${fileId}/download`
+          `/dropbox/folders/${folderId}/submissions/${submissionId}/files/${fileId}`
         );
 
         let response: Response;
