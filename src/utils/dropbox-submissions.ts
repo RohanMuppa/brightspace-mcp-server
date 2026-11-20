@@ -169,10 +169,10 @@ export async function readMyFeedback(
 }
 
 /**
- * The route of one file of one of the student's own submissions (a file stream).
+ * The route of one file of a submission, answered as a file stream.
  * **Why:** D2L documents it without a `/download` suffix, and the suffixed form 404s on a live school (2026-11-19).
  */
-export function mySubmissionFileUrl(
+export function submissionFileUrl(
   apiClient: D2LApiClient,
   courseId: number,
   folderId: number,

@@ -4,7 +4,7 @@
  * Licensed under MIT — see LICENSE file for details.
  */
 
-import { flattenDropboxSubmissions } from "../utils/dropbox-submissions.js";
+import { flattenDropboxSubmissions, submissionFileUrl } from "../utils/dropbox-submissions.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { D2LApiClient, ApiError } from "../api/index.js";
@@ -714,10 +714,7 @@ async function downloadSubmissionFile(
   // GET /d2l/api/le/(version)/(orgUnitId)/dropbox/folders/(folderId)/submissions/(submissionId)/files/(fileId)
   // There is no "/download" suffix: that one is the zip of everything a user submitted
   // (.../submissions/(userId)/download), and with a submission id in its place it answers 404.
-  const downloadApiPath = apiClient.le(
-    courseId,
-    `/dropbox/folders/${folderId}/submissions/${submission.Id}/files/${fileId}`
-  );
+  const downloadApiPath = submissionFileUrl(apiClient, courseId, folderId, submission.Id, fileId);
 
   // Fetch file
   const response = await apiClient.getRaw(downloadApiPath);

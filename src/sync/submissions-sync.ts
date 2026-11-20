@@ -15,7 +15,7 @@ import { toOutputAssessment, type RubricDto } from "../tools/get-assignment-rubr
 import { feedbackText } from "../utils/feedback.js";
 import { log } from "../utils/logger.js";
 import {
-  mySubmissionFileUrl,
+  submissionFileUrl,
   readMyFeedback,
   readMySubmissions,
   type DropboxFeedback,
@@ -259,7 +259,7 @@ export async function syncAssignments(ctx: PhaseContext, options: AssignmentsOpt
             continue;
           }
           for (const file of list.files) {
-            wanted.push({ key: `sub:${submissionId}:${file.fileId}`, ...file, url: mySubmissionFileUrl(apiClient, courseId, folderId!, submissionId, file.fileId) });
+            wanted.push({ key: `sub:${submissionId}:${file.fileId}`, ...file, url: submissionFileUrl(apiClient, courseId, folderId!, submissionId, file.fileId) });
           }
         }
         myFiles = await saveGroup(isGroup ? GROUP_FILES : MY_FILES, wanted, (w) => w.url, () => out.submissionFilesDownloaded++);

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { ApiError } from "../../src/api/errors.js";
-import { flattenDropboxSubmissions, mySubmissionFileUrl, readMyFeedback, readMySubmissions } from "../../src/utils/dropbox-submissions.js";
+import { flattenDropboxSubmissions, submissionFileUrl, readMyFeedback, readMySubmissions } from "../../src/utils/dropbox-submissions.js";
 
 describe("flattenDropboxSubmissions", () => {
   const sub = (Id: number) => ({ Id, Files: [] as unknown[] });
@@ -145,8 +145,8 @@ describe("readMyFeedback", () => {
   });
 });
 
-describe("mySubmissionFileUrl", () => {
+describe("submissionFileUrl", () => {
   it("builds the documented route, with no download suffix", () => {
-    expect(mySubmissionFileUrl(fakeClient({}), 7, 5, 3, 11)).toBe("/le/7/dropbox/folders/5/submissions/3/files/11");
+    expect(submissionFileUrl(fakeClient({}), 7, 5, 3, 11)).toBe("/le/7/dropbox/folders/5/submissions/3/files/11");
   });
 });
