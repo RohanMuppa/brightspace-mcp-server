@@ -62,6 +62,24 @@ interface D2LPost {
 }
 
 /**
+ * A forum or topic description as a reader should see it. D2L's RichText.Text
+ * is only "the plaintext form of the text": it has no link targets, and the
+ * API does not promise it is present or equal to Html. So Html leads (as
+ * markdown, keeping links), and Text is the fallback when Html is missing or
+ * converts to nothing. Shared with search_course so it searches the same text.
+ *
+ * **Why:** #481. Forum descriptions came back without their links, and a
+ * description held only in Html came back empty from the course-wide list.
+ */
+export function richTextDescription(
+  description: { Text?: string | null; Html?: string | null } | null | undefined
+): string | null {
+  if (!description) return null;
+  const markdown = description.Html ? convertHtmlToMarkdown(description.Html).markdown.trim() : "";
+  return markdown || (description.Text ?? null);
+}
+
+/**
  * Fetch a course's discussion forums. Shared with search_course so both
  * tools hit the same endpoint (and cache entry) instead of duplicating it.
  */
@@ -196,7 +214,7 @@ async function getForumsOverview(
     result.push({
       forumId: forum.ForumId,
       name: forum.Name,
-      description: forum.Description?.Text ?? null,
+      description: richTextDescription(forum.Description),
       isLocked: forum.IsLocked,
       isHidden: forum.IsHidden,
       ...(topicsUnavailable ? { topicsUnavailable } : {}),
@@ -204,7 +222,7 @@ async function getForumsOverview(
         topicId: t.TopicId,
         forumId: t.ForumId,
         name: t.Name,
-        description: t.Description?.Text ?? null,
+        description: richTextDescription(t.Description),
         dueDate: t.DueDate,
         isLocked: t.IsLocked,
         isHidden: t.IsHidden,
@@ -278,9 +296,7 @@ async function getForumDetail(
     topicsWithPosts.push({
       topicId: topic.TopicId,
       name: topic.Name,
-      description: topic.Description?.Html
-        ? convertHtmlToMarkdown(topic.Description.Html).markdown
-        : topic.Description?.Text ?? null,
+      description: richTextDescription(topic.Description),
       dueDate: topic.DueDate,
       isLocked: topic.IsLocked,
       mustPostToParticipate: topic.MustPostToParticipate,
@@ -301,7 +317,7 @@ async function getForumDetail(
     forum: {
       forumId: forum.ForumId,
       name: forum.Name,
-      description: forum.Description?.Text ?? null,
+      description: richTextDescription(forum.Description),
       isLocked: forum.IsLocked,
       isHidden: forum.IsHidden,
     },
@@ -404,9 +420,7 @@ function formatTopic(topic: D2LTopic) {
   return {
     topicId: topic.TopicId,
     name: topic.Name,
-    description: topic.Description?.Html
-      ? convertHtmlToMarkdown(topic.Description.Html).markdown
-      : topic.Description?.Text ?? null,
+    description: richTextDescription(topic.Description),
     dueDate: topic.DueDate,
     isLocked: topic.IsLocked,
     mustPostToParticipate: topic.MustPostToParticipate,

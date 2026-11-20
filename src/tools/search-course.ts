@@ -11,7 +11,7 @@ import { toolResponse, sanitizeError, isAuthUnavailable } from "./tool-helpers.j
 import { log } from "../utils/logger.js";
 import { fetchRootContent, buildContentTree, countUnreadableModules } from "./get-course-content.js";
 import { fetchCourseNews, isPublishedNewsItem, mapNewsItem } from "./get-announcements.js";
-import { fetchForums, fetchForumTopics } from "./get-discussions.js";
+import { fetchForums, fetchForumTopics, richTextDescription } from "./get-discussions.js";
 
 export type SearchResultKind = "module" | "topic" | "announcement" | "discussion";
 
@@ -273,7 +273,7 @@ export function registerSearchCourse(
               kind: "discussion",
               id: forum.ForumId,
               title: forum.Name,
-              body: forum.Description?.Text ?? "",
+              body: richTextDescription(forum.Description) ?? "",
             });
 
             try {
@@ -283,7 +283,7 @@ export function registerSearchCourse(
                   kind: "discussion",
                   id: topic.TopicId,
                   title: topic.Name,
-                  body: topic.Description?.Text ?? "",
+                  body: richTextDescription(topic.Description) ?? "",
                   moduleTitle: forum.Name,
                 });
               }

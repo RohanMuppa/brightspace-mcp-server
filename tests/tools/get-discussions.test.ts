@@ -284,3 +284,58 @@ describe("get_discussions sub-lists that couldn't be read (#398)", () => {
     expect((await call({ courseId: COURSE_ID, forumId: FORUM_ID })).isError).toBe(true);
   });
 });
+
+/**
+ * Issue #481: D2L's RichText.Text has no link targets and may be empty while
+ * Html holds the description. Every forum and topic description reads Html
+ * first, so the course-wide list and the single-topic view agree.
+ */
+describe("get_discussions descriptions (#481)", () => {
+  const LINKED = {
+    Text: "",
+    Html: '<p>Read <a href="https://x.test/r">this rubric</a> first.</p>',
+  };
+  const LINKED_FORUM = { ...FORUM, Description: LINKED };
+  const LINKED_TOPIC = { ...TOPIC, Description: LINKED };
+
+  it("keeps a forum description's link in the course-wide list and the forum view", async () => {
+    const { call } = setupWith({
+      [FORUMS_PATH]: () => [LINKED_FORUM],
+      [FORUM_PATH]: () => LINKED_FORUM,
+      [TOPICS_PATH]: () => [TOPIC],
+      [POSTS_PATH]: () => [],
+    });
+
+    const overview = parse(await call({ courseId: COURSE_ID }));
+    expect(overview.forums[0].description).toContain("https://x.test/r");
+
+    const forumView = parse(await call({ courseId: COURSE_ID, forumId: FORUM_ID }));
+    expect(forumView.forum.description).toContain("https://x.test/r");
+  });
+
+  it("returns the same topic description from the course-wide list and the topic view", async () => {
+    const { call } = setupWith({
+      [FORUMS_PATH]: () => [FORUM],
+      [TOPICS_PATH]: () => [LINKED_TOPIC],
+      [TOPIC_PATH]: () => LINKED_TOPIC,
+      [POSTS_PATH]: () => [],
+    });
+
+    const listed = parse(await call({ courseId: COURSE_ID })).forums[0].topics[0].description;
+    const single = parse(await call(TOPIC_ARGS)).topic.description;
+    expect(listed).toContain("https://x.test/r");
+    expect(listed).toBe(single);
+  });
+
+  it("falls back to Text when Html converts to nothing", async () => {
+    const blankHtml = { ...TOPIC, Description: { Text: "See the diagram.", Html: "<p>&nbsp;</p>" } };
+    const { call } = setupWith({
+      [FORUMS_PATH]: () => [FORUM],
+      [TOPICS_PATH]: () => [blankHtml],
+      [TOPIC_PATH]: () => blankHtml,
+      [POSTS_PATH]: () => [],
+    });
+
+    expect(parse(await call(TOPIC_ARGS)).topic.description).toBe("See the diagram.");
+  });
+});
