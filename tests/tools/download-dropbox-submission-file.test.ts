@@ -148,6 +148,8 @@ describe("download_dropbox_submission_file", () => {
     });
     expect((await fs.stat(parsed.filePath)).size).toBe(60 * 1024 * 1024);
     expect(apiClient.getRaw).toHaveBeenCalledTimes(1);
+    // D2L's single-file route: no "/download" suffix (that path answers 404 on a live school).
+    expect(apiClient.getRaw.mock.calls[0][0]).toMatch(/\/submissions\/\d+\/files\/\d+$/);
     // Only the published file is left; the temporary .part file is gone.
     expect(await fs.readdir(targetDir)).toEqual(["Group 4 deck.pdf"]);
   });

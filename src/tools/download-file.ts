@@ -710,11 +710,13 @@ async function downloadSubmissionFile(
     return tooLargeResponse(file.Size, downloadPath);
   }
 
-  // D2L file download URL pattern for submission files
-  // GET /d2l/api/le/(version)/(orgUnitId)/dropbox/folders/(folderId)/submissions/(submissionId)/files/(fileId)/download
+  // D2L's route for one file of a submission, answered as a file stream:
+  // GET /d2l/api/le/(version)/(orgUnitId)/dropbox/folders/(folderId)/submissions/(submissionId)/files/(fileId)
+  // There is no "/download" suffix: that one is the zip of everything a user submitted
+  // (.../submissions/(userId)/download), and with a submission id in its place it answers 404.
   const downloadApiPath = apiClient.le(
     courseId,
-    `/dropbox/folders/${folderId}/submissions/${submission.Id}/files/${fileId}/download`
+    `/dropbox/folders/${folderId}/submissions/${submission.Id}/files/${fileId}`
   );
 
   // Fetch file
