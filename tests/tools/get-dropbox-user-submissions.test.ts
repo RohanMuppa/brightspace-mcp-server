@@ -50,6 +50,17 @@ describe("get_dropbox_user_submissions", () => {
     expect(parsed.submissions[0]).toMatchObject({ submissionId: 9001, comment: "here you go" });
   });
 
+  it("reads submissions nested in EntityDropbox entries", async () => {
+    const { call } = setup((path) => {
+      if (path.endsWith(`/submissions/users/${USER_ID}`)) return [{ Entity: {}, Status: 1, Submissions: [submission()] }];
+      throw notFound();
+    });
+
+    const result = await call({ courseId: COURSE_ID, folderId: FOLDER_ID, userId: USER_ID, ignoreFeedback: true });
+    expect(result.isError).toBeUndefined();
+    expect(body(result).submissions[0]).toMatchObject({ submissionId: 9001, files: [{ fileId: 1, name: "hw1.pdf" }] });
+  });
+
   it("handles an {Objects: []}-wrapped response", async () => {
     const { call } = setup((path) => {
       if (path.endsWith(`/submissions/users/${USER_ID}`)) return { Objects: [submission()] };

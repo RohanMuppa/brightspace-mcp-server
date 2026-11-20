@@ -8,6 +8,7 @@
 // permission handling rewritten to this project's ApiError/sanitizeError
 // conventions and courseId naming.
 
+import { flattenDropboxSubmissions } from "../utils/dropbox-submissions.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { D2LApiClient, ApiError, DEFAULT_CACHE_TTLS } from "../api/index.js";
 import { GetDropboxSubmissionsSchema } from "./schemas.js";
@@ -113,7 +114,7 @@ export function registerGetDropboxSubmissions(
           const allFolders = Array.isArray(foldersRaw) ? foldersRaw : foldersRaw.Objects ?? [];
           folder = allFolders.find((f) => f.Id === folderId) ?? null;
 
-          rawSubmissions = Array.isArray(submissionsRaw) ? submissionsRaw : submissionsRaw.Objects ?? [];
+          rawSubmissions = flattenDropboxSubmissions(submissionsRaw);
         } catch (error) {
           if (error instanceof ApiError && error.status === 403) {
             return errorResponse(
@@ -192,7 +193,7 @@ export function registerGetDropboxSubmissions(
             displayName: sub.SubmittedBy.DisplayName,
             submittedDate: sub.SubmissionDate,
             isLate,
-            files: sub.Files.map((f) => ({
+            files: (sub.Files ?? []).map((f) => ({
               fileId: f.FileId,
               name: f.FileName,
               size: f.Size,

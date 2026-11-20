@@ -4,6 +4,7 @@
  * Licensed under MIT — see LICENSE file for details.
  */
 
+import { flattenDropboxSubmissions } from "../utils/dropbox-submissions.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { D2LApiClient, ApiError } from "../api/index.js";
@@ -639,6 +640,8 @@ async function downloadSubmissionFile(
 
   interface DropboxSubmission {
     Id: number;
+    /** Present when the school answers with EntityDropbox entries; the files are in these. */
+    Submissions?: DropboxSubmission[];
     Files: Array<{
       FileId: number;
       FileName: string;
@@ -646,10 +649,11 @@ async function downloadSubmissionFile(
     }>;
   }
 
-  const submissions =
-    await apiClient.get<DropboxSubmission[]>(submissionsPath);
+  const submissions = flattenDropboxSubmissions(
+    await apiClient.get<DropboxSubmission[] | { Objects: DropboxSubmission[] }>(submissionsPath)
+  );
 
-  if (!submissions || submissions.length === 0) {
+  if (submissions.length === 0) {
     return errorResponse(
       "No submissions found for this assignment. Upload a submission first.", "notFound"
     );
@@ -676,6 +680,11 @@ async function downloadSubmissionFile(
 
   if (!submission || !file) {
     const available = submissions.flatMap((s) => s.Files ?? []);
+    if (available.length === 0) {
+      return errorResponse(
+        `File ID ${fileId} not found: there are no files in the submission(s) for this assignment.`, "notFound"
+      );
+    }
     return errorResponse(
       `File ID ${fileId} not found in submission. Available files: ${available.map((f) => `${f.FileName} (ID: ${f.FileId})`).join(", ")}`, "notFound"
     );
