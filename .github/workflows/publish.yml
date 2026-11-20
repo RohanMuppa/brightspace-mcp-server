@@ -35,80 +35,23 @@ jobs:
 
       - run: npm run build
 
+      # A stable version is published under the temporary dist-tag `staged`, and
+      # `latest` moves to it only once npm serves its tarball: npm reports a new
+      # version minutes before the tarball can be downloaded, and in that window
+      # `npx brightspace-mcp-server@latest` could not start. `published` is true
+      # only once the release is finished on npm, so the jobs below never run for
+      # a version users cannot download. docs/internals/releasing.md has the rules.
       - name: Publish if version changed
         id: publish
-        run: |
-          CURRENT=$(node -p "require('./package.json').version")
-          echo "version=$CURRENT" >> "$GITHUB_OUTPUT"
-          # Prints the version npm has for a spec, nothing when npm answers E404
-          # (never published), and fails on any other error: a registry hiccup
-          # must not read as "never published".
-          npm_version() {
-            local out err
-            err=$(mktemp)
-            # stdout and stderr apart: an `npm warn` line must not end up in the version.
-            if out=$(npm view "$1" version 2>"$err"); then
-              rm -f "$err"
-              printf '%s' "$out"
-            elif grep -q "E404" "$err"; then
-              rm -f "$err"
-            else
-              echo "::error::npm view $1 failed: $(cat "$err")" >&2
-              rm -f "$err"
-              return 1
-            fi
-          }
-          PUBLISHED=$(npm_version brightspace-mcp-server) || exit 1
-          ALREADY=$(npm_version "brightspace-mcp-server@$CURRENT") || exit 1
-          PUBLISHED=${PUBLISHED:-0.0.0}
-          # Only a version newer (full semver precedence) than npm's: a run for an
-          # older commit that finishes late must not publish over a newer release.
-          IS_NEWER=$(node -e '
-            const parse = (v) => {
-              const [core, pre] = v.split("+")[0].split(/-(.+)/);
-              return { n: core.split(".").map(Number), pre: pre ? pre.split(".") : [] };
-            };
-            const part = (x, y) => {
-              const xn = /^\d+$/.test(x), yn = /^\d+$/.test(y);
-              if (xn && yn) return Math.sign(Number(x) - Number(y));
-              if (xn) return -1;
-              if (yn) return 1;
-              return x < y ? -1 : x > y ? 1 : 0;
-            };
-            const compare = (a, b) => {
-              for (let i = 0; i < 3; i++) if (a.n[i] !== b.n[i]) return a.n[i] > b.n[i] ? 1 : -1;
-              if (!a.pre.length || !b.pre.length) return a.pre.length === b.pre.length ? 0 : a.pre.length ? -1 : 1;
-              for (let i = 0; i < Math.max(a.pre.length, b.pre.length); i++) {
-                if (i >= a.pre.length) return -1;
-                if (i >= b.pre.length) return 1;
-                const c = part(a.pre[i], b.pre[i]);
-                if (c) return c;
-              }
-              return 0;
-            };
-            console.log(compare(parse(process.argv[1]), parse(process.argv[2])) > 0);
-          ' "$CURRENT" "$PUBLISHED")
-          # A prerelease never becomes `latest`.
-          TAG=latest
-          case "$CURRENT" in *-*) TAG=next ;; esac
-          if [ -n "$ALREADY" ]; then
-            echo "Version $CURRENT is already on npm, skipping"
-            echo "published=false" >> "$GITHUB_OUTPUT"
-          elif [ "$IS_NEWER" = "true" ]; then
-            npm publish --provenance --access public --tag "$TAG"
-            echo "Published v$CURRENT as $TAG"
-            echo "published=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "Version $CURRENT is not newer than npm's $PUBLISHED, skipping"
-            echo "published=false" >> "$GITHUB_OUTPUT"
-          fi
+        run: bash .github/scripts/npm-release.sh
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   # Tags the commit npm just published and creates its GitHub release, so the
   # repo's releases and "Latest" follow npm instead of being made by hand.
-  # Runs only after an actual npm publish, from that run's commit, and never
-  # blocks it. A release that already exists (a re-run) is left alone.
+  # Runs only once the version is published and, when stable, promoted to
+  # `latest`, from that run's commit, and never blocks it. A release that
+  # already exists (a re-run) is left alone.
   github-release:
     needs: publish
     if: needs.publish.outputs.published == 'true'
@@ -170,31 +113,17 @@ jobs:
 
       # The registry's ownership check downloads the package, and npm can serve the version's
       # metadata minutes before its tarball (5.2.14: gave up after 2 minutes and the publish got a
-      # 400; 5.2.16: the tarball URL answered 404 for about 5 minutes). So wait for both, and fail
-      # this job, rather than go on to a publish that will be refused, if npm never serves it.
+      # 400; 5.2.16: the tarball URL answered 404 for about 5 minutes). The publish job has already
+      # waited for both before moving `latest`; this checks again from this job, so that no path
+      # (a prerelease, a re-run of this job alone) reaches a publish that will be refused.
       - name: Wait for the npm registry to serve the new version
         run: |
           NAME=$(jq -r '.name' package.json)
           VERSION=$(jq -r '.version' package.json)
-          URL="https://registry.npmjs.org/${NAME}/${VERSION}"
-          ATTEMPTS=45
-          INTERVAL=20
-          for i in $(seq 1 "$ATTEMPTS"); do
-            TARBALL=$(curl -sS --max-time 30 "$URL" 2>/dev/null | jq -r '.dist.tarball // empty' 2>/dev/null || true)
-            if [ -z "$TARBALL" ]; then
-              echo "attempt $i of $ATTEMPTS: npm has no metadata for $NAME@$VERSION yet"
-            else
-              CODE=$(curl -sSL --max-time 120 -o /dev/null -w '%{http_code}' "$TARBALL" 2>/dev/null || true)
-              if [ "$CODE" = "200" ]; then
-                echo "npm serves $NAME@$VERSION and its tarball ($TARBALL)"
-                exit 0
-              fi
-              echo "attempt $i of $ATTEMPTS: metadata is there but the tarball answered ${CODE:-no response}"
-            fi
-            sleep "$INTERVAL"
-          done
-          echo "::error::npm did not serve both the metadata and the tarball of $NAME@$VERSION within 15 minutes, so the MCP Registry publish was not attempted (it would be refused). Re-run this job once npm serves the tarball."
-          exit 1
+          if ! bash .github/scripts/wait-for-npm.sh "$NAME" "$VERSION"; then
+            echo "::error::npm did not serve both the metadata and the tarball of $NAME@$VERSION within 15 minutes, so the MCP Registry publish was not attempted (it would be refused). Re-run this job once npm serves the tarball."
+            exit 1
+          fi
 
       - name: Install mcp-publisher
         run: |
