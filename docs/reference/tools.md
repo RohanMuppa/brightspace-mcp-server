@@ -409,6 +409,7 @@ Tools are registered in `src/tools/index.ts`, and their input schemas are in `sr
   - `includeAssignmentFiles` (default `false`). Also saves the instructor's attachments on each assignment.
   - `includeAnnouncementFiles` (default `false`). Also saves the files attached to published announcements.
   - `everything` (default `false`). Turns on the three options above. The tool description tells an agent to use it when the user asks for the whole course. The syllabus is not part of it: `get_syllabus` can say "no file" for a syllabus that lives in an external tool, so a saved copy could not be told from "none".
+  - `dryRun` and the four options above also accept the text `"true"` or `"false"` (any case), for a client that cached an older tool list and sends them as text. Any other text is refused. The advertised schema stays boolean.
 - With any of the three options on, the same call also runs an assignments phase and an announcements phase after the Content files. They cover the whole course even when `moduleId` is given. With all of them off, nothing about the call or its text changes.
 - Limits and stops in the extra phases:
   - `maxFiles`, `maxTotalMB`, `maxMinutes`, `existing`, `dryRun` and cancel apply to the extra files together with the Content files. There is one count for the whole call.

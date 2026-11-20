@@ -96,6 +96,21 @@ export const DownloadFileSchema = z.object({
     .describe("Custom filename for the downloaded file (include extension). If not provided, uses the original filename from Brightspace."),
 });
 
+/**
+ * A boolean that also accepts the strings "true" and "false" (any case, trimmed). A client that cached an
+ * older tool list has no schema for a newer argument and may send it as text. Any other string is still
+ * refused; z.coerce.boolean() would turn "false" into true. The advertised JSON schema stays `boolean`.
+ */
+export const looseBoolean = () =>
+  z
+    .preprocess((value) => {
+      if (typeof value !== "string") return value;
+      const text = value.trim().toLowerCase();
+      return text === "true" ? true : text === "false" ? false : value;
+    }, z.boolean({ error: "Expected true or false" }))
+    .default(false)
+    .meta({ type: "boolean" });
+
 export const DownloadCourseFilesSchema = z.object({
   courseId: z.coerce.number().int().positive()
     .describe("Course ID to download every file from."),
@@ -105,7 +120,7 @@ export const DownloadCourseFilesSchema = z.object({
     .describe("What to do with a file that is already on disk. skip (default): leave it alone, so running this again only fetches what is new and never overwrites the user's annotated copies. replace: download it again over the old one. keep_both: save the new copy as 'name (1).ext' beside it, unless a copy of the same size is already there."),
   moduleId: z.coerce.number().int().positive().optional()
     .describe("Only download this module and the modules inside it (a module id from get_course_content). Omit to download the whole course."),
-  dryRun: z.boolean().default(false)
+  dryRun: looseBoolean()
     .describe("List the files that would be downloaded without downloading anything or creating any folder. Use it first on a large course."),
   maxFiles: z.coerce.number().int().min(1).max(5000).default(300)
     .describe("Most files to download in one call (default 300). Files already on disk do not count. The rest are reported as not attempted: call again to continue, since existing files are skipped."),
@@ -113,13 +128,13 @@ export const DownloadCourseFilesSchema = z.object({
     .describe("Wall-clock limit for this call in minutes (default 8). When it passes, the call stops cleanly and reports the rest as not attempted; call it again to continue, since files already on disk are skipped. Raise it only if the client allows long tool calls."),
   maxTotalMB: z.coerce.number().int().min(1).max(1048576).default(5120)
     .describe("Most megabytes to download in one call (default 5120, i.e. 5 GB). The rest is reported as not attempted; call again to continue."),
-  includeSubmissions: z.boolean().default(false)
+  includeSubmissions: looseBoolean()
     .describe("Also save the student's own submitted files, a feedback.md per assignment (score, instructor comments, rubric) and the feedback attachments Brightspace lists, under Assignments/<assignment>/. Off by default."),
-  includeAssignmentFiles: z.boolean().default(false)
+  includeAssignmentFiles: looseBoolean()
     .describe("Also save the instructor's attachments on each assignment, under Assignments/<assignment>/assignment files/. Off by default."),
-  includeAnnouncementFiles: z.boolean().default(false)
+  includeAnnouncementFiles: looseBoolean()
     .describe("Also save the files attached to announcements, under Announcements/<date title>/. Off by default."),
-  everything: z.boolean().default(false)
+  everything: looseBoolean()
     .describe("Shorthand that turns on includeSubmissions, includeAssignmentFiles and includeAnnouncementFiles. Use it when the user asks for the whole course or for everything. The syllabus is not included."),
 });
 
