@@ -28,6 +28,8 @@ export interface FeedbackDocInput {
   submissions: Known<{ items: Array<{ date: string; by: string | null }> }>;
   /** Saved submission files, relative to the assignment's folder. Meaningful when the submissions are known. */
   files: string[];
+  /** Files that should be saved but were not (refused, over a cap, stopped): the list above is then not all of them. */
+  filesNotSaved?: number;
   feedback: Known<{ score: number | null; text: string | null; rubrics: RubricDoc[]; released?: boolean }>;
   feedbackFiles: string[] | { known: false; reason: string };
 }
@@ -95,6 +97,7 @@ export function renderFeedbackMarkdown(doc: FeedbackDocInput): string {
       lines.push(`- Submitted: ${inline(latest.date)}${latest.by ? ` by ${quote(latest.by)}` : ""}${items.length > 1 ? ` (${items.length} submissions)` : ""}`);
     }
     lines.push(`- Files: ${doc.files.length === 0 ? "none" : doc.files.map(quote).join(", ")}`);
+    if (doc.filesNotSaved) lines.push(`- Files not saved: ${doc.filesNotSaved}`);
   }
 
   lines.push("", "## Feedback");

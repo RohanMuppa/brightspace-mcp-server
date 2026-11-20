@@ -184,6 +184,15 @@ export class SyncManifest {
     return this.extras[String(courseId)]?.assignments[String(folderId)];
   }
 
+  /** Every assignment record kept for a course, by folder id. */
+  assignmentRecords(courseId: number): Array<[number, AssignmentRecord]> {
+    return Object.entries(this.extras[String(courseId)]?.assignments ?? {}).map(([id, record]) => [Number(id), record]);
+  }
+
+  announcementRecords(courseId: number): Array<[number, AnnouncementRecord]> {
+    return Object.entries(this.extras[String(courseId)]?.announcements ?? {}).map(([id, record]) => [Number(id), record]);
+  }
+
   findAnnouncement(courseId: number, newsId: number): AnnouncementRecord | undefined {
     return this.extras[String(courseId)]?.announcements[String(newsId)];
   }

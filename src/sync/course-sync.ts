@@ -887,6 +887,11 @@ async function runSync(
         saveFile: async (spec) => {
           total++;
           done++;
+          if (!result.stopped && stop.signal.aborted) stopWith(abortedReason());
+          if (result.stopped) {
+            result.notAttempted++;
+            return { status: "notAttempted", rel: [...spec.segments, spec.name].join("/") };
+          }
           return saveOne(spec);
         },
         saveText,
