@@ -14,6 +14,7 @@ import path from "node:path";
 import { ApiError, NetworkError, RateLimitError } from "../api/errors.js";
 import type { D2LApiClient } from "../api/index.js";
 import { writeFileAtomic } from "../utils/atomic-write.js";
+import { localTimezone } from "../utils/timezone.js";
 import { openContentTopic, parseContentDispositionFilename } from "../tools/download-file.js";
 import { isAuthUnavailable, sanitizeError } from "../tools/tool-helpers.js";
 import { DownloadError } from "../utils/download-errors.js";
@@ -82,6 +83,8 @@ export interface SyncOptions {
   retryDelaysMs?: number[];
   /** Replaced in tests so backoff costs no time. */
   sleep?: (ms: number) => Promise<void>;
+  /** IANA zone the dates in feedback.md are shown in. Default: the machine's (the one get_server_info reports). */
+  timeZone?: string;
   /** Longest full path kept, shortening names to fit. Default 250 on Windows, unlimited elsewhere. */
   pathBudget?: number;
   onProgress?: (event: SyncProgress) => void;
@@ -898,10 +901,22 @@ async function runSync(
      * free. Content keeps every name it has; a Content module called "Assignments" is never renamed, so the
      * assignments go to "Assignments (2)". The choice is recorded, so it is the same on every later run.
      */
-    const extraRoots = (): { assignments: string; announcements: string } => {
+    const extraRoots = async (): Promise<{ assignments: string; announcements: string }> => {
       const taken = new Set<string>();
       for (const file of plan.files) taken.add(foldKey(file.segments[0] ?? file.name));
       for (const [, entry] of manifest.entries(courseId)) taken.add(foldKey(entry.path.split("/")[0]));
+      // A root chosen for the first time also avoids whatever is already in the destination, a file, folder or link,
+      // judged the way names are compared everywhere else (case and Unicode folded), on every platform: a folder
+      // synced on Linux may be opened on macOS or Windows later, where "assignments" and "Assignments" are one folder.
+      // A recorded root is reused as it is. A destination that cannot be listed (or is not there yet) adds nothing:
+      // the Content path reports a destination it cannot use.
+      if (manifest.extrasRoot(courseId, "assignments") === undefined || manifest.extrasRoot(courseId, "announcements") === undefined) {
+        try {
+          for (const entry of await fs.readdir(root)) taken.add(foldKey(entry));
+        } catch {
+          // Nothing to avoid that can be seen.
+        }
+      }
       const pick = (base: string, kind: "assignments" | "announcements"): string => {
         const recorded = manifest.extrasRoot(courseId, kind);
         if (recorded !== undefined) return recorded;
@@ -914,7 +929,7 @@ async function runSync(
     };
 
     if (extras.assignments || extras.announcements) {
-      const roots = extraRoots();
+      const roots = await extraRoots();
       if (!dryRun) {
         if (extras.assignments && manifest.extrasRoot(courseId, "assignments") === undefined) manifest.setExtrasRoot(courseId, "assignments", roots.assignments);
         if (extras.announcements && manifest.extrasRoot(courseId, "announcements") === undefined) manifest.setExtrasRoot(courseId, "announcements", roots.announcements);
@@ -941,6 +956,7 @@ async function runSync(
         budget,
         rootLength: root.length,
         roots,
+        timeZone: options.timeZone ?? localTimezone(),
         handleStop: (error) => {
           if (stop.signal.aborted) {
             stopWith(abortedReason());
