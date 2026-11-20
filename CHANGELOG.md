@@ -6,6 +6,10 @@ A change that can break something a caller relied on is marked **Changed behavio
 
 Entries up to 5.2.1 were generated from the merged PR titles. Versions before 5.0.0 are in the [GitHub releases](https://github.com/RohanMuppa/brightspace-mcp-server/releases) and the git history.
 
+## 5.2.25 (2026-11-20)
+
+- fix: `get_rubrics_for_object` now lists the criteria, levels, points and descriptions of rubrics Brightspace sends in its documented grouped shape, instead of returning them with no criteria. A rubric that arrives without criteria is marked `criteriaUnavailable: true` with a notice, so it no longer reads as empty (#459).
+
 ## 5.2.24 (2026-11-19)
 
 - fix: the whole-course pull no longer saves assignments or announcements into a folder you already had. If your destination has a file or folder called `assignments` or `announcements` (any capitalisation), the extras go in `Assignments (2)` or `Announcements (2)` instead.
