@@ -6,6 +6,10 @@ A change that can break something a caller relied on is marked **Changed behavio
 
 Entries up to 5.2.1 were generated from the merged PR titles. Versions before 5.0.0 are in the [GitHub releases](https://github.com/RohanMuppa/brightspace-mcp-server/releases) and the git history.
 
+## 5.3.1 (2026-11-20)
+
+- chore: dependency updates: Playwright 1.65.1 (the browser used for sign-in), dotenv 18.0.10, sanitize-filename 1.6.5 and turndown 7.2.5. Nothing should look different.
+
 ## 5.3.0 (2026-11-20)
 
 - feat: on macOS, the sign-in approval number now also shows as a system notification, so a sign-in nobody is watching does not go stale. `D2L_NOTIFY=0` turns every notification off.
