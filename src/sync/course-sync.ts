@@ -8,10 +8,12 @@
  * `download_course_files` tool and the `sync` command.
  */
 
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { ApiError, NetworkError, RateLimitError } from "../api/errors.js";
 import type { D2LApiClient } from "../api/index.js";
+import { writeFileAtomic } from "../utils/atomic-write.js";
 import { openContentTopic, parseContentDispositionFilename } from "../tools/download-file.js";
 import { isAuthUnavailable, sanitizeError } from "../tools/tool-helpers.js";
 import { DownloadError } from "../utils/download-errors.js";
@@ -23,6 +25,9 @@ import { SyncInputError } from "./errors.js";
 import { removeStalePartials } from "./cleanup.js";
 import { acquireSyncLock } from "./lock.js";
 import { SyncManifest, unchangedSinceSync, type ManifestEntry } from "./manifest.js";
+import type { PhaseContext, SaveOutcome, SaveSpec, TextSpec, TextStatus } from "./extras-types.js";
+import { syncAssignments, type AssignmentsOutcome } from "./submissions-sync.js";
+import { syncAnnouncements, type AnnouncementsOutcome } from "./announcements-sync.js";
 import { recordSyncRoot } from "./saved-topics.js";
 import { NameSet, fileNameFromTopic, sanitizeComponent, splitExtension } from "./names.js";
 
@@ -57,6 +62,12 @@ export interface SyncOptions {
   existing?: ExistingMode;
   /** Sync only this module and the modules inside it. */
   moduleId?: number;
+  /** Also save the student's own submitted files, a feedback.md per assignment and the feedback attachments. */
+  includeSubmissions?: boolean;
+  /** Also save the instructor's attachments on each assignment. */
+  includeAssignmentFiles?: boolean;
+  /** Also save announcement attachments. */
+  includeAnnouncementFiles?: boolean;
   /** List what would be downloaded; download nothing and create no folders. */
   dryRun?: boolean;
   /** Most files to download in one run. Default 300. */
@@ -120,6 +131,12 @@ export interface SyncResult {
   authError?: string;
   /** The table of contents was larger than the sync reads; the rest of it was ignored. */
   tocTruncated?: boolean;
+  /** Set only when an extra phase was asked for: which ones ran, so the summary lists only what is still not covered. */
+  included?: { submissions: boolean; assignmentFiles: boolean; announcementFiles: boolean };
+  /** Set only when assignments were asked for: what the assignments phase saw and saved. */
+  assignments?: AssignmentsOutcome;
+  /** Set only when announcement files were asked for. */
+  announcements?: AnnouncementsOutcome;
   /** Topics the table of contents lists: the files in the plan plus every counter in `nonFiles` (except `unavailable`, which is a subset of the files). */
   tocTopicCount?: number;
 }
@@ -182,7 +199,7 @@ const typePart = (value: unknown, max: number): string =>
   typeof value === "string" || typeof value === "number" ? String(value).replace(/[^\w.\- ]/g, "_").slice(0, max) : "";
 
 /** The table of contents as folders and files, every name made safe and unique, each within its record's cap in `caps`. */
-export function planFiles(toc: unknown, moduleId: number | undefined, caps: NameCaps): Plan {
+export function planFiles(toc: unknown, moduleId: number | undefined, caps: NameCaps, reserved: readonly string[] = []): Plan {
   const capOf = (source: object): number => caps.get(source) ?? FULL_NAME_CHARS;
   const files: PlannedFile[] = [];
   const nonFiles: NonFileCounts = { link: 0, media: 0, broken: 0, other: 0, unavailable: 0 };
@@ -239,6 +256,8 @@ export function planFiles(toc: unknown, moduleId: number | undefined, caps: Name
 
   const walk = (container: Record<string, unknown>, segments: string[], sources: object[], depth: number): void => {
     const names = new NameSet(FULL_NAME_CHARS);
+    // Top-level folders the extra phases own: a Content module with the same name becomes "Assignments (2)".
+    if (depth === 0) for (const name of reserved) names.add(name, true);
     const children: Array<{ module: Record<string, unknown>; segments: string[] }> = [];
     if (container.Modules !== undefined && container.Modules !== null && !Array.isArray(container.Modules)) unreadEntries++;
     if (Array.isArray(container.Modules)) {
@@ -285,9 +304,9 @@ export function planFiles(toc: unknown, moduleId: number | undefined, caps: Name
  * a path that already fits keeps its full names, however long another path
  * in the course is.
  */
-function planWithinBudget(toc: unknown, moduleId: number | undefined, rootLength: number, budget: number): Plan {
+function planWithinBudget(toc: unknown, moduleId: number | undefined, rootLength: number, budget: number, reserved: readonly string[]): Plan {
   const caps = new Map<object, number>();
-  let plan = planFiles(toc, moduleId, caps);
+  let plan = planFiles(toc, moduleId, caps, reserved);
   for (let round = 0; round < 6 && Number.isFinite(budget); round++) {
     let shortened = false;
     for (const file of plan.files) {
@@ -305,7 +324,7 @@ function planWithinBudget(toc: unknown, moduleId: number | undefined, rootLength
       }
     }
     if (!shortened) break;
-    plan = planFiles(toc, moduleId, caps);
+    plan = planFiles(toc, moduleId, caps, reserved);
   }
   return plan;
 }
@@ -562,13 +581,27 @@ async function runSync(
       result.authError = textOf(error);
       return result;
     }
-    const plan = planWithinBudget(toc, moduleId, root.length, budget);
+    const extras = {
+      assignments: options.includeSubmissions === true || options.includeAssignmentFiles === true
+        ? { submissions: options.includeSubmissions === true, assignmentFiles: options.includeAssignmentFiles === true }
+        : undefined,
+      announcements: options.includeAnnouncementFiles === true,
+    };
+    if (extras.assignments || extras.announcements) {
+      result.included = {
+        submissions: options.includeSubmissions === true,
+        assignmentFiles: options.includeAssignmentFiles === true,
+        announcementFiles: options.includeAnnouncementFiles === true,
+      };
+    }
+    const reserved = [...(extras.assignments ? ["Assignments"] : []), ...(extras.announcements ? ["Announcements"] : [])];
+    const plan = planWithinBudget(toc, moduleId, root.length, budget, reserved);
     result.nonFiles = plan.nonFiles;
     if (plan.truncated) result.tocTruncated = true;
     result.tocTopicCount = plan.topicsSeen;
     const manifest = await SyncManifest.load(root);
 
-    const total = plan.files.length;
+    let total = plan.files.length;
     let done = 0;
     const emit = (event: Omit<SyncProgress, "done" | "total">): void => onProgress?.({ ...event, done, total });
     const fail = (rel: string, error: string): void => {
@@ -584,17 +617,15 @@ async function runSync(
     let totalBytes = 0;
     let unsaved = 0;
     let lastSaved = Date.now();
-    try {
-    for (const file of plan.files) {
-      done++;
-      if (!result.stopped && stop.signal.aborted) stopWith(abortedReason());
-      if (result.stopped) {
-        result.notAttempted++;
-        continue;
-      }
 
-      let segments = file.segments;
-      let name = file.name;
+    /**
+     * One file, from the plan to the disk: the checks and the caps are the same
+     * for a Content topic and for an assignment or announcement file, so there is
+     * one copy of them. `done`, `attempted` and `totalBytes` are the run's, shared.
+     */
+    const saveOne = async (spec: SaveSpec): Promise<SaveOutcome> => {
+      let segments = spec.segments;
+      let name = spec.name;
       let dir: string | null = null;
       let present = false;
       let owned = false;
@@ -602,8 +633,8 @@ async function runSync(
       let untouched = false;
       let ownedEntry: ManifestEntry | undefined;
       try {
-        // A file this sync wrote is found by its topic, wherever it ended up and whatever it was named.
-        const entry = manifest.get(courseId, file.topicId);
+        // A file this sync wrote is found again wherever it ended up and whatever it was named.
+        const entry = spec.prior;
         if (entry) {
           const parts = entry.path.split("/");
           const entryName = parts.pop()!;
@@ -622,13 +653,13 @@ async function runSync(
           dir = await locateFolder(root, segments, false);
           const found = dir === null ? null : await lstatOrNull(path.join(dir, name));
           if (found?.isDirectory()) {
-            fail([...segments, name].join("/"), "A folder with this name is in the way");
-            continue;
+            const blocked = [...segments, name].join("/");
+            fail(blocked, "A folder with this name is in the way");
+            return { status: "failed", rel: blocked };
           }
           if (found) {
-            const owner = manifest.ownerOf(courseId, [...segments, name].join("/"));
-            if (owner !== undefined && owner !== file.topicId) {
-              // The planned name is another topic's file (a topic added ahead of it shifted the numbering).
+            if (spec.ownedByOther?.([...segments, name].join("/"))) {
+              // The planned name is another file's (something added ahead of it shifted the numbering).
               name = await freeNumberedName(dir!, name, 2);
             } else {
               present = true;
@@ -636,24 +667,25 @@ async function runSync(
           }
         }
       } catch (error) {
-        fail([...segments, name].join("/"), error instanceof RefusedFolder ? error.message : "Could not open the destination folder");
-        continue;
+        const bad = [...segments, name].join("/");
+        fail(bad, error instanceof RefusedFolder ? error.message : "Could not open the destination folder");
+        return { status: "failed", rel: bad };
       }
 
       const rel = [...segments, name].join("/");
       if (Number.isFinite(budget) && root.length + 1 + rel.length > budget) {
         fail(rel, `The path is too long (over ${budget} characters)`);
-        continue;
+        return { status: "failed", rel };
       }
       // Present and not (or no longer) exactly what this sync wrote: the user's own file, edited or not ours.
       if (present && (existing === "skip" || (existing === "replace" && !untouched))) {
         result.skippedExisting++;
         emit({ type: "skipped", path: rel });
-        continue;
+        return { status: "skipped", rel };
       }
       if (attempted >= maxFiles) {
         result.notAttempted++;
-        continue;
+        return { status: "notAttempted", rel };
       }
 
       // keep_both saves beside the existing file; replace overwrites only what this sync wrote.
@@ -663,12 +695,12 @@ async function runSync(
         const plannedPath = [...segments, saveAs].join("/");
         result.planned!.push(plannedPath);
         emit({ type: "planned", path: plannedPath });
-        continue;
+        return { status: "planned", rel: plannedPath };
       }
 
       try {
         const outcome = await withBackoff(
-          () => downloadOne(apiClient, courseId, file.topicId, {
+          () => downloadOne(spec.open, {
             root, dir, segments, name, saveAs,
             replace: present && untouched && existing === "replace",
             replaceEntry: ownedEntry,
@@ -686,7 +718,7 @@ async function runSync(
           totalBytes += outcome.bytes;
           // The file as left on disk, so a later edit by the user is noticed.
           const written = await fs.stat(path.join(root, ...segments, outcome.savedName));
-          manifest.set(courseId, file.topicId, { path: saved, bytes: outcome.bytes, size: written.size, mtimeMs: written.mtimeMs });
+          spec.onSaved({ path: saved, bytes: outcome.bytes, size: written.size, mtimeMs: written.mtimeMs });
           // Written in batches (every 25 files or 2 s) and always when the run ends, however it ends.
           unsaved++;
           if (unsaved >= MANIFEST_BATCH_FILES || Date.now() - lastSaved >= MANIFEST_BATCH_MS) {
@@ -696,36 +728,189 @@ async function runSync(
           }
           emit({ type: "downloaded", path: saved, bytes: outcome.bytes });
           if (totalBytes >= maxTotalBytes) stopWith("max_total_bytes");
+          return { status: "saved", rel: saved };
         } else if (outcome.kind === "duplicate") {
           result.skippedExisting++;
           emit({ type: "skipped", path: rel });
+          return { status: "duplicate", rel };
         } else if (outcome.kind === "empty") {
           result.emptyOnBrightspace++;
           emit({ type: "empty", path: rel });
+          return { status: "empty", rel };
         } else if (outcome.kind === "overBudget") {
           stopWith("max_total_bytes");
           result.notAttempted++;
-        } else {
-          result.nonFiles.unavailable++;
-          emit({ type: "unavailable", path: rel });
+          return { status: "notAttempted", rel };
         }
+        result.nonFiles.unavailable++;
+        emit({ type: "unavailable", path: rel });
+        return { status: "unavailable", rel };
       } catch (error) {
         if (stop.signal.aborted) {
           stopWith(abortedReason());
           result.notAttempted++;
+          return { status: "notAttempted", rel };
         } else if (isAuthUnavailable(error)) {
           stopWith("auth");
           result.authError = textOf(error);
           result.notAttempted++;
+          return { status: "notAttempted", rel };
         } else if (error instanceof DownloadError && error.kind === "empty") {
           result.emptyOnBrightspace++;
           emit({ type: "empty", path: rel });
+          return { status: "empty", rel };
         } else if (error instanceof RefusedFolder) {
           fail(rel, error.message);
         } else {
           log("WARN", `Course sync: ${rel} failed`, error);
           fail(rel, describeFailure(error));
         }
+        return { status: "failed", rel };
+      }
+    };
+
+    /** A small text file the sync renders itself (feedback.md): written when new, refreshed when the render changed and the file is still as written. */
+    const saveText = async (spec: TextSpec): Promise<{ status: TextStatus; rel: string }> => {
+      const hash = createHash("sha256").update(spec.content).digest("hex");
+      let segments = spec.segments;
+      let name = spec.name;
+      let dir: string | null = null;
+      let owned = false;
+      let ownedStat: { size: number; mtimeMs: number } | undefined;
+      try {
+        const prior = spec.prior;
+        if (prior) {
+          const parts = prior.path.split("/");
+          const priorName = parts.pop()!;
+          const priorDir = await locateFolder(root, parts, false);
+          const onDisk = priorDir ? await lstatOrNull(path.join(priorDir, priorName)) : null;
+          if (priorDir && onDisk?.isFile()) {
+            segments = parts;
+            name = priorName;
+            dir = priorDir;
+            owned = true;
+            ownedStat = onDisk;
+          }
+        }
+        if (!owned) {
+          dir = await locateFolder(root, segments, false);
+          const found = dir === null ? null : await lstatOrNull(path.join(dir, name));
+          if (found?.isDirectory()) {
+            const blocked = [...segments, name].join("/");
+            fail(blocked, "A folder with this name is in the way");
+            return { status: "failed", rel: blocked };
+          }
+          if (found) {
+            // Not written by this sync (the student's own, or a manifest an older server rewrote): left alone.
+            const own = [...segments, name].join("/");
+            result.skippedExisting++;
+            emit({ type: "skipped", path: own });
+            return { status: "skipped", rel: own };
+          }
+        }
+      } catch (error) {
+        const bad = [...segments, name].join("/");
+        fail(bad, error instanceof RefusedFolder ? error.message : "Could not open the destination folder");
+        return { status: "failed", rel: bad };
+      }
+
+      const rel = [...segments, name].join("/");
+      let saveAs = name;
+      if (owned) {
+        if (spec.prior!.hash === hash) return { status: "unchanged", rel };
+        // The student edited it since the sync wrote it: theirs now.
+        if (!unchangedSinceSync({ path: rel, bytes: 0, size: spec.prior!.size, mtimeMs: spec.prior!.mtimeMs }, ownedStat!)) return { status: "edited", rel };
+        if (existing === "keep_both") saveAs = await freeNumberedName(dir!, name, 2);
+      }
+      const target = [...segments, saveAs].join("/");
+      if (Number.isFinite(budget) && root.length + 1 + target.length > budget) {
+        fail(target, `The path is too long (over ${budget} characters)`);
+        return { status: "failed", rel: target };
+      }
+      if (dryRun) {
+        result.planned!.push(target);
+        emit({ type: "planned", path: target });
+        return { status: "planned", rel: target };
+      }
+      try {
+        const folder = await locateFolder(root, segments, true);
+        await writeFileAtomic(path.join(folder!, saveAs), spec.content);
+        const written = await fs.stat(path.join(folder!, saveAs));
+        spec.onWritten({ path: target, size: written.size, mtimeMs: written.mtimeMs, hash });
+        result.downloaded.push({ path: target, bytes: written.size });
+        emit({ type: "downloaded", path: target, bytes: written.size });
+        unsaved++;
+        return { status: owned ? "refreshed" : "written", rel: target };
+      } catch (error) {
+        log("WARN", `Course sync: ${target} failed`, error);
+        fail(target, error instanceof RefusedFolder ? error.message : describeFailure(error));
+        return { status: "failed", rel: target };
+      }
+    };
+
+    try {
+    for (const file of plan.files) {
+      done++;
+      if (!result.stopped && stop.signal.aborted) stopWith(abortedReason());
+      if (result.stopped) {
+        result.notAttempted++;
+        continue;
+      }
+      await saveOne({
+        segments: file.segments,
+        name: file.name,
+        prior: manifest.get(courseId, file.topicId),
+        ownedByOther: (candidate) => {
+          const owner = manifest.ownerOf(courseId, candidate);
+          return owner !== undefined && owner !== file.topicId;
+        },
+        open: (signal) => openContentTopic(apiClient, courseId, file.topicId, signal),
+        onSaved: (entry) => manifest.set(courseId, file.topicId, entry),
+      });
+    }
+
+    if (extras.assignments || extras.announcements) {
+      const context: PhaseContext = {
+        apiClient,
+        courseId,
+        signal: stop.signal,
+        dryRun,
+        existing,
+        manifest,
+        stopped: () => {
+          if (!result.stopped && stop.signal.aborted) stopWith(abortedReason());
+          return result.stopped !== undefined;
+        },
+        handleStop: (error) => {
+          if (stop.signal.aborted) {
+            stopWith(abortedReason());
+            return true;
+          }
+          if (isAuthUnavailable(error)) {
+            stopWith("auth");
+            result.authError = textOf(error);
+            return true;
+          }
+          return false;
+        },
+        saveFile: async (spec) => {
+          total++;
+          done++;
+          if (!result.stopped && stop.signal.aborted) stopWith(abortedReason());
+          if (result.stopped) {
+            result.notAttempted++;
+            return { status: "notAttempted", rel: [...spec.segments, spec.name].join("/") };
+          }
+          return saveOne(spec);
+        },
+        saveText,
+        touch: () => manifest.touch(),
+      };
+      if (extras.assignments) {
+        result.assignments = await syncAssignments(context, extras.assignments);
+      }
+      if (extras.announcements) {
+        result.announcements = await syncAnnouncements(context);
       }
     }
     } finally {
@@ -736,7 +921,7 @@ async function runSync(
         // and never before the first download: it can wait for the ledger lock, and the deadline is already running.
         // Only a folder that holds saves is remembered (this run's, or an earlier run's in the manifest): a folder
         // that never held any would later be reported as a missing sync folder. Never throws.
-        if (!dryRun && (result.downloaded.length > 0 || manifest.entries(courseId).length > 0)) {
+        if (!dryRun && manifest.entries(courseId).length > 0) {
           await recordSyncRoot(apiClient.origin, courseId, root);
         }
       }
@@ -751,9 +936,7 @@ async function runSync(
 
 /** One attempt at one file: the same topic download `download_file` makes, streamed into the folder. */
 async function downloadOne(
-  apiClient: D2LApiClient,
-  courseId: number,
-  topicId: number,
+  open: SaveSpec["open"],
   where: {
     root: string;
     dir: string | null;
@@ -768,7 +951,7 @@ async function downloadOne(
     signal: AbortSignal;
   },
 ): Promise<Outcome> {
-  const opened = await openContentTopic(apiClient, courseId, topicId, where.signal);
+  const opened = await open(where.signal);
   if ("unavailable" in opened) return { kind: "unavailable" };
   const { response } = opened;
 

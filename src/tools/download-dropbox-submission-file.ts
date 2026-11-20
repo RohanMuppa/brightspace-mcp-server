@@ -12,7 +12,7 @@
 // download_file's disk mode) instead of writing the buffer directly as the
 // fork did.
 
-import { flattenDropboxSubmissions } from "../utils/dropbox-submissions.js";
+import { flattenDropboxSubmissions, submissionFileUrl } from "../utils/dropbox-submissions.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { D2LApiClient, ApiError } from "../api/index.js";
 import { DownloadDropboxSubmissionFileSchema } from "./schemas.js";
@@ -144,10 +144,7 @@ export function registerDownloadDropboxSubmissionFile(
         }
 
         // One file of a submission; D2L's route has no "/download" suffix (see download-file.ts).
-        const downloadApiPath = apiClient.le(
-          courseId,
-          `/dropbox/folders/${folderId}/submissions/${submissionId}/files/${fileId}`
-        );
+        const downloadApiPath = submissionFileUrl(apiClient, courseId, folderId, submissionId, fileId);
 
         let response: Response;
         try {

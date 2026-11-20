@@ -4,7 +4,7 @@
  * Licensed under MIT — see LICENSE file for details.
  */
 
-import { flattenDropboxSubmissions } from "../utils/dropbox-submissions.js";
+import { readMyFeedback, readMySubmissions } from "../utils/dropbox-submissions.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { D2LApiClient, DEFAULT_CACHE_TTLS } from "../api/index.js";
 import { fetchAllItems, fetchAllObjects } from "../api/paginate.js";
@@ -17,8 +17,7 @@ import { contentTopicUrl, gradebookUrl, quizUrl } from "../utils/deep-links.js";
 import { assignmentLinkResolver } from "./assignment-links.js";
 import { dueIn } from "../utils/due-in.js";
 import { feedbackText, FEEDBACK_UNAVAILABLE_NOTE } from "../utils/feedback.js";
-import { fetchCurrentUserId } from "./group-membership.js";
-import { toOutputAssessment, type RubricAssessmentDto, type RubricDto } from "./get-assignment-rubric.js";
+import { toOutputAssessment, type RubricDto } from "./get-assignment-rubric.js";
 import type { AppConfig } from "../types/index.js";
 
 // D2L Dropbox API types
@@ -61,25 +60,6 @@ interface DropboxFolder {
   // Instructor-provided URL links attached to the folder (e.g. a spec doc
   // hosted elsewhere, a starter repo). Absent on tenants/folders with none.
   LinkAttachments?: DropboxLinkAttachment[] | null;
-}
-
-interface DropboxSubmission {
-  /** Present when the tenant answers mysubmissions with D2L's EntityDropbox shape. */
-  Submissions?: DropboxSubmission[];
-  /** Released feedback D2L embeds in an EntityDropbox / submission entry. */
-  Feedback?: DropboxFeedback & { IsGraded?: boolean } | null;
-  Id: number;
-  SubmittedBy: { Identifier: string; DisplayName: string };
-  SubmissionDate: string;
-  Comment: { Text: string; Html: string } | null;
-  Files: Array<{ FileId: number; FileName: string; Size: number }>;
-}
-
-interface DropboxFeedback {
-  IsGraded?: boolean;
-  Score: number | null;
-  Feedback: { Text: string; Html: string } | null;
-  RubricAssessments?: RubricAssessmentDto[];
 }
 
 // D2L Quiz API types
@@ -748,27 +728,8 @@ async function fetchCourseInventory(
       // answer is actually known so the caller never reports denied-but-real
       // work as missing.
       // Adapted from JoshuaMontclair/brightspace-mcp-server (MIT).
-      let submissions: DropboxSubmission[] = [];
-      let submissionsKnown = true;
-      let embeddedFeedback: DropboxFeedback | null = null;
-      try {
-        const submissionsRaw = await apiClient.get<{ Objects: DropboxSubmission[] } | DropboxSubmission[]>(
-          apiClient.le(courseId, `/dropbox/folders/${folder.Id}/submissions/mysubmissions/`),
-          { ttl: DEFAULT_CACHE_TTLS.assignments }
-        );
-        const entries: DropboxSubmission[] = Array.isArray(submissionsRaw) ? submissionsRaw : (submissionsRaw as any).Objects ?? [];
-        // D2L documents EntityDropbox ({ Feedback, Submissions: [...] }) for this
-        // route; older tenants answer with the flat submissions. Accept both.
-        embeddedFeedback = entries.find((e) => e.Feedback)?.Feedback ?? null;
-        submissions = flattenDropboxSubmissions(entries);
-      } catch (error: any) {
-        if (isAuthUnavailable(error)) throw error;
-        // 404 is how D2L reports "nothing submitted yet" - that one is known.
-        if (error?.status !== 404) {
-          submissionsKnown = false;
-          log("DEBUG", `Could not determine submission state for folder ${folder.Id}`, error);
-        }
-      }
+      const mine = await readMySubmissions(apiClient, courseId, folder.Id, { ttl: DEFAULT_CACHE_TTLS.assignments });
+      const { submissions, known: submissionsKnown } = mine;
 
       // When the API refuses the list, the student's own feedback page may
       // still show it. Only a listed submission counts: a page with none, or
@@ -787,52 +748,8 @@ async function fetchCourseInventory(
       }
 
       // Fetch feedback independently of submissions
-      let feedback: DropboxFeedback | null = null;
-      let feedbackStatus: "retrieved" | "unavailable" | "restricted" | "error" = "unavailable";
-      try {
-        feedback = await apiClient.get<DropboxFeedback>(
-          apiClient.le(courseId, `/dropbox/folders/${folder.Id}/feedback/myFeedback/`),
-          { ttl: DEFAULT_CACHE_TTLS.assignments }
-        );
-        feedbackStatus = feedback ? "retrieved" : "unavailable";
-      } catch (error: any) {
-        if (isAuthUnavailable(error)) throw error;
-        // Permission failures, missing API records, and transport failures
-        // do not establish whether published feedback exists in the UI.
-        feedbackStatus = error?.status === 403 ? "restricted"
-          : error?.status === 404 ? "unavailable" : "error";
-        if (error?.status !== 404 && error?.status !== 403) {
-          log("DEBUG", `Failed to fetch feedback for folder ${folder.Id}`, error);
-        }
-      }
-
-      // myFeedback is not one of D2L's documented entity types, so when it has
-      // nothing, read the student's own released feedback from the documented
-      // routes: the Feedback embedded in mysubmissions (already fetched), then
-      // feedback/user/{me}. Draft (IsGraded: false) feedback is not released.
-      let feedbackSource: "myFeedback" | "submission" | "user" | null = feedback ? "myFeedback" : null;
-      if (!feedback && submissions.length > 0) {
-        if (embeddedFeedback && embeddedFeedback.IsGraded !== false) {
-          feedback = embeddedFeedback;
-          feedbackSource = "submission";
-        } else if (folder.GroupTypeId === null || folder.GroupTypeId === undefined) {
-          try {
-            const myId = await fetchCurrentUserId(apiClient);
-            const own = await apiClient.get<DropboxFeedback>(
-              apiClient.le(courseId, `/dropbox/folders/${folder.Id}/feedback/user/${myId}`),
-              { ttl: DEFAULT_CACHE_TTLS.assignments }
-            );
-            if (own && own.IsGraded !== false) {
-              feedback = own;
-              feedbackSource = "user";
-            }
-          } catch (error: any) {
-            if (isAuthUnavailable(error)) throw error;
-            log("DEBUG", `Own-feedback fallback failed for folder ${folder.Id}`, error);
-          }
-        }
-        if (feedback) feedbackStatus = "retrieved";
-      }
+      const { feedback, status: feedbackStatus, source: feedbackSource } =
+        await readMyFeedback(apiClient, courseId, folder, mine, { ttl: DEFAULT_CACHE_TTLS.assignments });
 
       // Instructor-provided URL links attached to the folder. Omitted
       // entirely (rather than an empty array) when the folder has none, to

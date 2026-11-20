@@ -113,6 +113,14 @@ export const DownloadCourseFilesSchema = z.object({
     .describe("Wall-clock limit for this call in minutes (default 8). When it passes, the call stops cleanly and reports the rest as not attempted; call it again to continue, since files already on disk are skipped. Raise it only if the client allows long tool calls."),
   maxTotalMB: z.coerce.number().int().min(1).max(1048576).default(5120)
     .describe("Most megabytes to download in one call (default 5120, i.e. 5 GB). The rest is reported as not attempted; call again to continue."),
+  includeSubmissions: z.boolean().default(false)
+    .describe("Also save the student's own submitted files, a feedback.md per assignment (score, instructor comments, rubric) and the feedback attachments Brightspace lists, under Assignments/<assignment>/. Off by default."),
+  includeAssignmentFiles: z.boolean().default(false)
+    .describe("Also save the instructor's attachments on each assignment, under Assignments/<assignment>/assignment files/. Off by default."),
+  includeAnnouncementFiles: z.boolean().default(false)
+    .describe("Also save the files attached to announcements, under Announcements/<date title>/. Off by default."),
+  everything: z.boolean().default(false)
+    .describe("Shorthand that turns on includeSubmissions, includeAssignmentFiles and includeAnnouncementFiles. Use it when the user asks for the whole course or for everything. The syllabus is not included."),
 });
 
 export const GetSyllabusSchema = z.object({

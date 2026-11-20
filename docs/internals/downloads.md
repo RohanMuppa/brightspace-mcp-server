@@ -225,7 +225,7 @@ Names are in `src/sync/names.ts`.
 
 The manifest is `.brightspace-sync.json` in the destination root. It is written with mode `0600`, atomically.
 
-- Shape: `version: 1`, then `courses`, then the course id, then the topic id. Each entry has `path`, `bytes`, `size` and `mtimeMs`. `path` is relative to the destination, with `/` separators.
+- Shape: `version: 1`, then `courses`, then the course id, then the topic id. An optional `extras` key holds the assignment and announcement files (see [Beyond Content](#beyond-content-assignments-and-announcements)). Each entry has `path`, `bytes`, `size` and `mtimeMs`. `path` is relative to the destination, with `/` separators.
 - `size` and `mtimeMs` are recorded from the file as the sync left it.
 - The manifest is written every 25 files or every 2 seconds. It is also written at the end of every run, however the run ends.
 - It is read at the start. A missing manifest is empty. A manifest that cannot be read is treated as empty, with a warning.
@@ -318,6 +318,31 @@ The answer is text. Its first line reads "Course N saved to D: X downloaded, Y a
 - A 0-byte file is counted as empty. This happens when the response has no body or a Content-Length of 0, and also when the body turns out to be 0 bytes. Empty files are not written, and they are not failures.
 - Names in the answer are JSON-quoted. The answer says once that they come from the course. Each list shows at most 20 names.
 - The tool is not annotated read-only, because it writes files.
+
+### Beyond Content: assignments and announcements
+
+Added in 5.2.21. The options are in the [tool reference](../reference/tools.md#download_course_files). The `sync` command has no flag for them.
+
+- The phases run inside the same `runSync` call as the Content loop, after it, in `src/sync/submissions-sync.ts` and `src/sync/announcements-sync.ts`.
+- Every file goes through one `saveOne` closure in `course-sync.ts`, which is also what the Content loop uses. It owns the checks: existing file, ownership, the path budget, the file and byte caps, dry run, duplicate, empty, retries and the sign-in stop. `downloadOne` takes an `open` function, so a topic, a submission file and an attachment share what happens after the request.
+  **Why:** a second set of caps and checks would drift from the first. One `maxFiles` and one byte budget cover the whole call.
+- `feedback.md` goes through `saveText`. It is not a download, so it does not use the file cap, but it respects stop and cancel.
+- The student's submissions and feedback are read by `readMySubmissions` and `readMyFeedback` in `src/utils/dropbox-submissions.ts`, which `get_assignments` also calls, so both read the same routes the same way. A 404 on `mysubmissions` is a known "nothing submitted". Any other failure is not known.
+  **Why:** a refused read used to look like an empty one (#447). The sync records it as `unknown` and writes "unknown (reason)" in `feedback.md`.
+- A group folder's student feedback route is not tried, so its feedback is `unknown`, and the files are saved under `submission files/`.
+  **Why:** the student route can answer with a groupmate's record, and no file must be called "your submission" when someone else made it.
+- Submission files come from `/dropbox/folders/{folder}/submissions/{submission}/files/{file}`, with no `/download` suffix (2026-11-19: the suffixed route answers 404 on a live school). Feedback attachments come from `/dropbox/folders/{folder}/feedback/user/{userId}/attachments/{file}`, listed by the feedback record's `Files`. That route is documented but has not been confirmed on a live school, so a failure there is `unknown`, never "none".
+- Names: every remote name goes through `sanitizeComponent` and a `NameSet`. An assignment's and an announcement's folder is recorded by id in the manifest, so a rename on Brightspace keeps the same folder. A resubmission with the same file name becomes `name (2).ext`. The names `Assignments` and `Announcements` are reserved in the root `NameSet` only while the matching option is on, so a run without the options names Content exactly as before.
+- Manifest: an `extras` key beside `courses`, `extras[courseId].assignments[folderId] = { dir, feedback?: { path, size, mtimeMs, hash }, files }` and `announcements[newsId] = { dir, files }`. 
+  - `files` keys are `sub:<submissionId>:<fileId>`, `asg:<fileId>`, `fb:<fileId>`, and the attachment id for an announcement.
+  - Keys and paths are validated like the Content entries, and a key that is not an id is dropped.
+  - `entries(courseId)` stays Content-only, so `get_unsaved_course_files` and the ledger never see these files.
+  - The key is written only when it holds something.
+  **Why:** an older server rewrites the manifest without `extras`. The files are then on disk with no record, which the sync reads as the student's own, so nothing is overwritten.
+- `feedback.md`: the text is rendered, hashed with SHA-256 and compared with the manifest's hash. The same hash writes nothing. A different hash rewrites the file atomically, only if the file is still as the sync wrote it (`unchangedSinceSync`). `existing: keep_both` writes `feedback (2).md`. Instructor text is a blockquote with every line prefixed and nothing able to open a heading, fence, rule or raw HTML; names are JSON-quoted; table cells escape `|` and line breaks.
+  **Why:** the comments are written by someone else, and the file is read by an agent, so it must stay data.
+- `includeSyllabus` was not added. `get_syllabus` cannot say reliably that a course has no syllabus file (it may live in an external tool), so a saved copy could not be told from "none". The syllabus stays in the "not covered" line.
+- The saved-topics ledger and `recordSyncRoot` count Content entries only.
 
 ### Dry run
 

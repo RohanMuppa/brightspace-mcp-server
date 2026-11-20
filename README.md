@@ -90,7 +90,7 @@ Ask your assistant to save a course, or run it yourself from a terminal:
 npx -y brightspace-mcp-server@latest sync --course 123456 --dest ~/Courses/ECE-264
 ```
 
-Every file in the course's Content area is saved into folders named after its modules. Running it again fetches only what is new. It covers the Content area only: your own submissions and feedback, assignment and announcement attachments, and the syllabus are separate (ask your assistant for them by name).
+Every file in the course's Content area is saved into folders named after its modules. Running it again fetches only what is new. By default it covers the Content area only. To save everything else in the same run, ask your assistant for the whole course (it sets `everything`): your own submitted files, a `feedback.md` per assignment with your score, the instructor's comments and the rubric, the instructor's assignment attachments, and announcement attachments, in `Assignments/` and `Announcements/` folders. Rerun it after grading and `feedback.md` is refreshed, unless you edited it. The syllabus is separate (ask your assistant for it by name). The `sync` command covers the Content area only.
 
 | Option | What it does |
 |--------|--------------|
