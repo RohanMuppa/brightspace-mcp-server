@@ -194,3 +194,79 @@ describe("get_my_courses currentOnly filter", () => {
     expect(idsOf(result)).toEqual([1]);
   });
 });
+
+/**
+ * The agent never sees the server's course settings, so a course they hide
+ * must not read as one the student is not enrolled in (#484).
+ */
+describe("get_my_courses notice for courses hidden by settings", () => {
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  const now = Date.now();
+  const DATED: Dated[] = [
+    {
+      id: 1, name: "Current", code: "cur", isActive: true,
+      startDate: new Date(now - 30 * DAY_MS).toISOString(),
+      endDate: new Date(now + 60 * DAY_MS).toISOString(),
+    },
+    {
+      id: 2, name: "Past", code: "past", isActive: true,
+      startDate: new Date(now - 400 * DAY_MS).toISOString(),
+      endDate: new Date(now - 300 * DAY_MS).toISOString(),
+    },
+    { id: 3, name: "Inactive", code: "off", isActive: false },
+  ];
+
+  function configWith(filter: Partial<AppConfig["courseFilter"]>): AppConfig {
+    const config = makeConfig(true);
+    config.courseFilter = { ...config.courseFilter, ...filter };
+    return config;
+  }
+
+  it("names the courses D2L_CURRENT_ONLY hid, keeping the bare array first", async () => {
+    const { call } = setup(configWith({ currentOnly: true }), DATED);
+
+    const result = await call({});
+
+    expect(idsOf(result)).toEqual([1]);
+    expect(result.content).toHaveLength(2);
+    const notice = result.content[1].text;
+    expect(notice).toContain("1 enrolled course is hidden");
+    expect(notice).toContain("D2L_CURRENT_ONLY");
+    expect(notice).toContain(": 2.");
+    expect(notice).toContain("courseId");
+  });
+
+  it("names D2L_EXCLUDE_COURSES and D2L_INCLUDE_COURSES when they hide courses", async () => {
+    const excluded = await setup(configWith({ excludeCourseIds: [1] }), DATED).call({});
+    expect(idsOf(excluded)).toEqual([2]);
+    expect(excluded.content[1].text).toContain("D2L_EXCLUDE_COURSES");
+    expect(excluded.content[1].text).toContain(": 1.");
+
+    const included = await setup(configWith({ includeCourseIds: [2] }), DATED).call({});
+    expect(idsOf(included)).toEqual([2]);
+    expect(included.content[1].text).toContain("D2L_INCLUDE_COURSES");
+  });
+
+  it("does not count a course that activeOnly removed", async () => {
+    const { call } = setup(configWith({ excludeCourseIds: [2] }), DATED);
+
+    const result = await call({ activeOnly: false });
+
+    expect(idsOf(result)).toEqual([1, 3]);
+    expect(result.content[1].text).toContain("1 enrolled course is hidden");
+    expect(result.content[1].text).toContain("not listed: 2.");
+
+    const activeOnly = await setup(configWith({ currentOnly: false }), DATED).call({});
+    expect(idsOf(activeOnly)).toEqual([1, 2]);
+    expect(activeOnly.content).toHaveLength(1);
+  });
+
+  it("adds no notice when a setting is on but hides nothing", async () => {
+    const { call } = setup(configWith({ excludeCourseIds: [999] }), DATED);
+
+    const result = await call({});
+
+    expect(idsOf(result)).toEqual([1, 2]);
+    expect(result.content).toHaveLength(1);
+  });
+});
