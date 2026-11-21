@@ -46,6 +46,7 @@ Tools are registered in `src/tools/index.ts`, and their input schemas are in `sr
 - Arguments: `activeOnly` (boolean, optional). Omit it to use the server's configured setting, which is true unless changed (`D2L_ACTIVE_ONLY` or `config.json`). The schema has no default, so a default here would override that setting.
 - Each course has `id`, `name`, `code`, `role`, `isActive`, `canAccess`, `startDate`, `endDate` and `lastAccessed`.
 - `startDate` and `endDate` are the enrollment's `Access.StartDate` and `Access.EndDate`. They are always present, whatever `activeOnly` is.
+- When `D2L_CURRENT_ONLY`, `D2L_INCLUDE_COURSES` or `D2L_EXCLUDE_COURSES` removes courses, the array is unchanged and a second content block names how many were hidden, by which settings, and their ids. Courses removed only by `activeOnly` are not counted. **Why:** the agent never sees the settings, so a hidden course read as one the student is not enrolled in (#484).
 
 ### get_my_grades
 
