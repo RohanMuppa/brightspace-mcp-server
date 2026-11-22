@@ -112,3 +112,39 @@ export function applyCourseFilter<T extends FilterableCourse>(
 
   return filtered;
 }
+
+/** Enrolled courses that the course settings removed, and which settings did it. */
+export interface SettingsHiddenCourses {
+  /** The settings in effect, by environment variable name. */
+  settings: string[];
+  /** Ids of the enrolled courses those settings removed. */
+  ids: number[];
+}
+
+/**
+ * Which enrolled courses D2L_CURRENT_ONLY, D2L_INCLUDE_COURSES or
+ * D2L_EXCLUDE_COURSES removed, or null when those settings removed none.
+ * Courses dropped by activeOnly alone are not counted: the caller can lift
+ * that per call, but not the other settings.
+ *
+ * **Why:** the agent never sees the settings, so a hidden course read as one
+ * the student is not enrolled in, or one with no grades (#484, #486).
+ */
+export function coursesHiddenBySettings<T extends FilterableCourse>(
+  enrolled: T[],
+  shown: Array<{ id: number }>,
+  config: CourseFilterConfig,
+  now: number = Date.now()
+): SettingsHiddenCourses | null {
+  const settings: string[] = [];
+  if (config.currentOnly) settings.push("D2L_CURRENT_ONLY");
+  if (config.includeCourseIds && config.includeCourseIds.length > 0) settings.push("D2L_INCLUDE_COURSES");
+  if (config.excludeCourseIds && config.excludeCourseIds.length > 0) settings.push("D2L_EXCLUDE_COURSES");
+  if (settings.length === 0) return null;
+
+  const shownIds = new Set(shown.map((course) => course.id));
+  const ids = applyCourseFilter(enrolled, { activeOnly: config.activeOnly }, now)
+    .map((course) => course.id)
+    .filter((id) => !shownIds.has(id));
+  return ids.length > 0 ? { settings, ids } : null;
+}

@@ -19,7 +19,7 @@ import {
   throwIfCredentialRejected,
 } from "./tool-helpers.js";
 import { log } from "../utils/logger.js";
-import { applyCourseFilter } from "../utils/course-filter.js";
+import { applyCourseFilter, coursesHiddenBySettings } from "../utils/course-filter.js";
 import { gradebookUrl, quizUrl } from "../utils/deep-links.js";
 import { feedbackText, FEEDBACK_UNAVAILABLE_NOTE } from "../utils/feedback.js";
 import type { AppConfig } from "../types/index.js";
@@ -235,19 +235,17 @@ export function registerGetMyGrades(
         );
 
         // Apply course filter
-        const filteredEnrollments = applyCourseFilter(
-          enrollmentItems.map(item => ({
-            id: item.OrgUnit.Id,
-            name: item.OrgUnit.Name,
-            code: item.OrgUnit.Code,
-            isActive: item.Access.IsActive,
-            canAccess: item.Access.CanAccess,
-            startDate: item.Access.StartDate,
-            endDate: item.Access.EndDate,
-            ...item,
-          })),
-          config.courseFilter
-        );
+        const enrolled = enrollmentItems.map((item) => ({
+          id: item.OrgUnit.Id,
+          name: item.OrgUnit.Name,
+          code: item.OrgUnit.Code,
+          isActive: item.Access.IsActive,
+          canAccess: item.Access.CanAccess,
+          startDate: item.Access.StartDate,
+          endDate: item.Access.EndDate,
+          ...item,
+        }));
+        const filteredEnrollments = applyCourseFilter(enrolled, config.courseFilter);
 
         // Fetch grades for each course (handle 403s gracefully)
         const gradePromises = filteredEnrollments.map(async (item) => {
@@ -388,6 +386,19 @@ export function registerGetMyGrades(
             `(${failedCourses.map((c) => c.courseId).join(", ")}) could not be read from Brightspace, ` +
             "so they are listed in failedCourses instead of courses. Do not report these courses as " +
             "having no grades: open each gradeUrl, or call get_my_grades again for that courseId."
+          );
+        }
+        // A course the settings removed was never asked for its grades. The
+        // agent never sees those settings, so say which courses they hid
+        // rather than let one read as a course with no grades (#486).
+        const hidden = coursesHiddenBySettings(enrolled, filteredEnrollments, config.courseFilter);
+        if (hidden) {
+          response.hiddenCourseIds = hidden.ids;
+          notices.push(
+            `${hidden.ids.length} enrolled course(s) (${hidden.ids.join(", ")}) are hidden by this ` +
+            `server's course settings (${hidden.settings.join(", ")}), so their grades were not read. ` +
+            "Do not report these courses as having no grades or as courses the user is not in: call " +
+            "get_my_grades again with that courseId, which reads a hidden course."
           );
         }
         const quizGaps = courses.filter((c) => c.quizzesUnavailable).map((c) => c.courseId);

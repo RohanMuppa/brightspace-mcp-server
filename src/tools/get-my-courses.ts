@@ -12,7 +12,7 @@ import {
 } from "./schemas.js";
 import { toolResponse, toolResponseWithNotice, sanitizeError } from "./tool-helpers.js";
 import { log } from "../utils/logger.js";
-import { applyCourseFilter } from "../utils/course-filter.js";
+import { applyCourseFilter, coursesHiddenBySettings } from "../utils/course-filter.js";
 import type { AppConfig } from "../types/index.js";
 
 interface EnrollmentItem {
@@ -103,8 +103,6 @@ export function registerGetMyCourses(
 /**
  * A notice naming the courses that D2L_CURRENT_ONLY, D2L_INCLUDE_COURSES or
  * D2L_EXCLUDE_COURSES removed, or null when those settings removed none.
- * Courses dropped by activeOnly alone are not counted: the caller chose that
- * and can lift it with activeOnly:false.
  */
 function settingsHiddenNotice(
   enrolled: Parameters<typeof applyCourseFilter>[0],
@@ -112,23 +110,13 @@ function settingsHiddenNotice(
   activeOnly: boolean,
   config: AppConfig
 ): string | null {
-  const { currentOnly, includeCourseIds, excludeCourseIds } = config.courseFilter;
-  const settings: string[] = [];
-  if (currentOnly) settings.push("D2L_CURRENT_ONLY");
-  if (includeCourseIds && includeCourseIds.length > 0) settings.push("D2L_INCLUDE_COURSES");
-  if (excludeCourseIds && excludeCourseIds.length > 0) settings.push("D2L_EXCLUDE_COURSES");
-  if (settings.length === 0) return null;
+  const hidden = coursesHiddenBySettings(enrolled, shown, { ...config.courseFilter, activeOnly });
+  if (!hidden) return null;
 
-  const shownIds = new Set(shown.map((course) => course.id));
-  const hiddenIds = applyCourseFilter(enrolled, { activeOnly })
-    .map((course) => course.id)
-    .filter((id) => !shownIds.has(id));
-  if (hiddenIds.length === 0) return null;
-
-  const are = hiddenIds.length === 1 ? "course is" : "courses are";
+  const are = hidden.ids.length === 1 ? "course is" : "courses are";
   return (
-    `${hiddenIds.length} enrolled ${are} hidden by this server's course settings ` +
-    `(${settings.join(", ")}), so not listed: ${hiddenIds.join(", ")}. Do not tell the user they ` +
+    `${hidden.ids.length} enrolled ${are} hidden by this server's course settings ` +
+    `(${hidden.settings.join(", ")}), so not listed: ${hidden.ids.join(", ")}. Do not tell the user they ` +
     "are not enrolled in a course missing from this list. Other tools still read a hidden course " +
     "when given its courseId."
   );

@@ -53,9 +53,11 @@ Tools are registered in `src/tools/index.ts`, and their input schemas are in `sr
 - Code: `src/tools/get-my-grades.ts`.
 - Arguments: `courseId` (optional). Omit it for grades in all enrolled courses.
 - Single course: a 403 keeps the plain error-result shape. The error text names the course's gradebook URL, so the student can open grades directly.
-- All courses: the `courses` array is unchanged. Two more arrays can appear:
+- All courses: the `courses` array is unchanged. Three more arrays can appear:
   - `restrictedCourses: [{ courseId, courseName, gradeUrl }]` lists courses where the grade API answers 403. This is an institutional access policy, not a missing enrollment. These courses are no longer silently dropped.
   - `failedCourses: [{ courseId, courseName, gradeUrl }]` lists any other per-course failure (404, 5xx, network error). It comes with a `notice`. Both arrays are present only when something failed. A course is never missing without a trace (#245).
+  - `hiddenCourseIds: number[]` lists enrolled courses that `D2L_CURRENT_ONLY`, `D2L_INCLUDE_COURSES` or `D2L_EXCLUDE_COURSES` removed, so their grades were not read. It comes with a `notice` that names the settings and tells the agent to call again with that `courseId`, which bypasses the settings.
+  - `hiddenCourseIds` is present only when those settings hid a course. Courses removed only by `activeOnly` are not counted, as in `get_my_courses`. **Why:** the agent never sees the settings, so a hidden course read as one with no grades (#486).
 - `gradeUrl` is the course gradebook deep link from `gradebookUrl()` in `src/utils/deep-links.ts`.
 - A row scored from a quiz (matched by the quiz list's `GradeItemId`) has `feedbackUrl` set to the quiz page (`quizUrl()`).
 - When the gradebook `comments` is null, the row also has `feedbackNote`. It says feedback may still exist on the quiz's submissions page. The student API cannot read that page, and it can need a restricted viewer such as Respondus LockDown Browser.

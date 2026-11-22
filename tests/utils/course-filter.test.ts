@@ -10,7 +10,7 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { applyCourseFilter } from "../../src/utils/course-filter.js";
+import { applyCourseFilter, coursesHiddenBySettings } from "../../src/utils/course-filter.js";
 import type { CourseFilterConfig } from "../../src/types/index.js";
 
 interface TestCourse {
@@ -194,5 +194,34 @@ describe("applyCourseFilter", () => {
       const out = applyCourseFilter(sampleCourses, cfg({ excludeCourseIds: [4, 6] }), NOW);
       expect(out.map((c) => c.id).sort()).toEqual([1, 2, 3, 5, 7]);
     });
+  });
+});
+
+describe("coursesHiddenBySettings", () => {
+  const hidden = (config: CourseFilterConfig) =>
+    coursesHiddenBySettings(sampleCourses, applyCourseFilter(sampleCourses, config, NOW), config, NOW);
+
+  it("returns null when no course setting is on", () => {
+    expect(hidden(cfg({ activeOnly: true }))).toBeNull();
+  });
+
+  it("names the courses D2L_CURRENT_ONLY removed, and not those activeOnly removed", () => {
+    // Course 5 is inactive: activeOnly hides it, which the caller can lift, so
+    // it is not reported as hidden by the settings.
+    expect(hidden(cfg({ activeOnly: true, currentOnly: true }))).toEqual({
+      settings: ["D2L_CURRENT_ONLY"],
+      ids: [1, 3, 4],
+    });
+  });
+
+  it("names every setting in effect and the courses they removed together", () => {
+    expect(hidden(cfg({ includeCourseIds: [2, 3, 6], excludeCourseIds: [3] }))).toEqual({
+      settings: ["D2L_INCLUDE_COURSES", "D2L_EXCLUDE_COURSES"],
+      ids: [1, 3, 4, 5, 7],
+    });
+  });
+
+  it("returns null when a setting is on but removed nothing", () => {
+    expect(hidden(cfg({ excludeCourseIds: [999] }))).toBeNull();
   });
 });

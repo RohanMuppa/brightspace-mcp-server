@@ -148,6 +148,53 @@ import { ApiError } from "../../src/api/errors.js";
 
 const mfaPending = () => new AuthProcessError("mfaPending", "MFA approval pending");
 
+describe("get_my_grades courses hidden by the course settings", () => {
+  const twoCourses = (path: string) => {
+    if (path.includes("/enrollments/")) {
+      return {
+        Items: [COURSE_A, COURSE_B].map((course) => ({
+          OrgUnit: course,
+          Access: { ClasslistRoleName: "Student", IsActive: true, LastAccessed: null },
+        })),
+      };
+    }
+    return [grade("Exam 1")];
+  };
+  const withFilter = (filter: Partial<AppConfig["courseFilter"]>) =>
+    ({ ...makeConfig(true), courseFilter: { activeOnly: true, ...filter } }) as AppConfig;
+
+  it("names an excluded course instead of letting it read as a course with no grades", async () => {
+    const { call, requested } = setup(twoCourses, withFilter({ excludeCourseIds: [COURSE_B.Id] }));
+
+    const payload = parse(await call({}));
+    expect(payload.courses.map((c: { courseId: number }) => c.courseId)).toEqual([COURSE_A.Id]);
+    expect(payload.hiddenCourseIds).toEqual([COURSE_B.Id]);
+    expect(payload.notice).toContain("D2L_EXCLUDE_COURSES");
+    expect(payload.notice).toContain(String(COURSE_B.Id));
+    expect(payload.notice).toContain("Do not report these courses as having no grades");
+    // The hidden course is still not queried.
+    expect(requested.some((p) => p.includes(`/${COURSE_B.Id}/grades/`))).toBe(false);
+  });
+
+  it("adds nothing when the settings hide no course", async () => {
+    const { call } = setup(twoCourses, withFilter({ excludeCourseIds: [999] }));
+
+    const payload = parse(await call({}));
+    expect(payload.hiddenCourseIds).toBeUndefined();
+    expect(payload.notice).toBeUndefined();
+  });
+
+  it("does not count a course that only activeOnly removed", async () => {
+    const { call } = setup((path) => {
+      if (path.includes("/enrollments/")) return enrollmentPage(COURSE_B, false);
+      return [grade("Final")];
+    }, withFilter({ excludeCourseIds: [COURSE_A.Id] }));
+
+    const payload = parse(await call({}));
+    expect(payload.hiddenCourseIds).toBeUndefined();
+  });
+});
+
 describe("get_my_grades while sign-in is pending", () => {
   it("reports authPending for a single course instead of an empty list read as success", async () => {
     const { call } = setup(() => {
