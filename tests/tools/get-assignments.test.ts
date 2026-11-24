@@ -521,6 +521,63 @@ describe("get_assignments across all courses", () => {
 });
 
 /**
+ * D2L_CURRENT_ONLY, D2L_INCLUDE_COURSES and D2L_EXCLUDE_COURSES remove courses
+ * the agent cannot know about. A removed course must be named, not read as a
+ * course with nothing due (#488).
+ */
+describe("get_assignments courses hidden by the course settings", () => {
+  const twoCourses = (path: string) =>
+    path.includes("/enrollments/")
+      ? { Items: [enrollmentItem(COURSE_A), enrollmentItem(COURSE_B)] }
+      : courseWork(path);
+  const withFilter = (filter: Partial<AppConfig["courseFilter"]>) =>
+    ({ ...allCoursesConfig(true), courseFilter: { activeOnly: true, ...filter } }) as AppConfig;
+
+  it("names an excluded course instead of letting it read as a course with nothing due", async () => {
+    const { call, requested } = setupTool(twoCourses, withFilter({ excludeCourseIds: [COURSE_B.Id] }));
+
+    const parsed = body(await call({}));
+    expect(parsed.courses.map((c: any) => c.courseId)).toEqual([COURSE_A.Id]);
+    expect(parsed.hiddenCourseIds).toEqual([COURSE_B.Id]);
+    expect(parsed.notice).toContain("D2L_EXCLUDE_COURSES");
+    expect(parsed.notice).toContain(String(COURSE_B.Id));
+    expect(parsed.notice).toContain("Do not tell the user those courses have nothing due");
+    // The hidden course is still not queried.
+    expect(requested.some((p) => p.includes(`/${COURSE_B.Id}/`))).toBe(false);
+  });
+
+  it("names the courses an include list left out", async () => {
+    const { call } = setupTool(twoCourses, withFilter({ includeCourseIds: [COURSE_A.Id] }));
+
+    const parsed = body(await call({}));
+    expect(parsed.hiddenCourseIds).toEqual([COURSE_B.Id]);
+    expect(parsed.notice).toContain("D2L_INCLUDE_COURSES");
+  });
+
+  it("adds nothing when the settings hide no course", async () => {
+    const { call } = setupTool(twoCourses, withFilter({ excludeCourseIds: [999] }));
+
+    const parsed = body(await call({}));
+    expect(parsed.hiddenCourseIds).toBeUndefined();
+    expect(parsed.notice).toBeUndefined();
+  });
+
+  it("does not count a course that only activeOnly removed", async () => {
+    const { call } = setupTool((path) => {
+      if (path.includes("/enrollments/")) {
+        return { Items: [enrollmentItem(COURSE_A), enrollmentItem(COURSE_B, false)] };
+      }
+      return courseWork(path);
+    }, withFilter({ excludeCourseIds: [COURSE_A.Id] }));
+
+    const parsed = body(await call({}));
+    expect(parsed.courses).toEqual([]);
+    expect(parsed.hiddenCourseIds).toEqual([COURSE_A.Id]);
+    expect(parsed.notice).not.toContain(String(COURSE_B.Id));
+  });
+});
+
+/**
  * The dropbox folder list is one of four routes read side by side. Its failure
  * must not pass for a course with no assignments (#447). A 404 is the
  * exception: like the quiz list, it means the course has no Assignments tool.

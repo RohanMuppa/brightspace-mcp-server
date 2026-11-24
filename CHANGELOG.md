@@ -6,6 +6,10 @@ A change that can break something a caller relied on is marked **Changed behavio
 
 Entries up to 5.2.1 were generated from the merged PR titles. Versions before 5.0.0 are in the [GitHub releases](https://github.com/RohanMuppa/brightspace-mcp-server/releases) and the git history.
 
+## 5.3.5 (2026-11-24)
+
+- fix: `get_assignments` for all courses now says when your course settings (`D2L_CURRENT_ONLY`, `D2L_INCLUDE_COURSES`, `D2L_EXCLUDE_COURSES`) hid some of your courses, and which ones, in a new `hiddenCourseIds` field and the notice, so your AI no longer reports a hidden course as having nothing due (#488).
+
 ## 5.3.4 (2026-11-22)
 
 - fix: `get_my_grades` for all courses now says when your course settings (`D2L_CURRENT_ONLY`, `D2L_INCLUDE_COURSES`, `D2L_EXCLUDE_COURSES`) hid some of your courses, and which ones, in a new `hiddenCourseIds` field and the notice, so your AI no longer reports a hidden course as having no grades (#486).
