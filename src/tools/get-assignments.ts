@@ -12,7 +12,7 @@ import { GetAssignmentsSchema } from "./schemas.js";
 import { toolResponse, sanitizeError, isAuthUnavailable, authPendingNotice, throwIfCredentialRejected } from "./tool-helpers.js";
 import { convertHtmlToMarkdown } from "../utils/html-converter.js";
 import { log } from "../utils/logger.js";
-import { applyCourseFilter } from "../utils/course-filter.js";
+import { applyCourseFilter, coursesHiddenBySettings } from "../utils/course-filter.js";
 import { contentTopicUrl, gradebookUrl, quizUrl } from "../utils/deep-links.js";
 import { assignmentLinkResolver } from "./assignment-links.js";
 import { dueIn } from "../utils/due-in.js";
@@ -1199,19 +1199,17 @@ export function registerGetAssignments(
         );
 
         // Apply course filter
-        const filteredEnrollments = applyCourseFilter(
-          enrollmentItems.map(item => ({
-            id: item.OrgUnit.Id,
-            name: item.OrgUnit.Name,
-            code: item.OrgUnit.Code,
-            isActive: item.Access.IsActive,
-            canAccess: item.Access.CanAccess,
-            startDate: item.Access.StartDate,
-            endDate: item.Access.EndDate,
-            ...item,
-          })),
-          config.courseFilter
-        );
+        const enrolled = enrollmentItems.map((item) => ({
+          id: item.OrgUnit.Id,
+          name: item.OrgUnit.Name,
+          code: item.OrgUnit.Code,
+          isActive: item.Access.IsActive,
+          canAccess: item.Access.CanAccess,
+          startDate: item.Access.StartDate,
+          endDate: item.Access.EndDate,
+          ...item,
+        }));
+        const filteredEnrollments = applyCourseFilter(enrolled, config.courseFilter);
 
         // Fetch assignments for each course (handle 403s gracefully)
         const assignmentPromises = filteredEnrollments.map(async (item) => {
@@ -1311,6 +1309,19 @@ export function registerGetAssignments(
             `(${unreadCourses.map((c) => `"${c.courseName}" ${c.courseId}`).join(", ")}), so they are ` +
             "missing from this list. Do not tell the user those courses have nothing due: call " +
             "get_assignments again with that courseId, or tell them to check Brightspace."
+          );
+        }
+        // A course the settings removed was never asked for its assignments.
+        // The agent never sees those settings, so say which courses they hid
+        // rather than let one read as a course with nothing due (#488).
+        const hidden = coursesHiddenBySettings(enrolled, filteredEnrollments, config.courseFilter);
+        if (hidden) {
+          response.hiddenCourseIds = hidden.ids;
+          notices.push(
+            `${hidden.ids.length} enrolled course(s) (${hidden.ids.join(", ")}) are hidden by this ` +
+            `server's course settings (${hidden.settings.join(", ")}), so their assignments were not read. ` +
+            "Do not tell the user those courses have nothing due or that they are not in them: call " +
+            "get_assignments again with that courseId, which reads a hidden course."
           );
         }
         if (notices.length > 0) response.notice = notices.join(" ");

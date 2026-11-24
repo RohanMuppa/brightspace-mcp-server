@@ -104,6 +104,8 @@ Tools are registered in `src/tools/index.ts`, and their input schemas are in `sr
 - Gradebook-only items: `gradeOnly` rows are gradebook columns that match no assignment or quiz, such as a proctored exam.
 - `assignmentListUnavailable: { status }` and `assignmentListNote` are added to a course when its dropbox folder list (`/dropbox/folders/`) failed with anything but a 404. `status` is the HTTP status, or `null` for a network failure. The course's assignments are then missing, not absent; quizzes and gradebook rows still appear. A 404 counts as a course without the Assignments tool, the same rule as the quiz list. **Why:** a failed list used to read as "no assignments due" (#447).
 - Without `courseId`, a course whose inventory could not be read at all is left out of `courses` and named in `unreadCourses: [{ courseId, courseName, status }]`, with a sentence in `notice`. Both are omitted when every course answered. A course whose sign-in is still pending is reported through `authPending` instead ([Background sign-in](#background-sign-in)). **Why:** such a course used to vanish with no trace (#447).
+- Without `courseId`, `hiddenCourseIds: number[]` lists enrolled courses that `D2L_CURRENT_ONLY`, `D2L_INCLUDE_COURSES` or `D2L_EXCLUDE_COURSES` removed, so their assignments were not read. It comes with a `notice` that names the settings and tells the agent to call again with that `courseId`, which bypasses the settings.
+- `hiddenCourseIds` is present only when those settings hid a course. Courses removed only by `activeOnly` are not counted, as in `get_my_courses`. **Why:** the agent never sees the settings, so a hidden course read as one with nothing due (#488).
 
 **Dropbox assignments**
 
