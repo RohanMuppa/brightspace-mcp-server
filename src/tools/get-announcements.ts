@@ -12,7 +12,7 @@ import {
 } from "./schemas.js";
 import { toolResponse, toolResponseWithNotice, sanitizeError, isAuthUnavailable, authPendingNotice, throwIfCredentialRejected } from "./tool-helpers.js";
 import { log } from "../utils/logger.js";
-import { applyCourseFilter } from "../utils/course-filter.js";
+import { applyCourseFilter, coursesHiddenBySettings } from "../utils/course-filter.js";
 import { matchesModifiedSince } from "../utils/modified-since.js";
 import { convertHtmlToMarkdown } from "../utils/html-converter.js";
 import type { AppConfig } from "../types/index.js";
@@ -37,12 +37,17 @@ function arrayPage(
   items: unknown[],
   pagination: ReturnType<typeof pageInfo>,
   notice?: string,
-  unreadCourses: UnreadCourse[] = []
+  unreadCourses: UnreadCourse[] = [],
+  hiddenCourseIds: number[] = []
 ) {
   const result = notice ? toolResponseWithNotice(items, notice) : toolResponse(items);
   result.content.push({
     type: "text",
-    text: JSON.stringify({ pagination, ...(unreadCourses.length > 0 ? { unreadCourses } : {}) }),
+    text: JSON.stringify({
+      pagination,
+      ...(unreadCourses.length > 0 ? { unreadCourses } : {}),
+      ...(hiddenCourseIds.length > 0 ? { hiddenCourseIds } : {}),
+    }),
   });
   return result;
 }
@@ -285,19 +290,17 @@ export function registerGetAnnouncements(
         );
 
         // Apply course filter
-        const filteredEnrollments = applyCourseFilter(
-          enrollmentItems.map(item => ({
-            id: item.OrgUnit.Id,
-            name: item.OrgUnit.Name,
-            code: item.OrgUnit.Code,
-            isActive: item.Access.IsActive,
-            canAccess: item.Access.CanAccess,
-            startDate: item.Access.StartDate,
-            endDate: item.Access.EndDate,
-            ...item,
-          })),
-          config.courseFilter
-        );
+        const enrolled = enrollmentItems.map((item) => ({
+          id: item.OrgUnit.Id,
+          name: item.OrgUnit.Name,
+          code: item.OrgUnit.Code,
+          isActive: item.Access.IsActive,
+          canAccess: item.Access.CanAccess,
+          startDate: item.Access.StartDate,
+          endDate: item.Access.EndDate,
+          ...item,
+        }));
+        const filteredEnrollments = applyCourseFilter(enrolled, config.courseFilter);
 
         // Fetch announcements for each course (handle 403s gracefully)
         const announcementPromises = filteredEnrollments.map(
@@ -408,9 +411,22 @@ export function registerGetAnnouncements(
           );
         }
         if (unreadCourses.length > 0) notices.push(unreadCoursesNotice(unreadCourses));
+        // A course the settings removed was never asked for its news. The
+        // agent never sees those settings, so say which courses they hid
+        // rather than let one read as a course with nothing new (#490).
+        const hidden = coursesHiddenBySettings(enrolled, filteredEnrollments, config.courseFilter);
+        const hiddenCourseIds = hidden?.ids ?? [];
+        if (hidden) {
+          notices.push(
+            `${hidden.ids.length} enrolled course(s) (${hidden.ids.join(", ")}) are hidden by this ` +
+            `server's course settings (${hidden.settings.join(", ")}), so their announcements were not read. ` +
+            "Do not tell the user those courses have no announcements or that they are not in them: call " +
+            "get_announcements again with that courseId, which reads a hidden course."
+          );
+        }
         const notice = notices.length > 0 ? notices.join(" ") : undefined;
         if (!modifiedSince) {
-          return arrayPage(announcements, pagination, notice, unreadCourses);
+          return arrayPage(announcements, pagination, notice, unreadCourses, hiddenCourseIds);
         }
 
         const response: Record<string, unknown> = {
@@ -425,6 +441,7 @@ export function registerGetAnnouncements(
           response.unavailableCourseIds = pending.map((c) => c.courseId);
         }
         if (unreadCourses.length > 0) response.unreadCourses = unreadCourses;
+        if (hiddenCourseIds.length > 0) response.hiddenCourseIds = hiddenCourseIds;
         if (notice) response.notice = notice;
         return toolResponse(response);
       } catch (error) {

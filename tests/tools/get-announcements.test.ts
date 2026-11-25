@@ -736,3 +736,62 @@ describe("get_announcements names courses it could not read", () => {
     expect(pageBlock(result).unreadCourses).toBeUndefined();
   });
 });
+
+/**
+ * D2L_CURRENT_ONLY, D2L_INCLUDE_COURSES and D2L_EXCLUDE_COURSES remove courses
+ * the agent cannot know about. A removed course must be named, not read as a
+ * course with no new announcements (#490).
+ */
+describe("get_announcements courses hidden by the course settings", () => {
+  const withFilter = (filter: Partial<AppConfig["courseFilter"]>) =>
+    ({ ...makeConfig(), courseFilter: { activeOnly: true, ...filter } }) as AppConfig;
+  const twoCourses = manyCourses({ [COURSE_A.Id]: [], [COURSE_B.Id]: [] });
+  const pageBlock = (result: any) => JSON.parse(
+    result.content.find((item: any) => item.type === "text" && item.text.startsWith('{"pagination":')).text
+  );
+
+  it("names an excluded course next to pagination and in the notice, and does not query it", async () => {
+    const { call, requested } = setup(twoCourses, withFilter({ excludeCourseIds: [COURSE_B.Id] }));
+
+    const result = await call({});
+
+    expect(Array.isArray(body(result))).toBe(true);
+    expect(pageBlock(result).hiddenCourseIds).toEqual([COURSE_B.Id]);
+    expect(notice(result)).toContain("D2L_EXCLUDE_COURSES");
+    expect(notice(result)).toContain(String(COURSE_B.Id));
+    expect(notice(result)).toContain("Do not tell the user those courses have no announcements");
+    expect(requested.some((p) => p.includes(`/${COURSE_B.Id}/`))).toBe(false);
+  });
+
+  it("adds hiddenCourseIds and the notice to the modifiedSince object", async () => {
+    const { call } = setup(twoCourses, withFilter({ includeCourseIds: [COURSE_A.Id] }));
+
+    const parsed = body(await call({ modifiedSince: "2026-01-01T00:00:00Z" }));
+
+    expect(parsed.hiddenCourseIds).toEqual([COURSE_B.Id]);
+    expect(parsed.notice).toContain("D2L_INCLUDE_COURSES");
+  });
+
+  it("adds nothing when the settings hide no course", async () => {
+    const { call } = setup(twoCourses, withFilter({ excludeCourseIds: [999] }));
+
+    const result = await call({});
+
+    expect(result.content).toHaveLength(2);
+    expect(pageBlock(result).hiddenCourseIds).toBeUndefined();
+  });
+
+  it("does not count a course that only activeOnly removed", async () => {
+    const { call } = setup((path) => {
+      if (path.includes("/enrollments/")) {
+        return { Items: [enrollmentItem(COURSE_A), enrollmentItem(COURSE_B, false)] };
+      }
+      return [];
+    }, withFilter({ excludeCourseIds: [COURSE_A.Id] }));
+
+    const parsed = body(await call({ modifiedSince: "2026-01-01T00:00:00Z" }));
+
+    expect(parsed.hiddenCourseIds).toEqual([COURSE_A.Id]);
+    expect(parsed.notice).not.toContain(String(COURSE_B.Id));
+  });
+});
