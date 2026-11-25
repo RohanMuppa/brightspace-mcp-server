@@ -238,6 +238,9 @@ Tools are registered in `src/tools/index.ts`, and their input schemas are in `sr
   - With `modifiedSince`, both are fields of the response object.
   - A course whose sign-in is still pending is reported through `authPending` instead ([Background sign-in](#background-sign-in)).
   - **Why:** such a course was only a bare id in `pagination.unavailableCourseIds`, so an agent reported it as having nothing new (#456).
+- Without `courseId`, `hiddenCourseIds: number[]` lists enrolled courses that `D2L_CURRENT_ONLY`, `D2L_INCLUDE_COURSES` or `D2L_EXCLUDE_COURSES` removed, so their announcements were not read. It sits where `unreadCourses` does, and comes with a notice that tells the agent to call again with that `courseId`, which bypasses the settings.
+  - It is present only when those settings hid a course. Courses removed only by `activeOnly` are not counted, as in `get_my_courses`. Hidden courses do not affect `coverageComplete`.
+  - **Why:** the agent never sees the settings, so a hidden course read as one with nothing new (#490).
 - Offsets apply after filtering and after the global newest-first sort.
 - New or edited posts can shift offsets between calls. Use the same course and filter arguments on every call. Reconcile announcement IDs when archiving.
 - If a course's data is still loading in the background, see [Background sign-in](#background-sign-in).
