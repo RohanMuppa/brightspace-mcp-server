@@ -7,7 +7,7 @@
 import { D2LApiClient, DEFAULT_CACHE_TTLS } from "../api/index.js";
 import { fetchAllItems } from "../api/paginate.js";
 import { log } from "../utils/logger.js";
-import { applyCourseFilter } from "../utils/course-filter.js";
+import { applyCourseFilter, coursesHiddenBySettings, type SettingsHiddenCourses } from "../utils/course-filter.js";
 import type { AppConfig } from "../types/index.js";
 
 interface EnrollmentItem {
@@ -31,6 +31,16 @@ export interface CourseRef {
   startDate?: string | null;
 }
 
+export interface ResolvedCourses {
+  courses: CourseRef[];
+  /**
+   * Enrolled courses that D2L_CURRENT_ONLY, D2L_INCLUDE_COURSES or
+   * D2L_EXCLUDE_COURSES removed, or null when they removed none. Always null
+   * for a tool-level courseId, which bypasses those settings.
+   */
+  hidden: SettingsHiddenCourses | null;
+}
+
 /**
  * Resolve which courses to query, and their names.
  *
@@ -42,6 +52,20 @@ export async function resolveCourses(
   config: AppConfig,
   courseId?: number
 ): Promise<CourseRef[]> {
+  return (await resolveCoursesWithHidden(apiClient, config, courseId)).courses;
+}
+
+/**
+ * resolveCourses, plus which enrolled courses the course settings hid.
+ *
+ * **Why:** the agent never sees those settings, so a hidden course read as one
+ * with nothing due (#492).
+ */
+export async function resolveCoursesWithHidden(
+  apiClient: D2LApiClient,
+  config: AppConfig,
+  courseId?: number
+): Promise<ResolvedCourses> {
   let items: EnrollmentItem[] = [];
 
   try {
@@ -67,21 +91,25 @@ export async function resolveCourses(
 
   if (courseId) {
     const match = items.find((item) => item.OrgUnit.Id === courseId);
-    return [{ id: courseId, name: match?.OrgUnit.Name ?? null, startDate: match?.Access.StartDate ?? null }];
+    return {
+      courses: [{ id: courseId, name: match?.OrgUnit.Name ?? null, startDate: match?.Access.StartDate ?? null }],
+      hidden: null,
+    };
   }
 
-  const filtered = applyCourseFilter(
-    items.map((item) => ({
-      id: item.OrgUnit.Id,
-      name: item.OrgUnit.Name,
-      code: item.OrgUnit.Code,
-      isActive: item.Access.IsActive,
-      canAccess: item.Access.CanAccess,
-      startDate: item.Access.StartDate,
-      endDate: item.Access.EndDate,
-    })),
-    config.courseFilter
-  );
+  const enrolled = items.map((item) => ({
+    id: item.OrgUnit.Id,
+    name: item.OrgUnit.Name,
+    code: item.OrgUnit.Code,
+    isActive: item.Access.IsActive,
+    canAccess: item.Access.CanAccess,
+    startDate: item.Access.StartDate,
+    endDate: item.Access.EndDate,
+  }));
+  const filtered = applyCourseFilter(enrolled, config.courseFilter);
 
-  return filtered.map((course) => ({ id: course.id, name: course.name, startDate: course.startDate }));
+  return {
+    courses: filtered.map((course) => ({ id: course.id, name: course.name, startDate: course.startDate })),
+    hidden: coursesHiddenBySettings(enrolled, filtered, config.courseFilter),
+  };
 }

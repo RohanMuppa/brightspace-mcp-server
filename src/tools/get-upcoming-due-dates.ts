@@ -16,7 +16,7 @@ import { quizUrl, discussionUrl } from "../utils/deep-links.js";
 import { assignmentLinkResolver } from "./assignment-links.js";
 import { dueIn } from "../utils/due-in.js";
 import type { AppConfig } from "../types/index.js";
-import { resolveCourses, type CourseRef } from "./resolve-courses.js";
+import { resolveCoursesWithHidden, type CourseRef } from "./resolve-courses.js";
 import { fetchCourseCalendarEvents, eventEndsAt, type CalendarEvent } from "./calendar-events.js";
 
 interface DropboxFolder {
@@ -328,7 +328,7 @@ export function registerGetUpcomingDueDates(
         const now = Date.now();
         const windowEnd = now + daysAhead * 24 * 60 * 60 * 1000;
 
-        const courses = await resolveCourses(apiClient, config, courseId);
+        const { courses, hidden } = await resolveCoursesWithHidden(apiClient, config, courseId);
         log("DEBUG", `get_upcoming_due_dates: querying ${courses.length} course(s), window=${daysAhead} days`);
 
         // Fetch every course in parallel; the API client rate limits itself
@@ -408,6 +408,17 @@ export function registerGetUpcomingDueDates(
           notices.push(
             `Some upcoming items could not be read from Brightspace, so they may be missing from this list: ${listed}. ` +
               "Do not report these as having nothing due: call get_upcoming_due_dates again with that courseId."
+          );
+        }
+        // A course the settings removed was never asked for its deadlines.
+        // The agent never sees those settings, so say which courses they hid
+        // rather than let one read as a course with nothing due (#492).
+        if (hidden) {
+          notices.push(
+            `${hidden.ids.length} enrolled course(s) (${hidden.ids.join(", ")}) are hidden by this ` +
+              `server's course settings (${hidden.settings.join(", ")}), so their due dates were not read. ` +
+              "Do not tell the user those courses have nothing due or that they are not in them: call " +
+              "get_upcoming_due_dates again with that courseId, which reads a hidden course."
           );
         }
         if (notices.length === 0) {
