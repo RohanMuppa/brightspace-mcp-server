@@ -969,3 +969,76 @@ describe("get_upcoming_due_dates when a source fails to load", () => {
     expect(notice(result)).toContain(`${COURSE_B.Id} (assignments)`);
   });
 });
+
+/**
+ * D2L_CURRENT_ONLY, D2L_INCLUDE_COURSES and D2L_EXCLUDE_COURSES remove courses
+ * the agent cannot know about. A removed course must be named, not read as a
+ * course with nothing due (#492).
+ */
+describe("get_upcoming_due_dates courses hidden by the course settings", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const withFilter = (filter: Partial<AppConfig["courseFilter"]>) =>
+    ({ ...makeConfig(), courseFilter: { activeOnly: true, ...filter } }) as AppConfig;
+  const twoCourses: Responder = (path) => (path.includes("/enrollments/") ? enrollments(COURSE_A, COURSE_B) : []);
+
+  it("names an excluded course in the notice and does not query it", async () => {
+    const { call, requested } = setup(twoCourses, withFilter({ excludeCourseIds: [COURSE_B.Id] }));
+
+    const result = await call({ daysAhead: 7 });
+
+    expect(Array.isArray(parse(result))).toBe(true);
+    expect(result.content).toHaveLength(2);
+    expect(result.content[1].text).toContain("D2L_EXCLUDE_COURSES");
+    expect(result.content[1].text).toContain(String(COURSE_B.Id));
+    expect(result.content[1].text).toContain("Do not tell the user those courses have nothing due");
+    expect(requested.some((p) => p.includes(`/${COURSE_B.Id}/`))).toBe(false);
+  });
+
+  it("names a course left out of D2L_INCLUDE_COURSES", async () => {
+    const { call } = setup(twoCourses, withFilter({ includeCourseIds: [COURSE_A.Id] }));
+
+    const result = await call({ daysAhead: 7 });
+
+    expect(result.content[1].text).toContain("D2L_INCLUDE_COURSES");
+    expect(result.content[1].text).toContain(`(${COURSE_B.Id})`);
+  });
+
+  it("adds nothing when the settings hide no course", async () => {
+    const { call } = setup(twoCourses, withFilter({ excludeCourseIds: [999] }));
+
+    const result = await call({ daysAhead: 7 });
+
+    expect(result.content).toHaveLength(1);
+  });
+
+  it("adds nothing for a courseId, which bypasses the settings", async () => {
+    const { call, requested } = setup(twoCourses, withFilter({ excludeCourseIds: [COURSE_B.Id] }));
+
+    const result = await call({ daysAhead: 7, courseId: COURSE_B.Id });
+
+    expect(result.content).toHaveLength(1);
+    expect(requested.some((p) => p.includes(`/${COURSE_B.Id}/`))).toBe(true);
+  });
+
+  it("does not count a course that only activeOnly removed", async () => {
+    const { call } = setup((path) => {
+      if (!path.includes("/enrollments/")) return [];
+      const items = enrollments(COURSE_A, COURSE_B).Items;
+      items[1].Access.IsActive = false;
+      return { Items: items };
+    }, withFilter({ excludeCourseIds: [COURSE_A.Id] }));
+
+    const result = await call({ daysAhead: 7 });
+
+    expect(result.content[1].text).toContain(`(${COURSE_A.Id})`);
+    expect(result.content[1].text).not.toContain(String(COURSE_B.Id));
+  });
+});

@@ -78,6 +78,9 @@ Tools are registered in `src/tools/index.ts`, and their input schemas are in `sr
 - Brightspace makes a calendar event for every dated assignment, quiz and discussion. An event made from an item already in the list is dropped, so each deadline appears once. Hand-made events (exams, labs) always stay.
 - The tool makes no submission, feedback or attempt requests.
 - Each due date has `dueIn` ([Shared behaviour](#duein)). Each item has `url` ([Links into Brightspace](#links-into-brightspace)).
+- Without `courseId`, enrolled courses that `D2L_CURRENT_ONLY`, `D2L_INCLUDE_COURSES` or `D2L_EXCLUDE_COURSES` removed are named by id in a notice in `content[1]`, which tells the agent to call again with that `courseId`, which bypasses the settings. The response stays a bare array.
+  - The notice appears only when those settings hid a course. Courses removed only by `activeOnly` are not counted, as in `get_my_courses`.
+  - **Why:** the agent never sees the settings, so a hidden course read as one with nothing due (#492).
 - If a course's data is still loading in the background, see [Background sign-in](#background-sign-in).
 
 ### get_calendar_events
