@@ -96,6 +96,9 @@ Tools are registered in `src/tools/index.ts`, and their input schemas are in `sr
 - Events with `generatedFrom` are hidden unless `includeGenerated` is true.
 - The tool reads `/calendar/events/myEvents/`, the per-user feed that honours event visibility.
 - A course whose calendar fails does not stop the others. A second text block in `content[1]` names the failed course id, so the list is not read as complete.
+- Without `courseId`, enrolled courses that `D2L_CURRENT_ONLY`, `D2L_INCLUDE_COURSES` or `D2L_EXCLUDE_COURSES` removed are named by id in a notice in `content[1]`, which tells the agent to call again with that `courseId`, which bypasses the settings. The response stays a bare array.
+  - The notice appears only when those settings hid a course. Courses removed only by `activeOnly` are not counted, as in `get_my_courses`.
+  - **Why:** the agent never sees the settings, so a hidden course read as one with no events (#496).
 
 ## Assignments and rubrics
 
