@@ -9,7 +9,7 @@ import { D2LApiClient } from "../api/index.js";
 import { GetCalendarEventsSchema } from "./schemas.js";
 import { toolResponse, toolResponseWithNotice, errorResponse, sanitizeError, isAuthUnavailable, authPendingNotice, throwIfCredentialRejected } from "./tool-helpers.js";
 import { log } from "../utils/logger.js";
-import { resolveCourses } from "./resolve-courses.js";
+import { resolveCoursesWithHidden } from "./resolve-courses.js";
 import { fetchCourseCalendarEvents } from "./calendar-events.js";
 import type { AppConfig } from "../types/index.js";
 
@@ -50,7 +50,7 @@ export function registerGetCalendarEvents(
           );
         }
 
-        const courses = await resolveCourses(apiClient, config, courseId);
+        const { courses, hidden } = await resolveCoursesWithHidden(apiClient, config, courseId);
 
         const results = await Promise.allSettled(
           courses.map((course) =>
@@ -109,6 +109,17 @@ export function registerGetCalendarEvents(
             `Calendar events for ${failedCourseIds.length} course(s) (${failedCourseIds.join(", ")}) ` +
               "could not be read from Brightspace, so they are missing from this list. Do not report " +
               "these courses as having no events: call get_calendar_events again with that courseId."
+          );
+        }
+        // A course the settings removed was never asked for its calendar.
+        // The agent never sees those settings, so say which courses they hid
+        // rather than let one read as a course with no events (#496).
+        if (hidden) {
+          notices.push(
+            `${hidden.ids.length} enrolled course(s) (${hidden.ids.join(", ")}) are hidden by this ` +
+              `server's course settings (${hidden.settings.join(", ")}), so their calendar events were not read. ` +
+              "Do not tell the user those courses have no events or that they are not in them: call " +
+              "get_calendar_events again with that courseId, which reads a hidden course."
           );
         }
         if (notices.length === 0) {

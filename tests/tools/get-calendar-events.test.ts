@@ -28,7 +28,7 @@ function makeConfig(): AppConfig {
 
 type Responder = (path: string) => unknown;
 
-function setup(respond: Responder) {
+function setup(respond: Responder, config: AppConfig = makeConfig()) {
   const requested: string[] = [];
   const apiClient = {
     lp: (p: string) => `/d2l/api/lp/1.0${p}`,
@@ -46,7 +46,7 @@ function setup(respond: Responder) {
     },
   };
 
-  registerGetCalendarEvents(server as any, apiClient as any, makeConfig());
+  registerGetCalendarEvents(server as any, apiClient as any, config);
   return { call: (args: unknown) => handler!(args), requested };
 }
 
@@ -457,5 +457,79 @@ describe("get_calendar_events while sign-in is pending", () => {
     expect(notice(result)).toContain("Sign-in to Brightspace is still in progress");
     expect(notice(result)).toContain(`(${COURSE_A.Id})`);
     expect(notice(result)).toContain(`(${COURSE_B.Id}) could not be read`);
+  });
+});
+
+/**
+ * D2L_CURRENT_ONLY, D2L_INCLUDE_COURSES and D2L_EXCLUDE_COURSES remove courses
+ * the agent cannot know about. A removed course must be named, not read as a
+ * course with no events (#496).
+ */
+describe("get_calendar_events courses hidden by the course settings", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const withFilter = (filter: Partial<AppConfig["courseFilter"]>) =>
+    ({ ...makeConfig(), courseFilter: { activeOnly: true, ...filter } }) as AppConfig;
+  const twoCourses: Responder = (path) =>
+    path.includes("/enrollments/") ? enrollments(COURSE_A, COURSE_B) : page();
+
+  it("names an excluded course in the notice and does not query it", async () => {
+    const { call, requested } = setup(twoCourses, withFilter({ excludeCourseIds: [COURSE_B.Id] }));
+
+    const result = await call({});
+
+    expect(Array.isArray(parse(result))).toBe(true);
+    expect(result.content).toHaveLength(2);
+    expect(result.content[1].text).toContain("D2L_EXCLUDE_COURSES");
+    expect(result.content[1].text).toContain(`(${COURSE_B.Id})`);
+    expect(result.content[1].text).toContain("Do not tell the user those courses have no events");
+    expect(requested.some((p) => p.includes(`/${COURSE_B.Id}/`))).toBe(false);
+  });
+
+  it("names a course left out of D2L_INCLUDE_COURSES", async () => {
+    const { call } = setup(twoCourses, withFilter({ includeCourseIds: [COURSE_A.Id] }));
+
+    const result = await call({});
+
+    expect(result.content[1].text).toContain("D2L_INCLUDE_COURSES");
+    expect(result.content[1].text).toContain(`(${COURSE_B.Id})`);
+  });
+
+  it("adds nothing when the settings hide no course", async () => {
+    const { call } = setup(twoCourses, withFilter({ excludeCourseIds: [999] }));
+
+    const result = await call({});
+
+    expect(result.content).toHaveLength(1);
+  });
+
+  it("adds nothing for a courseId, which bypasses the settings", async () => {
+    const { call, requested } = setup(twoCourses, withFilter({ excludeCourseIds: [COURSE_B.Id] }));
+
+    const result = await call({ courseId: COURSE_B.Id });
+
+    expect(result.content).toHaveLength(1);
+    expect(requested.some((p) => p.includes(`/${COURSE_B.Id}/`))).toBe(true);
+  });
+
+  it("does not count a course that only activeOnly removed", async () => {
+    const { call } = setup((path) => {
+      if (!path.includes("/enrollments/")) return page();
+      const items = enrollments(COURSE_A, COURSE_B).Items;
+      items[1].Access.IsActive = false;
+      return { Items: items };
+    }, withFilter({ excludeCourseIds: [COURSE_A.Id] }));
+
+    const result = await call({});
+
+    expect(result.content[1].text).toContain(`(${COURSE_A.Id})`);
+    expect(result.content[1].text).not.toContain(String(COURSE_B.Id));
   });
 });
