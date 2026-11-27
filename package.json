@@ -37,7 +37,7 @@
     "sanitize-filename": "^1.6.5",
     "trash": "^10.1.1",
     "turndown": "^7.2.5",
-    "unpdf": "^1.4.0",
+    "unpdf": "^2.2.2",
     "zod": "^4.0.0"
   },
   "devDependencies": {
