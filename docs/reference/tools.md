@@ -578,6 +578,9 @@ Tools are registered in `src/tools/index.ts`, and their input schemas are in `sr
 - Returns groups the current user can still join themselves, with spots left and when sign-up closes.
 - `unreadCategories`: names of open sign-up categories whose groups answered 403 or 404, so any open groups there are not listed. `note` names each one with its course and the reason (refused, 403, or not found, 404), and tells the agent not to report it as full or closed.
   **Why:** a bare `unreadCategories` list read like a sign-up with nothing open (#433).
+- Without `courseId`, `hiddenCourseIds: number[]` lists enrolled courses that `D2L_CURRENT_ONLY`, `D2L_INCLUDE_COURSES` or `D2L_EXCLUDE_COURSES` removed, so their groups were not checked. `note` names the settings and tells the agent to call again with that `courseId`, which bypasses the settings.
+  - `hiddenCourseIds` is present only when those settings hid a course. Courses removed only by `activeOnly` are not counted, as in `get_my_courses`. Courses skipped for being older than 12 months are counted separately in `note`.
+  - **Why:** the agent never sees the settings, so a hidden course read as one with no open sign-ups (#499).
 - If a course is still loading in the background, the response sets `authPending: true` and `unavailableCourseIds`. See [Background sign-in](#background-sign-in).
 
 ### get_classlist_emails

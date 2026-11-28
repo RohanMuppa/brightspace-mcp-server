@@ -49,7 +49,7 @@ const group = (id: number, enrollments: number[], overrides: Record<string, unkn
 
 type Answer = unknown | Error;
 
-function setup(routes: Record<string, Answer>) {
+function setup(routes: Record<string, Answer>, cfg: AppConfig = config) {
   const requested: string[] = [];
   const apiClient = {
     lp: (p: string) => `${LP}${p}`,
@@ -79,7 +79,7 @@ function setup(routes: Record<string, Answer>) {
       handler = fn;
     },
   };
-  registerGetAvailableGroups(server as any, apiClient as any, config);
+  registerGetAvailableGroups(server as any, apiClient as any, cfg);
   return { call: (args: unknown) => handler!(args), requested };
 }
 
@@ -283,5 +283,58 @@ describe("get_available_groups", () => {
     const payload = parse(await call({ courseId: OLD.Id }));
 
     expect(payload.courses.map((c: any) => c.courseId)).toEqual([OLD.Id]);
+  });
+
+  /**
+   * D2L_CURRENT_ONLY, D2L_INCLUDE_COURSES and D2L_EXCLUDE_COURSES remove courses
+   * before any groups are read. The agent never sees those settings, so the
+   * response must say which courses they hid (#499).
+   */
+  describe("courses hidden by the course settings", () => {
+    const withFilter = (filter: Partial<AppConfig["courseFilter"]>) =>
+      ({ ...config, courseFilter: { activeOnly: true, ...filter } }) as AppConfig;
+    const noCategories = { [categoriesPath(COURSE.Id)]: [], [categoriesPath(OTHER.Id)]: [] };
+
+    it("names a course D2L_EXCLUDE_COURSES removed, and never reads its groups", async () => {
+      const { call, requested } = setup(noCategories, withFilter({ excludeCourseIds: [OTHER.Id] }));
+
+      const payload = parse(await call({}));
+
+      expect(payload.hiddenCourseIds).toEqual([OTHER.Id]);
+      expect(payload.coursesChecked).toBe(1);
+      expect(payload.note).toContain("D2L_EXCLUDE_COURSES");
+      expect(payload.note).toContain(String(OTHER.Id));
+      expect(payload.note).toContain("call get_available_groups again with that courseId");
+      expect(requested).not.toContain(categoriesPath(OTHER.Id));
+    });
+
+    it("names courses left out of D2L_INCLUDE_COURSES", async () => {
+      const { call } = setup(noCategories, withFilter({ includeCourseIds: [COURSE.Id] }));
+
+      const payload = parse(await call({}));
+
+      expect(payload.hiddenCourseIds).toEqual(expect.arrayContaining([OTHER.Id, OLD.Id, UNDATED.Id]));
+      expect(payload.hiddenCourseIds).not.toContain(COURSE.Id);
+      expect(payload.note).toContain("D2L_INCLUDE_COURSES");
+    });
+
+    it("leaves hiddenCourseIds out when the settings hid nothing", async () => {
+      const { call } = setup(noCategories, withFilter({ excludeCourseIds: [999] }));
+
+      const payload = parse(await call({}));
+
+      expect(payload).not.toHaveProperty("hiddenCourseIds");
+      expect(payload.note).not.toContain("course settings");
+    });
+
+    it("leaves hiddenCourseIds out for a courseId, which bypasses the settings", async () => {
+      const { call, requested } = setup(noCategories, withFilter({ excludeCourseIds: [OTHER.Id] }));
+
+      const payload = parse(await call({ courseId: OTHER.Id }));
+
+      expect(payload).not.toHaveProperty("hiddenCourseIds");
+      expect(payload.coursesChecked).toBe(1);
+      expect(requested).toContain(categoriesPath(OTHER.Id));
+    });
   });
 });

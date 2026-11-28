@@ -59,7 +59,7 @@ export async function resolveCourses(
  * resolveCourses, plus which enrolled courses the course settings hid.
  *
  * **Why:** the agent never sees those settings, so a hidden course read as one
- * with nothing due (#492) or no calendar events (#496).
+ * with nothing due (#492), no calendar events (#496) or no open groups (#499).
  */
 export async function resolveCoursesWithHidden(
   apiClient: D2LApiClient,

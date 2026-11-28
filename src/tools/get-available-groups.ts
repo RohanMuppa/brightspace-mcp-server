@@ -10,7 +10,7 @@ import { ApiError } from "../api/errors.js";
 import { GetAvailableGroupsSchema } from "./schemas.js";
 import { toolResponse, toolResponseWithNotice, sanitizeError, isAuthUnavailable, authPendingNotice } from "./tool-helpers.js";
 import { fetchCurrentUserId } from "./group-membership.js";
-import { resolveCourses, type CourseRef } from "./resolve-courses.js";
+import { resolveCoursesWithHidden, type CourseRef } from "./resolve-courses.js";
 import { log } from "../utils/logger.js";
 import type { AppConfig } from "../types/index.js";
 
@@ -177,7 +177,7 @@ export function registerGetAvailableGroups(
         const { courseId, includeOlder } = GetAvailableGroupsSchema.parse(args);
         const now = Date.now();
         const myId = await fetchCurrentUserId(apiClient);
-        const enrolled = await resolveCourses(apiClient, config, courseId);
+        const { courses: enrolled, hidden } = await resolveCoursesWithHidden(apiClient, config, courseId);
         // Some schools give courses a start date but never an end date and never
         // close them, so every past course still counts as active and its old
         // sign-ups without an expiry still look open. The start date is the only
@@ -233,9 +233,21 @@ export function registerGetAvailableGroups(
             "check Groups > Available Groups in Brightspace."
           );
         }
+        // A course the settings removed was never asked for its groups. The
+        // agent never sees those settings, so say which courses they hid
+        // rather than let one read as a course with nothing open (#499).
+        if (hidden) {
+          notes.push(
+            `${hidden.ids.length} enrolled course(s) (${hidden.ids.join(", ")}) are hidden by this ` +
+              `server's course settings (${hidden.settings.join(", ")}), so their groups were not checked. ` +
+              "Do not tell the user those courses have no open sign-ups or that they are not in them: call " +
+              "get_available_groups again with that courseId, which reads a hidden course."
+          );
+        }
         const data = {
           coursesChecked: courses.length,
           courses: withChoices,
+          ...(hidden ? { hiddenCourseIds: hidden.ids } : {}),
           ...(notes.length > 0 ? { note: notes.join(" ") } : {}),
           ...(pendingCourseIds.length > 0 ? { authPending: true, unavailableCourseIds: pendingCourseIds } : {}),
         };
